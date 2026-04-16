@@ -228,21 +228,25 @@ func (a *Aggregator) refreshElectionTallies(ctx context.Context) error {
 		maxTerm = currentTerm + 1
 	}
 
-	var chainHeight int64
-	chainHeight, err = a.node.GetBlockCount(ctx)
+	// Use the EXPLORER's synced height, not the node's chain height.
+	// The votes table only contains data up to the explorer's synced height.
+	// Computing tallies against chain height when the DB is still syncing
+	// produces empty/wrong results and sentinel rows for terms not yet indexed.
+	syncedHeight, err := a.db.GetLastSyncedHeight(ctx)
 	if err != nil {
-		return fmt.Errorf("getblockcount: %w", err)
+		return fmt.Errorf("get synced height: %w", err)
 	}
 
 	for term := int64(1); term <= maxTerm; term++ {
 		narrowStart, narrowEnd, termStart := electionVotingPeriod(term)
 
-		if narrowStart > chainHeight {
+		// Don't compute tallies for terms the explorer hasn't synced past yet.
+		if narrowStart > syncedHeight {
 			continue
 		}
 
 		// For completed elections, skip if already computed.
-		if termStart < chainHeight {
+		if termStart < syncedHeight {
 			var existing int64
 			_ = a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM cr_election_tallies WHERE term = $1`, term).Scan(&existing)
 			if existing > 0 {
@@ -342,16 +346,6 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 
 	var count int64
 	_ = a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM cr_election_tallies WHERE term = $1`, term).Scan(&count)
-
-	if count == 0 {
-		_, _ = a.db.Syncer.Exec(ctx, `
-			INSERT INTO cr_election_tallies (term, candidate_cid, nickname, final_votes_sela, voter_count,
-				voting_start_height, voting_end_height, rank, elected, computed_at)
-			VALUES ($1, '__sentinel__', '', 0, 0, $3, $4, 0, FALSE, EXTRACT(EPOCH FROM NOW())::BIGINT)
-			ON CONFLICT DO NOTHING`,
-			term, cutoff, narrowStart, narrowEnd,
-		)
-	}
 
 	slog.Info("election tally computed", "term", term, "candidates", count)
 	return nil

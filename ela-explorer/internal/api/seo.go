@@ -76,6 +76,10 @@ func InitSEOTemplate(htmlPath string) error {
 	return nil
 }
 
+func IsSEOTemplateLoaded() bool {
+	return seoHTMLTemplate != ""
+}
+
 func (s *Server) serveSEO(w http.ResponseWriter, r *http.Request) {
 	if seoHTMLTemplate == "" {
 		http.Error(w, "SEO template not loaded", http.StatusInternalServerError)

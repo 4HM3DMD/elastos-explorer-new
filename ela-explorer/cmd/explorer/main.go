@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"net/http"
 	"time"
 
 	"ela-explorer/internal/aggregator"
@@ -135,6 +135,12 @@ func main() {
 
 	slog.Info("ela-explorer ready", "listen", cfg.ListenAddr)
 
+	// --- Startup self-validation (runs once, logs problems as warnings) ---
+	go func() {
+		time.Sleep(3 * time.Second)
+		selfTest(ctx, database, cfg.ListenAddr)
+	}()
+
 	<-ctx.Done()
 	slog.Info("shutting down")
 
@@ -152,4 +158,58 @@ func main() {
 
 	database.Close()
 	slog.Info("database connections closed")
+}
+
+// selfTest runs once at startup to catch common misconfigurations early.
+func selfTest(ctx context.Context, database *db.Database, listenAddr string) {
+	var failures int
+
+	// 1. Verify sync_state.last_height <= MAX(height) in blocks table
+	var syncHeight, maxBlock int64
+	row := database.Syncer.QueryRow(ctx, "SELECT COALESCE(MAX(height),0) FROM blocks")
+	if err := row.Scan(&maxBlock); err == nil {
+		row2 := database.Syncer.QueryRow(ctx,
+			"SELECT COALESCE(value::bigint, 0) FROM sync_state WHERE key='last_height'")
+		if err := row2.Scan(&syncHeight); err == nil {
+			if syncHeight > maxBlock && maxBlock > 0 {
+				slog.Error("SELF-TEST FAIL: sync_state.last_height ahead of blocks table",
+					"sync_state", syncHeight, "max_block", maxBlock)
+				failures++
+			} else {
+				slog.Info("self-test: sync_state consistent",
+					"sync_state", syncHeight, "max_block", maxBlock)
+			}
+		}
+	}
+
+	// 2. Verify SEO template is loaded
+	if !api.IsSEOTemplateLoaded() {
+		slog.Warn("SELF-TEST WARN: SEO template not loaded — frontend HTML injection disabled")
+		failures++
+	} else {
+		slog.Info("self-test: SEO template loaded")
+	}
+
+	// 3. Verify API is responding on listen address
+	url := fmt.Sprintf("http://127.0.0.1%s/health", listenAddr)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		slog.Warn("SELF-TEST WARN: API health check failed", "url", url, "error", err)
+		failures++
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			slog.Info("self-test: API health OK", "url", url)
+		} else {
+			slog.Warn("SELF-TEST WARN: API health returned non-200", "status", resp.StatusCode)
+			failures++
+		}
+	}
+
+	if failures == 0 {
+		slog.Info("self-test: all checks passed")
+	} else {
+		slog.Warn("self-test: completed with failures", "failure_count", failures)
+	}
 }

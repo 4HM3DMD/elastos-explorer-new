@@ -59,6 +59,21 @@ func (s *Syncer) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get last synced height: %w", err)
 	}
+
+	// Guard against sync_state.last_height being ahead of the actual blocks
+	// table (caused by a previous bug that stored chainTip instead of real height).
+	var maxBlockHeight int64
+	if scanErr := s.db.Syncer.QueryRow(ctx,
+		"SELECT COALESCE(MAX(height),0) FROM blocks",
+	).Scan(&maxBlockHeight); scanErr == nil && maxBlockHeight > 0 && lastHeight > maxBlockHeight {
+		slog.Warn("sync_state.last_height ahead of blocks table, correcting",
+			"sync_state", lastHeight,
+			"actual_max_block", maxBlockHeight,
+		)
+		lastHeight = maxBlockHeight
+		_ = s.db.SetSyncState(ctx, "last_height", strconv.FormatInt(maxBlockHeight, 10))
+	}
+
 	s.lastHeight.Store(lastHeight)
 	metrics.SetSyncedHeight(lastHeight)
 
@@ -98,16 +113,14 @@ func (s *Syncer) Run(ctx context.Context) error {
 				slog.Warn("deferred governance backfill failed (non-fatal)", "error", err)
 			}
 
-		if err := s.db.SetSyncState(ctx, "is_initial_sync", "false"); err != nil {
-			slog.Warn("failed to clear initial sync flag after deferred backfill", "error", err)
-		}
+			if err := s.db.SetSyncState(ctx, "is_initial_sync", "false"); err != nil {
+				slog.Warn("failed to clear initial sync flag after deferred backfill", "error", err)
+			}
 
-		// address_transactions population is slow — run in background so live sync starts now.
-		var addrTxWg sync.WaitGroup
-		addrTxWg.Add(1)
-		go s.addressTransactionsBackfill(ctx, &addrTxWg)
-		// Not waiting: background goroutine will finish on its own; ctx cancels it on shutdown.
-	}
+			var addrTxWg sync.WaitGroup
+			addrTxWg.Add(1)
+			go s.addressTransactionsBackfill(ctx, &addrTxWg)
+		}
 	}
 
 	s.isLive.Store(true)
@@ -214,10 +227,28 @@ func (s *Syncer) initialSync(ctx context.Context) error {
 		if err := bulkInserter.Flush(ctx); err != nil {
 			return fmt.Errorf("flush final batch: %w", err)
 		}
-		if err := s.persistSyncState(ctx, chainTip, lastBlockHash); err != nil {
+	}
+
+	// Reconcile in-memory lastHeight with what was actually committed.
+	// The chainTip variable may have been refreshed (via getblockcount) to
+	// a height the node knows about but cannot yet serve via getblock.
+	// Persisting chainTip instead of the real max(height) causes live sync
+	// to reference a block that doesn't exist, creating an infinite error loop.
+	var confirmedHeight int64
+	err = s.db.Syncer.QueryRow(ctx, "SELECT COALESCE(MAX(height),0) FROM blocks").Scan(&confirmedHeight)
+	if err != nil {
+		return fmt.Errorf("confirm last synced height: %w", err)
+	}
+	if confirmedHeight > 0 {
+		confirmedHash, hashErr := s.db.GetBlockHashAtHeight(ctx, confirmedHeight)
+		if hashErr != nil {
+			return fmt.Errorf("get confirmed block hash: %w", hashErr)
+		}
+		if err := s.persistSyncState(ctx, confirmedHeight, confirmedHash); err != nil {
 			return fmt.Errorf("persist final sync state: %w", err)
 		}
-		s.lastHeight.Store(chainTip)
+		s.lastHeight.Store(confirmedHeight)
+		slog.Info("initial sync complete", "confirmed_height", confirmedHeight, "chain_tip", chainTip)
 	}
 
 	// Rebuild indexes before backfill (backfill queries need them)
@@ -584,6 +615,21 @@ func (s *Syncer) pollAndProcess(ctx context.Context) error {
 		if height > 0 {
 			storedHash, err := s.db.GetBlockHashAtHeight(ctx, height-1)
 			if err != nil {
+				// Self-heal: if lastHeight is ahead of what the DB actually
+				// has (e.g. after a bug stored chainTip instead of real height),
+				// fall back to the actual max height in the DB.
+				var maxHeight int64
+				scanErr := s.db.Syncer.QueryRow(ctx,
+					"SELECT COALESCE(MAX(height),0) FROM blocks",
+				).Scan(&maxHeight)
+				if scanErr == nil && maxHeight > 0 && maxHeight < height-1 {
+					slog.Warn("lastHeight ahead of DB, recovering",
+						"claimed", height-1,
+						"actual_max", maxHeight,
+					)
+					s.lastHeight.Store(maxHeight)
+					return nil // retry on next poll cycle with corrected height
+				}
 				return fmt.Errorf("reorg check: get hash at height %d: %w", height-1, err)
 			}
 			if storedHash != block.PreviousBlockHash {

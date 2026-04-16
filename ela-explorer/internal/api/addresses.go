@@ -233,10 +233,13 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 		 FROM bpos_stakes WHERE stake_address = $1`, address).Scan(&totalCount, &totalStaked, &totalRights)
 
 	rows, err := s.db.API.Query(r.Context(), `
-		SELECT b.refer_key, b.producer_key, COALESCE(p.nickname, ''), b.transaction_hash,
+		SELECT b.refer_key, b.producer_key,
+		       COALESCE(NULLIF(p.nickname, ''), cr.nickname, '') AS resolved_name,
+		       b.transaction_hash,
 		       b.block_height, b.raw_amount_sela, b.lock_time, b.vote_rights_sela
 		FROM bpos_stakes b
 		LEFT JOIN producers p ON b.producer_key = p.owner_pubkey
+		LEFT JOIN cr_members cr ON b.producer_key = cr.cid
 		WHERE b.stake_address = $1
 		ORDER BY b.vote_rights_sela DESC
 		LIMIT $2 OFFSET $3`, address, pageSize, offset)
@@ -629,7 +632,7 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(t.timestamp, 0)
 		FROM votes v
 		LEFT JOIN producers p ON v.producer_pubkey = p.owner_pubkey AND v.producer_pubkey != ''
-		LEFT JOIN cr_members cr ON (v.candidate = cr.cid OR v.candidate = cr.did) AND v.vote_type IN (1,2,3)
+		LEFT JOIN cr_members cr ON (v.candidate = cr.cid OR v.candidate = cr.did) AND v.vote_type IN (1,2,3,4)
 		LEFT JOIN transactions t ON v.txid = t.txid
 		`+whereClause+`
 		ORDER BY v.stake_height DESC

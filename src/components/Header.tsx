@@ -55,7 +55,7 @@ const Header = () => {
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 shrink-0 group">
             <img src="/logo.svg" alt="Elastos" className="h-6 w-auto" />
-            <span className="font-semibold text-sm text-gradient-brand">Explorer</span>
+            <span className="font-semibold text-sm text-white">Explorer</span>
           </Link>
 
           {/* Desktop nav — centered on home (no search bar), left-aligned otherwise */}

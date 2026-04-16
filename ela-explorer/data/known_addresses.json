@@ -1,0 +1,40 @@
+{
+  "addresses": [
+    {
+      "address": "8VYXVxKKSAxkmRrfmGpQR2Kc66XhG6m3ta",
+      "label": "Foundation",
+      "category": "foundation",
+      "description": "Elastos Foundation address. Received 30% of block rewards before CR activation (height 658,930)."
+    },
+    {
+      "address": "CRASSETSXXXXXXXXXXXXXXXXXXXX2qDX5J",
+      "label": "DAO Treasury (CR Assets)",
+      "category": "dao",
+      "description": "Receives 30% of block rewards after CR Committee activation (height 658,930). Funds DAO proposals."
+    },
+    {
+      "address": "CREXPENSESXXXXXXXXXXXXXXXXXX4UdT6b",
+      "label": "DAO Expenses",
+      "category": "dao",
+      "description": "Operational budget for the CR Committee. Funded via CRCAppropriation transactions."
+    },
+    {
+      "address": "ELANULLXXXXXXXXXXXXXXXXXXXXXYvs3rr",
+      "label": "Burn Address",
+      "category": "system",
+      "description": "Destroyed ELA. Receives CR+DPoS shares during PoW fallback mode. 13M ELA burned in 2022 (CR Proposal #1631)."
+    },
+    {
+      "address": "STAKEPooLXXXXXXXXXXXXXXXXXXXpP1PQ2",
+      "label": "BPoS Stake Pool",
+      "category": "system",
+      "description": "Holds all ELA that has been exchanged for BPoS voting rights via ExchangeVotes (0x62) transactions."
+    },
+    {
+      "address": "STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU",
+      "label": "BPoS Reward Accumulation",
+      "category": "system",
+      "description": "Receives 35% of block rewards in the BPoS era. Rewards distributed to validators and their stakers."
+    }
+  ]
+}

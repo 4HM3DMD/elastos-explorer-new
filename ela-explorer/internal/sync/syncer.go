@@ -1,0 +1,924 @@
+package sync
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"ela-explorer/internal/cache"
+	"ela-explorer/internal/db"
+	"ela-explorer/internal/metrics"
+	"ela-explorer/internal/node"
+)
+
+func isBlockNotFound(err error) bool {
+	var rpcErr *node.RPCError
+	return errors.As(err, &rpcErr) && rpcErr.IsNotFound()
+}
+
+// Syncer is the main blockchain synchronization engine.
+// It runs in two modes: initial sync (bulk) and live sync (real-time).
+type Syncer struct {
+	node      *node.Client
+	db        *db.DB
+	utxoCache *cache.UTXOCache
+	processor *BlockProcessor
+
+	batchSize      int
+	pollIntervalMs int
+
+	chainTip   atomic.Int64
+	lastHeight atomic.Int64
+	isLive     atomic.Bool
+
+	// Broadcast callback (set by main to push to WebSocket).
+	OnNewBlock func(height int64, hash string, txCount int, timestamp int64, size int, minerInfo, minerAddress string)
+}
+
+func NewSyncer(nodeClient *node.Client, database *db.DB, utxoCacheSize int, workers, batchSize, pollIntervalMs int) *Syncer {
+	utxoCache := cache.NewUTXOCache(utxoCacheSize)
+	s := &Syncer{
+		node:           nodeClient,
+		db:             database,
+		utxoCache:      utxoCache,
+		batchSize:      batchSize,
+		pollIntervalMs: pollIntervalMs,
+	}
+	s.processor = NewBlockProcessor(database, nodeClient, utxoCache)
+	return s
+}
+
+func (s *Syncer) Run(ctx context.Context) error {
+	lastHeight, err := s.db.GetLastSyncedHeight(ctx)
+	if err != nil {
+		return fmt.Errorf("get last synced height: %w", err)
+	}
+	s.lastHeight.Store(lastHeight)
+	metrics.SetSyncedHeight(lastHeight)
+
+	chainTip, err := s.node.GetBlockCount(ctx)
+	if err != nil {
+		return fmt.Errorf("get chain tip: %w", err)
+	}
+	s.chainTip.Store(chainTip)
+	metrics.SetChainTip(chainTip)
+
+	gap := chainTip - lastHeight
+	slog.Info("sync starting",
+		"last_synced", lastHeight,
+		"chain_tip", chainTip,
+		"gap", gap,
+	)
+
+	if gap > 100 {
+		if err := s.initialSync(ctx); err != nil {
+			return fmt.Errorf("initial sync: %w", err)
+		}
+	} else {
+		isInitial, err := s.db.IsInitialSync(ctx)
+		if err != nil {
+			slog.Warn("could not check initial sync flag", "error", err)
+		}
+		if isInitial {
+			slog.Info("detected incomplete initial sync (backfill not yet run), running now")
+			slog.Info("ensuring secondary indexes exist for backfill queries")
+			if err := db.RebuildSecondaryIndexes(ctx, s.db.Syncer); err != nil {
+				return fmt.Errorf("rebuild indexes for deferred backfill: %w", err)
+			}
+			if err := s.postSyncBackfill(ctx); err != nil {
+				return fmt.Errorf("deferred post-sync backfill: %w", err)
+			}
+			if err := s.governanceBackfill(ctx); err != nil {
+				slog.Warn("deferred governance backfill failed (non-fatal)", "error", err)
+			}
+
+		if err := s.db.SetSyncState(ctx, "is_initial_sync", "false"); err != nil {
+			slog.Warn("failed to clear initial sync flag after deferred backfill", "error", err)
+		}
+
+		// address_transactions population is slow — run in background so live sync starts now.
+		var addrTxWg sync.WaitGroup
+		addrTxWg.Add(1)
+		go s.addressTransactionsBackfill(ctx, &addrTxWg)
+		// Not waiting: background goroutine will finish on its own; ctx cancels it on shutdown.
+	}
+	}
+
+	s.isLive.Store(true)
+	slog.Info("entering live sync mode")
+	return s.liveSync(ctx)
+}
+
+// initialSync catches up from behind by bulk-fetching and inserting blocks.
+// After all blocks are inserted, it runs a SQL-based backfill for derived
+// tables (spent outputs, address balances, tx counts).
+func (s *Syncer) initialSync(ctx context.Context) error {
+	slog.Info("starting initial sync (bulk mode)")
+
+	isInitial, err := s.db.IsInitialSync(ctx)
+	if err != nil {
+		slog.Warn("could not check initial sync flag", "error", err)
+	}
+	if isInitial {
+		slog.Info("dropping secondary indexes for bulk insert speed")
+		if err := db.DropSecondaryIndexes(ctx, s.db.Syncer); err != nil {
+			slog.Warn("failed to drop indexes (may not exist yet)", "error", err)
+		}
+	}
+
+	startHeight := s.lastHeight.Load() + 1
+	chainTip := s.chainTip.Load()
+
+	bulkInserter := db.NewBulkInserter(s.db.Syncer)
+	batchStart := time.Now()
+	blocksInBatch := 0
+	var lastBlockHash string
+
+	for height := startHeight; height <= chainTip; height++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		block, err := s.node.GetBlockByHeight(ctx, height)
+		if err != nil {
+			if isBlockNotFound(err) {
+				slog.Info("block not yet available at chain tip, finishing initial sync early", "height", height)
+				break
+			}
+			return fmt.Errorf("fetch block %d: %w", height, err)
+		}
+
+		flushFn := func(flushCtx context.Context) error {
+			if bulkInserter.Len() == 0 {
+				return nil
+			}
+			if err := bulkInserter.Flush(flushCtx); err != nil {
+				return err
+			}
+			return s.persistSyncState(flushCtx, height-1, lastBlockHash)
+		}
+		if _, err := s.processor.ProcessBlock(ctx, block, bulkInserter, flushFn); err != nil {
+			return fmt.Errorf("process block %d: %w", height, err)
+		}
+
+		lastBlockHash = block.Hash
+		blocksInBatch++
+
+		if blocksInBatch >= s.batchSize {
+			if err := bulkInserter.Flush(ctx); err != nil {
+				return fmt.Errorf("flush batch at height %d: %w", height, err)
+			}
+			if err := s.persistSyncState(ctx, height, lastBlockHash); err != nil {
+				return fmt.Errorf("persist sync state: %w", err)
+			}
+
+			s.lastHeight.Store(height)
+			metrics.SetSyncedHeight(height)
+			elapsed := time.Since(batchStart)
+			blocksPerSec := float64(blocksInBatch) / elapsed.Seconds()
+			remaining := chainTip - height
+			etaMinutes := float64(remaining) / blocksPerSec / 60
+
+			slog.Info("batch synced",
+				"height", height,
+				"batch_time", elapsed.Round(time.Millisecond),
+				"blocks_per_sec", fmt.Sprintf("%.1f", blocksPerSec),
+				"remaining", remaining,
+				"eta_minutes", fmt.Sprintf("%.1f", etaMinutes),
+				"utxo_cache", s.utxoCache.Len(),
+			)
+
+			blocksInBatch = 0
+			batchStart = time.Now()
+		}
+
+		if height%10000 == 0 {
+			newTip, err := s.node.GetBlockCount(ctx)
+			if err == nil && newTip > chainTip {
+				chainTip = newTip
+				s.chainTip.Store(chainTip)
+			}
+		}
+	}
+
+	// Flush remaining tail-end blocks
+	if bulkInserter.Len() > 0 {
+		if err := bulkInserter.Flush(ctx); err != nil {
+			return fmt.Errorf("flush final batch: %w", err)
+		}
+		if err := s.persistSyncState(ctx, chainTip, lastBlockHash); err != nil {
+			return fmt.Errorf("persist final sync state: %w", err)
+		}
+		s.lastHeight.Store(chainTip)
+	}
+
+	// Rebuild indexes before backfill (backfill queries need them)
+	slog.Info("rebuilding secondary indexes")
+	if err := db.RebuildSecondaryIndexes(ctx, s.db.Syncer); err != nil {
+		return fmt.Errorf("rebuild indexes: %w", err)
+	}
+
+	// Post-sync backfill: derive address balances, mark spent outputs, tx counts
+	slog.Info("running post-sync backfill (derived data)")
+	if err := s.postSyncBackfill(ctx); err != nil {
+		return fmt.Errorf("post-sync backfill: %w", err)
+	}
+
+	// Governance backfill: process payload_json for governance tx types
+	slog.Info("running governance backfill from committed transactions")
+	if err := s.governanceBackfill(ctx); err != nil {
+		slog.Warn("governance backfill had errors (non-fatal, aggregator will refresh from node)", "error", err)
+	}
+
+	// address_transactions is slow (large correlated query). Run in background so
+	// live sync starts immediately after the critical backfill steps complete.
+	var addrTxWg sync.WaitGroup
+	addrTxWg.Add(1)
+	go s.addressTransactionsBackfill(ctx, &addrTxWg)
+	// Not waiting: governance + balances are ready, live sync can proceed.
+
+	if err := s.db.SetSyncState(ctx, "is_initial_sync", "false"); err != nil {
+		slog.Warn("failed to update initial sync flag", "error", err)
+	}
+
+	slog.Info("initial sync finished", "total_blocks", chainTip)
+	return nil
+}
+
+// postSyncBackfill computes derived data from the core tables via SQL.
+// This runs once after the initial bulk sync completes.
+func (s *Syncer) postSyncBackfill(ctx context.Context) error {
+	start := time.Now()
+
+	// 1. Mark spent outputs
+	slog.Info("backfill: marking spent outputs")
+	res, err := s.db.Syncer.Exec(ctx, `
+		UPDATE tx_vouts v SET spent_txid = vi.txid, spent_vin_n = vi.n
+		FROM tx_vins vi
+		WHERE vi.prev_txid = v.txid AND vi.prev_vout = v.n
+		  AND v.spent_txid IS NULL AND vi.prev_txid != ''`)
+	if err != nil {
+		return fmt.Errorf("mark spent outputs: %w", err)
+	}
+	slog.Info("backfill: spent outputs marked", "rows", res.RowsAffected(), "elapsed", time.Since(start).Round(time.Second))
+
+	// 2. Compute address balances from ELA-only vouts
+	slog.Info("backfill: computing address balances")
+	_, err = s.db.Syncer.Exec(ctx, `
+		INSERT INTO address_balances (address, balance_sela, total_received, total_sent, first_seen, last_seen)
+		SELECT
+			v.address,
+			SUM(CASE WHEN v.spent_txid IS NULL THEN v.value_sela ELSE 0 END),
+			SUM(v.value_sela),
+			SUM(CASE WHEN v.spent_txid IS NOT NULL THEN v.value_sela ELSE 0 END),
+			MIN(t.timestamp),
+			MAX(t.timestamp)
+		FROM tx_vouts v
+		JOIN transactions t ON v.txid = t.txid
+		WHERE v.address != '' AND (v.asset_id = $1 OR v.asset_id = '')
+		GROUP BY v.address
+		ON CONFLICT (address) DO UPDATE SET
+			balance_sela = EXCLUDED.balance_sela,
+			total_received = EXCLUDED.total_received,
+			total_sent = EXCLUDED.total_sent,
+			first_seen = LEAST(address_balances.first_seen, EXCLUDED.first_seen),
+			last_seen = GREATEST(address_balances.last_seen, EXCLUDED.last_seen)`, ELAAssetID)
+	if err != nil {
+		return fmt.Errorf("compute address balances: %w", err)
+	}
+	slog.Info("backfill: address balances computed", "elapsed", time.Since(start).Round(time.Second))
+
+	// 3. Compute address tx counts
+	slog.Info("backfill: computing address tx counts")
+	_, err = s.db.Syncer.Exec(ctx, `
+		INSERT INTO address_tx_counts (address, tx_count)
+		SELECT address, COUNT(DISTINCT txid) FROM (
+			SELECT address, txid FROM tx_vouts WHERE address != ''
+			UNION ALL
+			SELECT address, txid FROM tx_vins WHERE address != ''
+		) combined
+		GROUP BY address
+		ON CONFLICT (address) DO UPDATE SET tx_count = EXCLUDED.tx_count`)
+	if err != nil {
+		return fmt.Errorf("compute tx counts: %w", err)
+	}
+	slog.Info("backfill: tx counts computed", "elapsed", time.Since(start).Round(time.Second))
+
+	// 4. Chain stats (address_transactions is populated in background — see addressTransactionsBackfill)
+	slog.Info("backfill: computing chain stats")
+	_, err = s.db.Syncer.Exec(ctx, `
+		UPDATE chain_stats SET
+			total_blocks = (SELECT COUNT(*) FROM blocks),
+			total_txs = (SELECT COUNT(*) FROM transactions),
+			total_addresses = (SELECT COUNT(*) FROM address_balances WHERE balance_sela > 0 AND address NOT LIKE 'S%')
+		WHERE id = 1`)
+	if err != nil {
+		return fmt.Errorf("compute chain stats: %w", err)
+	}
+
+	// 5. ANALYZE all tables
+	slog.Info("backfill: running ANALYZE")
+	for _, table := range []string{"blocks", "transactions", "tx_vins", "tx_vouts", "address_balances", "address_tx_counts"} {
+		s.db.Syncer.Exec(ctx, "ANALYZE "+table)
+	}
+
+	slog.Info("backfill complete", "total_elapsed", time.Since(start).Round(time.Second))
+	return nil
+}
+
+// addressTransactionsBackfill populates the address_transactions table used for
+// per-address transaction history pages. This is intentionally run in the
+// background after live sync starts because it takes a long time on large chains
+// and its data is non-critical for blocks, governance, or charts.
+func (s *Syncer) addressTransactionsBackfill(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	start := time.Now()
+	slog.Info("address_tx backfill: starting in background")
+
+	// Sent rows: address appeared in an input.
+	// Net value = total inputs - change outputs back to same address.
+	// Only ELA-asset vins/vouts are counted.
+	slog.Info("address_tx backfill: populating sent rows")
+	_, err := s.db.Syncer.Exec(ctx, `
+		INSERT INTO address_transactions (address, txid, height, direction, value_sela, fee_sela, timestamp, tx_type)
+		SELECT
+			vin_addr.address,
+			vin_addr.txid,
+			t.block_height,
+			'sent',
+			GREATEST(vin_addr.input_total - COALESCE(change.change_total, 0), 0),
+			t.fee_sela,
+			t.timestamp,
+			t.type
+		FROM (
+			SELECT vi.address, vi.txid, SUM(vi.value_sela) AS input_total
+			FROM tx_vins vi
+			JOIN tx_vouts prev ON prev.txid = vi.prev_txid AND prev.n = vi.prev_vout
+			WHERE vi.address != '' AND (prev.asset_id = '' OR prev.asset_id = $1)
+			GROUP BY vi.address, vi.txid
+		) vin_addr
+		JOIN transactions t ON t.txid = vin_addr.txid AND t.type != 0
+		LEFT JOIN (
+			SELECT address, txid, SUM(value_sela) AS change_total
+			FROM tx_vouts
+			WHERE address != '' AND (asset_id = '' OR asset_id = $1)
+			GROUP BY address, txid
+		) change ON change.address = vin_addr.address AND change.txid = vin_addr.txid
+		ON CONFLICT (address, txid, direction) DO NOTHING`, ELAAssetID)
+	if err != nil {
+		slog.Warn("address_tx backfill: sent rows failed (non-fatal)", "error", err)
+	}
+	slog.Info("address_tx backfill: sent rows done", "elapsed", time.Since(start).Round(time.Second))
+
+	if ctx.Err() != nil {
+		slog.Info("address_tx backfill: context cancelled, skipping received rows")
+		return
+	}
+
+	// Received rows: address appeared only in outputs (not inputs) for this tx,
+	// OR it's a coinbase tx (type=0). Only ELA-asset vouts counted.
+	slog.Info("address_tx backfill: populating received rows")
+	_, err = s.db.Syncer.Exec(ctx, `
+		INSERT INTO address_transactions (address, txid, height, direction, value_sela, fee_sela, timestamp, tx_type)
+		SELECT
+			vout_addr.address,
+			vout_addr.txid,
+			t.block_height,
+			'received',
+			vout_addr.output_total,
+			0,
+			t.timestamp,
+			t.type
+		FROM (
+			SELECT address, txid, SUM(value_sela) AS output_total
+			FROM tx_vouts
+			WHERE address != '' AND (asset_id = '' OR asset_id = $1)
+			GROUP BY address, txid
+		) vout_addr
+		JOIN transactions t ON t.txid = vout_addr.txid
+		LEFT JOIN (
+			SELECT DISTINCT address, txid FROM tx_vins WHERE address != ''
+		) vin_presence ON vin_presence.address = vout_addr.address AND vin_presence.txid = vout_addr.txid
+		WHERE vin_presence.address IS NULL OR t.type = 0
+		ON CONFLICT (address, txid, direction) DO NOTHING`, ELAAssetID)
+	if err != nil {
+		slog.Warn("address_tx backfill: received rows failed (non-fatal)", "error", err)
+	}
+	slog.Info("address_tx backfill: complete", "total_elapsed", time.Since(start).Round(time.Second))
+}
+
+// governanceBackfill re-processes governance transaction types from committed
+// transaction data. Since initial sync only inserts core tables (blocks, txs,
+// vins, vouts), this pass populates producers, CR members, votes, proposals, etc.
+func (s *Syncer) governanceBackfill(ctx context.Context) error {
+	start := time.Now()
+
+	// The votes table is retained for historical audit only.
+	// BPoS staking display uses bpos_stakes (populated from RPC).
+
+	// Find all governance-relevant transactions
+	govTypes := []int{
+		TxRegisterProducer, TxUpdateProducer, TxCancelProducer, TxActivateProducer,
+		TxReturnDepositCoin,
+		TxRegisterCR, TxUpdateCR, TxUnregisterCR,
+		TxCRCProposal, TxCRCProposalReview, TxCRCProposalTracking,
+		TxCRCouncilMemberClaimNode,
+		TxVoting, TxReturnVotes, TxExchangeVotes, TxVotesRealWithdraw,
+		TxCreateNFT, TxNFTDestroyFromSideChain,
+		TxRevertToPOW, TxRevertToDPOS, TxNextTurnDPOSInfo,
+		TxInactiveArbitrators,
+		TxWithdrawFromSideChain, TxTransferCrossChainAsset,
+		TxSideChainPow, TxReturnSideChainDepositCoin,
+	}
+
+	rows, err := s.db.Syncer.Query(ctx, `
+		SELECT txid, block_height, type, payload_version, payload_json, timestamp
+		FROM transactions
+		WHERE type = ANY($1)
+		ORDER BY block_height, tx_index`, govTypes)
+	if err != nil {
+		return fmt.Errorf("query governance txs: %w", err)
+	}
+	defer rows.Close()
+
+	var count int64
+	for rows.Next() {
+		var txid, payloadJSON string
+		var blockHeight, timestamp int64
+		var txType, payloadVersion int
+		if err := rows.Scan(&txid, &blockHeight, &txType, &payloadVersion, &payloadJSON, &timestamp); err != nil {
+			continue
+		}
+
+		tx := &node.TransactionInfo{
+			TxID:           txid,
+			Type:           txType,
+			PayloadVersion: payloadVersion,
+		}
+		if payloadJSON != "" {
+			tx.Payload = []byte(payloadJSON)
+		}
+
+		// Load vins for voter address resolution and vote deactivation.
+		// TxVoting needs first vin for voter address; TxReturnVotes, TxExchangeVotes,
+		// and TxVotesRealWithdraw need ALL vins to deactivate consumed vote UTXOs.
+		needsVins := txType == TxVoting || txType == TxReturnVotes ||
+			txType == TxExchangeVotes || txType == TxVotesRealWithdraw
+		if needsVins {
+			vinRows, vinErr := s.db.Syncer.Query(ctx,
+				"SELECT prev_txid, prev_vout FROM tx_vins WHERE txid=$1 ORDER BY n", txid)
+			if vinErr == nil {
+				for vinRows.Next() {
+					var prevTx string
+					var prevN int
+					vinRows.Scan(&prevTx, &prevN)
+					tx.VIn = append(tx.VIn, node.VInInfo{TxID: prevTx, VOut: prevN})
+				}
+				vinRows.Close()
+			}
+		}
+
+		// Load vouts for output payload processing (votes from OTVote outputs)
+		voutRows, voutErr := s.db.Syncer.Query(ctx,
+			"SELECT n, address, value_text, asset_id, output_type, output_payload FROM tx_vouts WHERE txid=$1 ORDER BY n", txid)
+		if voutErr == nil {
+			for voutRows.Next() {
+				var vi node.VOutInfo
+				var opStr *string
+				if err := voutRows.Scan(&vi.N, &vi.Address, &vi.Value, &vi.AssetID, &vi.Type, &opStr); err == nil {
+					if opStr != nil && *opStr != "" && *opStr != "{}" {
+						vi.Payload = json.RawMessage(*opStr)
+					}
+					tx.VOut = append(tx.VOut, vi)
+				}
+			}
+			voutRows.Close()
+		}
+
+		pgxTx, err := s.db.Syncer.Begin(ctx)
+		if err != nil {
+			continue
+		}
+		s.processor.txProc.processGovernanceTx(ctx, pgxTx, tx, blockHeight, timestamp)
+		s.processor.txProc.processOutputPayloads(ctx, pgxTx, tx, blockHeight)
+		if err := pgxTx.Commit(ctx); err != nil {
+			pgxTx.Rollback(ctx)
+			continue
+		}
+		count++
+
+		if count%10000 == 0 {
+			slog.Info("governance backfill progress", "processed", count, "elapsed", time.Since(start).Round(time.Second))
+		}
+	}
+
+	slog.Info("governance backfill complete", "transactions", count, "elapsed", time.Since(start).Round(time.Second))
+	return nil
+}
+
+func (s *Syncer) persistSyncState(ctx context.Context, height int64, hash string) error {
+	if err := s.db.SetSyncState(ctx, "last_height", strconv.FormatInt(height, 10)); err != nil {
+		return err
+	}
+	return s.db.SetSyncState(ctx, "last_hash", hash)
+}
+
+var errBlockPending = errors.New("block pending")
+
+func (s *Syncer) liveSync(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(s.pollIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := s.pollAndProcess(ctx); err != nil {
+				if errors.Is(err, errBlockPending) {
+					time.Sleep(5 * time.Second)
+					continue
+				}
+				slog.Error("live sync poll error", "error", err)
+				time.Sleep(2 * time.Second)
+			}
+		}
+	}
+}
+
+func (s *Syncer) pollAndProcess(ctx context.Context) error {
+	chainTip, err := s.node.GetBlockCount(ctx)
+	if err != nil {
+		return fmt.Errorf("get chain tip: %w", err)
+	}
+	s.chainTip.Store(chainTip)
+	metrics.SetChainTip(chainTip)
+
+	lastHeight := s.lastHeight.Load()
+	if chainTip <= lastHeight {
+		return nil
+	}
+
+	for height := lastHeight + 1; height <= chainTip; height++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		block, err := s.node.GetBlockByHeight(ctx, height)
+		if err != nil {
+			if isBlockNotFound(err) {
+				slog.Debug("block not yet available, backing off", "height", height)
+				return errBlockPending
+			}
+			return fmt.Errorf("fetch block %d: %w", height, err)
+		}
+
+		// Reorg detection: verify parent hash matches our stored tip
+		if height > 0 {
+			storedHash, err := s.db.GetBlockHashAtHeight(ctx, height-1)
+			if err != nil {
+				return fmt.Errorf("reorg check: get hash at height %d: %w", height-1, err)
+			}
+			if storedHash != block.PreviousBlockHash {
+				slog.Warn("reorg detected",
+					"height", height,
+					"expected_prev", storedHash,
+					"actual_prev", block.PreviousBlockHash,
+				)
+				if err := s.handleReorg(ctx, height-1); err != nil {
+					return fmt.Errorf("handle reorg at %d: %w", height, err)
+				}
+				block, err = s.node.GetBlockByHeight(ctx, height)
+				if err != nil {
+					return fmt.Errorf("re-fetch block %d after reorg: %w", height, err)
+				}
+			}
+		}
+
+		pgxTx, err := s.db.Syncer.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin tx for block %d: %w", height, err)
+		}
+
+		// Defer constraints within this transaction so insert order is flexible
+		if _, err := pgxTx.Exec(ctx, "SET CONSTRAINTS ALL DEFERRED"); err != nil {
+			pgxTx.Rollback(ctx)
+			return fmt.Errorf("set deferred constraints: %w", err)
+		}
+
+		if err := s.processor.ProcessBlockLive(ctx, pgxTx, block); err != nil {
+			pgxTx.Rollback(ctx)
+			return fmt.Errorf("process block %d: %w", height, err)
+		}
+
+		if _, err := pgxTx.Exec(ctx,
+			"INSERT INTO sync_state (key, value) VALUES ('last_height', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
+			strconv.FormatInt(height, 10),
+		); err != nil {
+			pgxTx.Rollback(ctx)
+			return fmt.Errorf("update sync state: %w", err)
+		}
+		if _, err := pgxTx.Exec(ctx,
+			"INSERT INTO sync_state (key, value) VALUES ('last_hash', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
+			block.Hash,
+		); err != nil {
+			pgxTx.Rollback(ctx)
+			return fmt.Errorf("update sync hash: %w", err)
+		}
+
+		if err := pgxTx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit block %d: %w", height, err)
+		}
+
+		s.lastHeight.Store(height)
+		metrics.SetSyncedHeight(height)
+
+		hashPreview := block.Hash
+		if len(hashPreview) > 16 {
+			hashPreview = hashPreview[:16] + "..."
+		}
+		slog.Info("block synced",
+			"height", height,
+			"hash", hashPreview,
+			"txs", len(block.Tx),
+		)
+
+		if s.OnNewBlock != nil {
+			minerAddr := ""
+			if len(block.Tx) > 0 && block.Tx[0].Type == 0 {
+				for _, vout := range block.Tx[0].VOut {
+					addr := vout.Address
+					if addr != "" && addr != "CRASSETSXXXXXXXXXXXXXXXXXXXX2qDX5J" &&
+						addr != "STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU" &&
+						addr != "STAKEPooLXXXXXXXXXXXXXXXXXXXpP1PQ2" &&
+						addr != "ELANULLXXXXXXXXXXXXXXXXXXXXXYvs3rr" &&
+						addr != "CREXPENSESXXXXXXXXXXXXXXXXXX4UdT6b" {
+						minerAddr = addr
+						break
+					}
+				}
+			}
+			s.OnNewBlock(height, block.Hash, len(block.Tx), block.Time, block.Size, block.MinerInfo, minerAddr)
+		}
+	}
+
+	return nil
+}
+
+// handleReorg walks back to find the common ancestor, then wraps all
+// rollback operations in a single DB transaction to prevent partial corruption.
+func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
+	forkPoint := fromHeight
+
+	for forkPoint > 0 {
+		storedHash, err := s.db.GetBlockHashAtHeight(ctx, forkPoint)
+		if err != nil {
+			return fmt.Errorf("get stored hash at %d: %w", forkPoint, err)
+		}
+
+		nodeHash, err := s.node.GetBlockHash(ctx, forkPoint)
+		if err != nil {
+			return fmt.Errorf("get node hash at %d: %w", forkPoint, err)
+		}
+
+		if storedHash == nodeHash {
+			break
+		}
+		forkPoint--
+	}
+
+	orphanedCount := fromHeight - forkPoint
+	slog.Warn("reorg: rolling back", "fork_point", forkPoint, "orphaned_blocks", orphanedCount)
+
+	// Evict UTXO cache entries for orphaned transactions (cache is in-memory, do before tx)
+	orphanedTxRows, err := s.db.Syncer.Query(ctx,
+		"SELECT txid FROM transactions WHERE block_height > $1", forkPoint)
+	if err != nil {
+		return fmt.Errorf("query orphaned txids: %w", err)
+	}
+	defer orphanedTxRows.Close()
+	for orphanedTxRows.Next() {
+		var txid string
+		if orphanedTxRows.Scan(&txid) == nil {
+			s.utxoCache.RemoveByTxID(txid)
+		}
+	}
+	orphanedTxRows.Close()
+
+	// All DB mutations in a single transaction
+	pgxTx, err := s.db.Syncer.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin reorg tx: %w", err)
+	}
+	defer pgxTx.Rollback(ctx)
+
+	// 1. Un-mark spent outputs for orphaned transactions
+	if _, err := pgxTx.Exec(ctx, `
+		UPDATE tx_vouts SET spent_txid = NULL, spent_vin_n = NULL
+		WHERE (txid, n) IN (
+			SELECT v.prev_txid, v.prev_vout FROM tx_vins v
+			JOIN transactions t ON v.txid = t.txid
+			WHERE t.block_height > $1 AND v.prev_txid != ''
+		)`, forkPoint); err != nil {
+		return fmt.Errorf("un-spend outputs: %w", err)
+	}
+
+	// 2. Reactivate votes deactivated by orphaned transactions
+	if _, err := pgxTx.Exec(ctx, `
+		UPDATE votes SET is_active = TRUE, spent_txid = NULL, spent_height = NULL
+		WHERE spent_height > $1`, forkPoint); err != nil {
+		return fmt.Errorf("reactivate votes: %w", err)
+	}
+
+	// 3. Collect affected addresses before deletion for balance recalc
+	affectedRows, err := pgxTx.Query(ctx, `
+		SELECT DISTINCT address FROM (
+			SELECT address FROM tx_vouts WHERE txid IN (SELECT txid FROM transactions WHERE block_height > $1)
+			UNION
+			SELECT address FROM tx_vins WHERE txid IN (SELECT txid FROM transactions WHERE block_height > $1)
+		) combined WHERE address != ''`, forkPoint)
+	if err != nil {
+		return fmt.Errorf("collect affected addresses: %w", err)
+	}
+	var affectedAddresses []string
+	for affectedRows.Next() {
+		var addr string
+		if affectedRows.Scan(&addr) == nil {
+			affectedAddresses = append(affectedAddresses, addr)
+		}
+	}
+	affectedRows.Close()
+
+	// 4. Remove address_transactions for orphaned blocks
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM address_transactions WHERE height > $1", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean address_transactions", "error", err)
+	}
+
+	// 4b. Clean governance/auxiliary tables not cascaded from blocks
+	orphanedTxidList := "SELECT txid FROM transactions WHERE block_height > $1"
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM votes WHERE txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean votes", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM cr_proposals WHERE tx_hash IN ("+orphanedTxidList+")", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean cr_proposals", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM cr_proposal_reviews WHERE txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean cr_proposal_reviews", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM nfts WHERE create_txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean nfts", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM cross_chain_txs WHERE txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean cross_chain_txs", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM consensus_transitions WHERE height > $1", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean consensus_transitions", "error", err)
+	}
+
+	// 4c. Clean BPoS/governance snapshot tables affected by orphaned blocks
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM bpos_stakes WHERE block_height > $1", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean bpos_stakes", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"DELETE FROM cr_election_tallies WHERE voting_end_height > $1", forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean cr_election_tallies", "error", err)
+	}
+
+	// 4d. Remove daily_stats rows for dates that fall within the orphaned range,
+	// so they get re-aggregated correctly on the next aggregator run.
+	if _, err := pgxTx.Exec(ctx, `
+		DELETE FROM daily_stats
+		WHERE date >= (SELECT DATE(to_timestamp(timestamp)) FROM blocks WHERE height = $1)`, forkPoint); err != nil {
+		slog.Warn("reorg: failed to clean daily_stats", "error", err)
+	}
+
+	// 4e. Reset producer/cr_member state changes from orphaned blocks.
+	// The aggregator will re-sync the current state from the node on its next run.
+	if _, err := pgxTx.Exec(ctx,
+		"UPDATE producers SET last_updated = 0 WHERE last_updated > $1", forkPoint); err != nil {
+		slog.Warn("reorg: failed to reset producers", "error", err)
+	}
+	if _, err := pgxTx.Exec(ctx,
+		"UPDATE cr_members SET last_updated = 0 WHERE last_updated > $1", forkPoint); err != nil {
+		slog.Warn("reorg: failed to reset cr_members", "error", err)
+	}
+
+	// 5. Get counts being orphaned for chain_stats correction
+	var orphanedBlocks, orphanedTxs int64
+	pgxTx.QueryRow(ctx, "SELECT COUNT(*) FROM blocks WHERE height > $1", forkPoint).Scan(&orphanedBlocks)
+	pgxTx.QueryRow(ctx, "SELECT COUNT(*) FROM transactions WHERE block_height > $1", forkPoint).Scan(&orphanedTxs)
+
+	// 6. Delete orphaned blocks (CASCADE deletes txs/vins/vouts/attrs/programs)
+	if _, err := pgxTx.Exec(ctx, "DELETE FROM blocks WHERE height > $1", forkPoint); err != nil {
+		return fmt.Errorf("delete orphaned blocks: %w", err)
+	}
+
+	// 7. Recalculate balances for affected addresses (ELA-only)
+	if len(affectedAddresses) > 0 {
+		if _, err := pgxTx.Exec(ctx, `
+			INSERT INTO address_balances (address, balance_sela, total_received, total_sent, first_seen, last_seen)
+			SELECT
+				v.address,
+				SUM(CASE WHEN v.spent_txid IS NULL THEN v.value_sela ELSE 0 END),
+				SUM(v.value_sela),
+				SUM(CASE WHEN v.spent_txid IS NOT NULL THEN v.value_sela ELSE 0 END),
+				MIN(t.timestamp),
+				MAX(t.timestamp)
+			FROM tx_vouts v
+			JOIN transactions t ON v.txid = t.txid
+			WHERE v.address = ANY($1) AND (v.asset_id = $2 OR v.asset_id = '')
+			GROUP BY v.address
+			ON CONFLICT (address) DO UPDATE SET
+				balance_sela = EXCLUDED.balance_sela,
+				total_received = EXCLUDED.total_received,
+				total_sent = EXCLUDED.total_sent,
+				first_seen = LEAST(address_balances.first_seen, EXCLUDED.first_seen),
+				last_seen = GREATEST(address_balances.last_seen, EXCLUDED.last_seen)`,
+			affectedAddresses, ELAAssetID); err != nil {
+			slog.Warn("reorg: failed to recalculate balances", "error", err)
+		}
+
+		// Delete stale balances for addresses that no longer have any ELA vouts
+		if _, err := pgxTx.Exec(ctx, `
+			DELETE FROM address_balances
+			WHERE address = ANY($1)
+			  AND NOT EXISTS (
+			    SELECT 1 FROM tx_vouts v
+			    WHERE v.address = address_balances.address
+			      AND (v.asset_id = $2 OR v.asset_id = '')
+			  )`, affectedAddresses, ELAAssetID); err != nil {
+			slog.Warn("reorg: failed to clean orphan-only address balances", "error", err)
+		}
+
+		// Rebuild address_tx_counts for affected addresses
+		if _, err := pgxTx.Exec(ctx, `
+			INSERT INTO address_tx_counts (address, tx_count)
+			SELECT address, COUNT(DISTINCT txid) FROM (
+				SELECT address, txid FROM tx_vouts WHERE address = ANY($1)
+				UNION ALL
+				SELECT address, txid FROM tx_vins WHERE address = ANY($1)
+			) combined
+			GROUP BY address
+			ON CONFLICT (address) DO UPDATE SET tx_count = EXCLUDED.tx_count`,
+			affectedAddresses); err != nil {
+			slog.Warn("reorg: failed to rebuild address_tx_counts", "error", err)
+		}
+
+		// Delete tx counts for addresses with no remaining txs
+		if _, err := pgxTx.Exec(ctx, `
+			DELETE FROM address_tx_counts
+			WHERE address = ANY($1)
+			  AND NOT EXISTS (
+			    SELECT 1 FROM tx_vouts v WHERE v.address = address_tx_counts.address
+			    UNION ALL
+			    SELECT 1 FROM tx_vins vi WHERE vi.address = address_tx_counts.address
+			  )`, affectedAddresses); err != nil {
+			slog.Warn("reorg: failed to clean orphan-only address_tx_counts", "error", err)
+		}
+	}
+
+	// 8. Correct chain_stats counters
+	if _, err := pgxTx.Exec(ctx, `
+		UPDATE chain_stats SET
+			total_blocks = total_blocks - $1,
+			total_txs = total_txs - $2,
+			total_addresses = (SELECT COUNT(*) FROM address_balances WHERE balance_sela > 0 AND address NOT LIKE 'S%')
+		WHERE id = 1`, orphanedBlocks, orphanedTxs); err != nil {
+		slog.Warn("reorg: failed to update chain_stats", "error", err)
+	}
+
+	if err := pgxTx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit reorg tx: %w", err)
+	}
+
+	slog.Warn("reorg complete", "fork_point", forkPoint, "orphaned_blocks", orphanedCount)
+	s.lastHeight.Store(forkPoint)
+
+	if orphanedCount > 3 {
+		slog.Info("running ANALYZE after deep reorg")
+		for _, t := range []string{"tx_vouts", "votes", "blocks", "transactions"} {
+			s.db.Syncer.Exec(ctx, "ANALYZE "+t)
+		}
+	}
+
+	return nil
+}
+
+func (s *Syncer) LastHeight() int64  { return s.lastHeight.Load() }
+func (s *Syncer) ChainTip() int64   { return s.chainTip.Load() }
+func (s *Syncer) IsLive() bool      { return s.isLive.Load() }

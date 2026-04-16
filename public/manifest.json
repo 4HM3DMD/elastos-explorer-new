@@ -1,0 +1,16 @@
+{
+  "name": "Elastos Main Chain Explorer",
+  "short_name": "Elastos Explorer",
+  "description": "Real-time blockchain explorer for the Elastos (ELA) main chain, secured by Bitcoin merged mining.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

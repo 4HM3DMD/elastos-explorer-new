@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high || true
+
+  lint-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ela-explorer/go.mod
+          cache: true
+          cache-dependency-path: ela-explorer/go.mod
+
+      - name: Go vet
+        working-directory: ela-explorer
+        run: |
+          go mod download
+          go vet ./...
+
+      - name: Go test
+        working-directory: ela-explorer
+        run: go test -race -count=1 ./...
+
+  lint-indexer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ela-indexer/go.mod
+          cache: true
+          cache-dependency-path: ela-indexer/go.mod
+
+      - name: Go vet indexer
+        working-directory: ela-indexer
+        run: |
+          go mod download
+          go vet ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint-frontend, lint-backend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ela-explorer/go.mod
+          cache: true
+          cache-dependency-path: ela-explorer/go.mod
+
+      - name: Build backend
+        working-directory: ela-explorer
+        run: |
+          go mod download
+          go build -o /tmp/ela-explorer ./cmd/explorer

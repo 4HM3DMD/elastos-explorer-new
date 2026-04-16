@@ -1,0 +1,52 @@
+method	rpc	api
+createauxblock	ERR:-32601 Method not allowed	ERR:42001 requesting method if out of service level
+decoderawtransaction	ERR:42002 need a parameter named data	ERR:42002 need a parameter named data
+discretemining	ERR:-32601 Method not allowed	ERR:42001 requesting method if out of service level
+dposv2rewardinfo	OK	OK
+estimatesmartfee	ERR:42002 need a param called confirmations	ERR:42002 need a param called confirmations
+getalldetaileddposv2votes	OK	OK
+getamountbyinputs	ERR:42002 need a parameter named inputs!	ERR:42002 need a parameter named inputs!
+getarbiterpeersinfo	OK	ERR:45002 arbiter disabled
+getarbitersinfo	OK	OK
+getarbitratorgroupbyheight	ERR:42002 height parameter should be a positive integer	ERR:42002 height parameter should be a positive integer
+getbestblockhash	OK	OK
+getblock	ERR:42002 block hash not found	ERR:42002 block hash not found
+getblockbyheight	ERR:42002 height parameter should be a positive integer	ERR:42002 height parameter should be a positive integer
+getblockcount	OK	OK
+getblockhash	ERR:42002 height parameter should be a positive integer	ERR:42002 height parameter should be a positive integer
+getconfirmbyhash	ERR:42002 block hash not found	ERR:42002 block hash not found
+getconfirmbyheight	ERR:42002 height parameter should be a positive integer	ERR:42002 height parameter should be a positive integer
+getconnectioncount	OK	OK
+getcrdepositcoin	ERR:42002 need a param called publickey or id	ERR:42002 need a param called publickey or id
+getcrmember	ERR:42002 id is required	ERR:42002 Invalid Params
+getcrproposalstate	ERR:42002 params at least one of proposalhash and DraftHash	ERR:42002 params at least one of proposalhash and DraftHash
+getcrrelatedstage	OK	OK
+getdepositcoin	ERR:42002 need a param called ownerpublickey	ERR:42002 need a param called ownerpublickey
+getdposv2info	OK	OK
+getexistdeposittransactions	ERR:-32601 JSON-RPC method getexistdeposittransactions not found	ERR:-32601 JSON-RPC method getexistdeposittransactions not found
+getexistwithdrawtransactions	ERR:42002 txs not found	ERR:42002 txs not found
+gethistory	ERR:42002 Invalid address: 	ERR:42002 Invalid Params
+getinfo	OK	OK
+getmininginfo	OK	OK
+getneighbors	OK	OK
+getnodestate	OK	OK
+getproducerinfo	ERR:42002 public key not found	ERR:42002 public key not found
+getrawmempool	OK	OK
+getrawtransaction	ERR:42002 Invalid Params	ERR:42002 Invalid Params
+getreceivedbyaddress	ERR:42002 need a parameter named address	ERR:42002 need a parameter named address
+getsecretarygeneral	OK	OK
+getutxosbyamount	ERR:42002 need a parameter named address!	ERR:42002 need a parameter named address!
+getvoterights	ERR:42002 need stakeaddresses in an array!	ERR:42002 need stakeaddresses in an array!
+listcrcandidates	OK	OK
+listcrproposalbasestate	ERR:42002 invalidate state	ERR:42002 invalidate state
+listcurrentcrs	OK	OK
+listproducers	OK	OK
+listunspent	ERR:42002 need addresses in an array!	ERR:42002 need addresses in an array!
+producerstatus	ERR:42002 public key not found	ERR:42002 public key not found
+sendrawtransaction	ERR:42002 need a string parameter named data	ERR:42002 need a string parameter named data
+setloglevel	ERR:-32601 Method not allowed	ERR:42001 requesting method if out of service level
+signrawtransactionwithkey	ERR:-32601 Method not allowed	ERR:42002 need a parameter named data
+submitauxblock	ERR:-32601 Method not allowed	ERR:42001 requesting method if out of service level
+submitsidechainillegaldata	ERR:-32601 Method not allowed	ERR:45002 arbiter disabled
+togglemining	ERR:-32601 Method not allowed	ERR:42001 requesting method if out of service level
+votestatus	ERR:42002 address not found	ERR:42002 address not found

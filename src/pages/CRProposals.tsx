@@ -1,0 +1,475 @@
+import { useState, useEffect, useCallback, type CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
+import { blockchainApi } from '../services/api';
+import type { CRProposal } from '../types/blockchain';
+import { PROPOSAL_STATUS_COLORS, PROPOSAL_STATUS_LABELS, PROPOSAL_TYPE_NAMES } from '../types/blockchain';
+import { FileText, Users, Coins, GitBranch, ThumbsUp, ThumbsDown, Minus, Hash, ExternalLink, Clock } from 'lucide-react';
+import Pagination from '../components/Pagination';
+import { PageSkeleton } from '../components/LoadingSkeleton';
+import { fmtEla } from '../utils/format';
+import { cn } from '../lib/cn';
+import SEO from '../components/SEO';
+
+const CR_VOTING_PERIOD_BLOCKS = 5040;
+const VETO_PERIOD_BLOCKS = 5040;
+
+const PROPOSAL_STATUSES = [
+  { raw: 'All', label: 'All' },
+  { raw: 'Registered', label: 'Under Review' },
+  { raw: 'VoterAgreed', label: 'Passed' },
+  { raw: 'Notification', label: 'Veto Period' },
+  { raw: 'Finished', label: 'Final' },
+  { raw: 'CRCanceled', label: 'Rejected' },
+  { raw: 'VoterCanceled', label: 'Vetoed' },
+  { raw: 'Terminated', label: 'Terminated' },
+] as const;
+
+const PAGE_SIZE = 20;
+
+const NAV_TABS = [
+  { label: 'Council Members', path: '/governance', icon: Users },
+  { label: 'Proposals', path: '/governance/proposals', icon: FileText },
+] as const;
+
+const STATUS_BORDER_COLORS: Record<string, string> = {
+  Registered:    'border-l-blue-500',
+  CRAgreed:      'border-l-cyan-500',
+  VoterAgreed:   'border-l-green-500',
+  Notification:  'border-l-purple-500',
+  Approved:      'border-l-green-500',
+  Finished:      'border-l-gray-500',
+  CRCanceled:    'border-l-red-500',
+  VoterCanceled: 'border-l-orange-500',
+  Terminated:    'border-l-red-600',
+  Aborted:       'border-l-gray-600',
+};
+
+const STATUS_CARD_STYLES: Record<string, { base: React.CSSProperties; hover: React.CSSProperties }> = {
+  Registered: {
+    base: {
+      boxShadow: '0 0 12px rgba(59,130,246,0.08), inset 0 1px 0 rgba(59,130,246,0.06)',
+      borderColor: 'rgba(59,130,246,0.25)',
+    },
+    hover: {
+      boxShadow: '0 0 16px rgba(59,130,246,0.15), inset 0 1px 0 rgba(59,130,246,0.08)',
+      borderColor: 'rgba(59,130,246,0.4)',
+    },
+  },
+  Notification: {
+    base: {
+      boxShadow: '0 0 12px rgba(168,85,247,0.08), inset 0 1px 0 rgba(168,85,247,0.06)',
+      borderColor: 'rgba(168,85,247,0.25)',
+    },
+    hover: {
+      boxShadow: '0 0 16px rgba(168,85,247,0.15), inset 0 1px 0 rgba(168,85,247,0.08)',
+      borderColor: 'rgba(168,85,247,0.4)',
+    },
+  },
+};
+
+function formatBudget(budgetTotal?: string): string {
+  if (!budgetTotal || budgetTotal === '0' || budgetTotal === '') return '';
+  return `${fmtEla(budgetTotal, { compact: true })} ELA`;
+}
+
+function getProposalTypeName(type: number): string {
+  return PROPOSAL_TYPE_NAMES[type] ?? `Type ${type}`;
+}
+
+function getProposalDisplayTitle(p: CRProposal): string {
+  if (p.title) return p.title;
+  const typeName = getProposalTypeName(p.proposalType);
+  const author = p.crMemberName || 'Unknown';
+  return `${typeName} by ${author}`;
+}
+
+function stripFormatting(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(\*|_)(.*?)\1/g, '$2')
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/~~(.*?)~~/g, '$1')
+    .replace(/`{1,3}[^`]*`{1,3}/g, '')
+    .replace(/\n{2,}/g, ' ')
+    .replace(/\n/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+const VOTING_OPEN_STATUSES = new Set(['Registered']);
+
+const VoteBar = ({ approve, reject, abstain, status }: { approve: number; reject: number; abstain: number; status: string }) => {
+  const total = approve + reject + abstain;
+  if (total === 0) return <span className="text-muted text-[11px]">No votes</span>;
+
+  const council = 12;
+  const remaining = Math.max(0, council - total);
+  const isVotingOpen = VOTING_OPEN_STATUSES.has(status);
+
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="flex gap-px w-[72px]">
+        {Array.from({ length: council }).map((_, i) => {
+          let color = 'bg-[var(--color-surface-tertiary)]';
+          if (i < approve) color = 'bg-green-500';
+          else if (i < approve + reject) color = 'bg-red-500';
+          else if (i < approve + reject + abstain) color = 'bg-amber-400';
+          return <div key={i} className={cn('flex-1 h-2.5 first:rounded-l-sm last:rounded-r-sm', color)} />;
+        })}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-0.5 text-[11px] text-green-400 font-medium"><ThumbsUp size={9} />{approve}</span>
+        <span className="inline-flex items-center gap-0.5 text-[11px] text-red-400 font-medium"><ThumbsDown size={9} />{reject}</span>
+        {abstain > 0 && (
+          <span className="inline-flex items-center gap-0.5 text-[11px] text-amber-400 font-medium"><Minus size={9} />{abstain}</span>
+        )}
+        {remaining > 0 && isVotingOpen && (
+          <span className="text-[10px] text-muted">{remaining} pending</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+function formatBlocksRemaining(blocksLeft: number): string {
+  const totalMin = blocksLeft * 2;
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function getCountdown(status: string, registerHeight: number, currentHeight: number): { label: string; time: string; blocks: number; overdue: boolean; phase: 'review' | 'veto' } | null {
+  if (!currentHeight || !registerHeight) return null;
+
+  if (status === 'Registered') {
+    const blocksLeft = (registerHeight + CR_VOTING_PERIOD_BLOCKS) - currentHeight;
+    if (blocksLeft <= 0) return { label: 'Council Vote', time: '', blocks: 0, overdue: true, phase: 'review' };
+    return { label: 'Council Vote', time: formatBlocksRemaining(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' };
+  }
+
+  if (status === 'Notification') {
+    const vetoStart = registerHeight + CR_VOTING_PERIOD_BLOCKS;
+    const blocksLeft = (vetoStart + VETO_PERIOD_BLOCKS) - currentHeight;
+    if (blocksLeft <= 0) return { label: 'Veto Period', time: '', blocks: 0, overdue: true, phase: 'veto' };
+    return { label: 'Veto Period', time: formatBlocksRemaining(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'veto' };
+  }
+
+  return null;
+}
+
+const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: number }) => {
+  const statusColor = PROPOSAL_STATUS_COLORS[p.status] || 'bg-gray-500/20 text-gray-400';
+  const borderColor = STATUS_BORDER_COLORS[p.status] || 'border-l-gray-500';
+  const hash = p.proposalHash ?? '';
+  const displayTitle = getProposalDisplayTitle(p);
+  const budget = formatBudget(p.budgetTotal);
+  const hasTracking = (p.trackingCount ?? 0) > 0;
+  const totalBudgetStages =
+    (p.budgets?.length ?? 0) > 0
+      ? Math.max(...(p.budgets!.map(b => b.stage)))
+      : (p.trackingCount ?? 0);
+  const typeName = getProposalTypeName(p.proposalType);
+  const statusLabel = PROPOSAL_STATUS_LABELS[p.status] ?? p.status;
+
+  const countdown = getCountdown(p.status, p.registerHeight, currentHeight);
+
+  const [hovered, setHovered] = useState(false);
+  const cardGlow = STATUS_CARD_STYLES[p.status];
+  const glowStyle: CSSProperties | undefined = cardGlow
+    ? (hovered ? { ...cardGlow.base, ...cardGlow.hover } : cardGlow.base)
+    : undefined;
+
+  return (
+    <Link
+      to={`/governance/proposal/${hash}`}
+      className={cn(
+        'card block p-4 sm:p-5 border-l-[3px] transition-all duration-200 group',
+        !cardGlow && 'hover:border-[var(--color-border-strong)]',
+        borderColor
+      )}
+      style={glowStyle}
+      onMouseEnter={cardGlow ? () => setHovered(true) : undefined}
+      onMouseLeave={cardGlow ? () => setHovered(false) : undefined}
+    >
+      <div className="flex items-center justify-between gap-3 mb-2.5">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <span className={cn('badge', statusColor)}>{statusLabel}</span>
+          {countdown && (
+            <span className={cn(
+              'inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full border',
+              countdown.overdue
+                ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                : countdown.phase === 'review'
+                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                  : 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+            )}>
+              <Clock size={9} />
+              {countdown.overdue
+                ? <>{countdown.label} · Overdue</>
+                : <>{countdown.label} · {countdown.time} · <span className="font-mono">{countdown.blocks.toLocaleString()}</span> blk</>
+              }
+            </span>
+          )}
+          <span className="badge bg-[var(--color-surface-secondary)] text-secondary">{typeName}</span>
+        </div>
+        {budget && (
+          <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-amber-400 shrink-0">
+            <Coins size={11} className="opacity-60" />
+            {budget}
+          </span>
+        )}
+      </div>
+
+      <div className="mb-3">
+        <h3 className="text-sm sm:text-base font-semibold text-primary line-clamp-2 group-hover:text-brand transition-colors leading-snug">
+          {p.proposalNumber != null && <span className="text-muted font-mono mr-1.5">#{p.proposalNumber}</span>}
+          {displayTitle}
+        </h3>
+        {p.abstract && (
+          <p className="text-xs text-secondary line-clamp-2 mt-1.5 leading-relaxed">{stripFormatting(p.abstract)}</p>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap pt-2.5 border-t border-[var(--color-border)]/50">
+        <div className="flex items-center gap-3 text-[11px] text-muted min-w-0">
+          <span className="truncate">
+            Promoted by <span className="text-primary font-medium">{p.crMemberName || 'Unknown'}</span>
+          </span>
+          {p.registerHeight != null && p.registerHeight > 0 && (
+            <span className="inline-flex items-center gap-0.5 font-mono shrink-0">
+              <Hash size={9} className="opacity-50" />
+              {p.registerHeight.toLocaleString()}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          {hasTracking && (
+            <span className="inline-flex items-center gap-1 text-[11px] text-purple-400 font-medium">
+              <GitBranch size={11} />
+              Stage {p.trackingCount ?? 0}/{totalBudgetStages}
+            </span>
+          )}
+          <VoteBar
+            approve={p.voteCount ?? 0}
+            reject={p.rejectCount ?? 0}
+            abstain={p.abstainCount ?? 0}
+            status={p.status}
+          />
+        </div>
+      </div>
+    </Link>
+  );
+};
+
+const ProposalCardSkeleton = () => (
+  <div className="card p-4 sm:p-5 border-l-[3px] border-l-[var(--color-border)]">
+    <div className="flex items-center justify-between gap-3 mb-2.5">
+      <div className="flex gap-2">
+        <div className="h-5 w-24 animate-shimmer rounded-md" />
+        <div className="h-5 w-16 animate-shimmer rounded-md" />
+      </div>
+      <div className="h-4 w-20 animate-shimmer rounded" />
+    </div>
+    <div className="mb-3">
+      <div className="h-5 w-4/5 animate-shimmer rounded mb-1.5" />
+      <div className="h-3.5 w-3/5 animate-shimmer rounded" />
+    </div>
+    <div className="flex items-center justify-between gap-3 pt-2.5 border-t border-[var(--color-border)]/50">
+      <div className="flex gap-2">
+        <div className="h-3 w-28 animate-shimmer rounded" />
+        <div className="h-3 w-14 animate-shimmer rounded" />
+      </div>
+      <div className="flex gap-1.5">
+        <div className="h-2.5 w-[72px] animate-shimmer rounded-sm" />
+        <div className="h-3 w-12 animate-shimmer rounded" />
+      </div>
+    </div>
+  </div>
+);
+
+const CRProposals = () => {
+  const [proposals, setProposals] = useState<CRProposal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [currentHeight, setCurrentHeight] = useState(0);
+
+  const fetchProposals = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const status = statusFilter === 'All' ? undefined : statusFilter;
+      const [response, stats] = await Promise.all([
+        blockchainApi.getCRProposals(currentPage, PAGE_SIZE, status),
+        blockchainApi.getStats().catch(() => null),
+      ]);
+      setProposals(response.data);
+      setTotalItems(response.total);
+      setTotalPages(Math.max(1, Math.ceil(response.total / PAGE_SIZE)));
+      if (stats) setCurrentHeight(stats.latestHeight);
+    } catch {
+      setError('Failed to fetch CR proposals');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPage, statusFilter]);
+
+  useEffect(() => {
+    fetchProposals();
+  }, [fetchProposals]);
+
+  if (loading && proposals.length === 0) return <PageSkeleton />;
+
+  if (error) {
+    return (
+      <div className="px-4 lg:px-6 py-6 text-center">
+        <p className="text-accent-red mb-4">{error}</p>
+        <button onClick={fetchProposals} className="btn-primary">Retry</button>
+      </div>
+    );
+  }
+
+  const activeFilterLabel = PROPOSAL_STATUSES.find(s => s.raw === statusFilter)?.label ?? 'All';
+
+  return (
+    <div className="px-4 lg:px-6 py-6 space-y-6">
+      <SEO title="CR Proposals" description="Community proposals for Elastos governance. Track proposal status, council votes, budgets, and implementation progress." path="/governance/proposals" />
+      {/* Page header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-[30px] h-[30px] md:w-[36px] md:h-[36px] rounded-[8px] flex items-center justify-center" style={{ background: 'rgba(255, 159, 24, 0.1)' }}>
+            <FileText size={16} className="text-brand" />
+          </div>
+          <div>
+            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">CR Proposals</h1>
+            <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">{totalItems.toLocaleString()} proposals indexed</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
+          {NAV_TABS.map((tab) => {
+            const isActive = tab.path === '/governance/proposals';
+            const Icon = tab.icon;
+            return (
+              <Link
+                key={tab.path}
+                to={tab.path}
+                className={cn(
+                  'px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
+                  isActive
+                    ? 'bg-white text-black'
+                    : 'text-secondary hover:text-brand'
+                )}
+                aria-current={isActive ? 'page' : undefined}
+              >
+                <Icon size={12} />
+                {tab.label}
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Status filter pills */}
+      <div className="flex flex-wrap gap-1.5 sm:gap-2">
+        {PROPOSAL_STATUSES.map(({ raw, label }) => {
+          const isActive = statusFilter === raw;
+          return (
+            <button
+              key={raw}
+              onClick={() => { setStatusFilter(raw); setCurrentPage(1); }}
+              aria-pressed={isActive}
+              className={cn(
+                'px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-all duration-200 border',
+                isActive
+                  ? 'bg-brand text-white border-brand shadow-sm shadow-brand/20'
+                  : 'border-[var(--color-border)] text-secondary hover:text-primary hover:border-[var(--color-border-strong)]'
+              )}
+            >
+              {label}
+              {isActive && totalItems > 0 && (
+                <span className="ml-1.5 text-[10px] opacity-80">({totalItems})</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Result count */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FileText size={13} className="text-muted" />
+          <span className="text-xs text-muted">
+            Showing <span className="text-primary font-semibold">{totalItems.toLocaleString()}</span> {activeFilterLabel !== 'All' ? activeFilterLabel.toLowerCase() : ''} proposal{totalItems !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <span className="text-[10px] text-muted font-mono">Newest first</span>
+      </div>
+
+      {/* DAO Portal banner */}
+      <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-brand/20 bg-brand/5">
+        <span className="text-xs text-secondary leading-relaxed">
+          To submit a proposal or learn more about the Elastos DAO process, visit the{' '}
+          <a
+            href="https://elastos.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-semibold text-brand hover:underline"
+          >
+            Elastos DAO Portal <ExternalLink size={10} />
+          </a>
+        </span>
+      </div>
+
+      {/* Proposal cards */}
+      {loading ? (
+        <div className="space-y-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <ProposalCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : proposals.length === 0 ? (
+        <div className="card p-12 text-center">
+          <FileText size={32} className="mx-auto text-muted mb-3" />
+          <p className="text-secondary font-medium mb-1">No proposals found</p>
+          <p className="text-xs text-muted">Try selecting a different status filter</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {proposals.map((p) => (
+            <ProposalCard key={p.proposalHash || p.txHash} p={p} currentHeight={currentHeight} />
+          ))}
+        </div>
+      )}
+
+      {/* Pagination inside card */}
+      {totalPages > 1 && (
+        <div className="card overflow-hidden">
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            total={totalItems}
+            label="proposals"
+            onPageChange={(pg) => { if (pg >= 1 && pg <= totalPages) setCurrentPage(pg); }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CRProposals;

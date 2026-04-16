@@ -37,6 +37,10 @@ type Syncer struct {
 	lastHeight atomic.Int64
 	isLive     atomic.Bool
 
+	postSyncDone    atomic.Bool
+	govBackfillDone atomic.Bool
+	addrTxDone      atomic.Bool
+
 	// Broadcast callback (set by main to push to WebSocket).
 	OnNewBlock func(height int64, hash string, txCount int, timestamp int64, size int, minerInfo, minerAddress string)
 }
@@ -99,6 +103,11 @@ func (s *Syncer) Run(ctx context.Context) error {
 		isInitial, err := s.db.IsInitialSync(ctx)
 		if err != nil {
 			slog.Warn("could not check initial sync flag", "error", err)
+		}
+		if !isInitial {
+			s.postSyncDone.Store(true)
+			s.govBackfillDone.Store(true)
+			s.addrTxDone.Store(true)
 		}
 		if isInitial {
 			slog.Info("detected incomplete initial sync (backfill not yet run), running now")
@@ -289,21 +298,45 @@ func (s *Syncer) initialSync(ctx context.Context) error {
 func (s *Syncer) postSyncBackfill(ctx context.Context) error {
 	start := time.Now()
 
-	// 1. Mark spent outputs
-	slog.Info("backfill: marking spent outputs")
-	res, err := s.db.Syncer.Exec(ctx, `
-		UPDATE tx_vouts v SET spent_txid = vi.txid, spent_vin_n = vi.n
-		FROM tx_vins vi
-		WHERE vi.prev_txid = v.txid AND vi.prev_vout = v.n
-		  AND v.spent_txid IS NULL AND vi.prev_txid != ''`)
-	if err != nil {
-		return fmt.Errorf("mark spent outputs: %w", err)
+	// 1. Mark spent outputs (chunked by block_height to avoid table-wide lock)
+	slog.Info("backfill: marking spent outputs (chunked)")
+	var maxHeight int64
+	if err := s.db.Syncer.QueryRow(ctx, "SELECT COALESCE(MAX(height),0) FROM blocks").Scan(&maxHeight); err != nil {
+		return fmt.Errorf("get max height for spent outputs: %w", err)
 	}
-	slog.Info("backfill: spent outputs marked", "rows", res.RowsAffected(), "elapsed", time.Since(start).Round(time.Second))
+
+	const spentChunkSize int64 = 100000
+	var totalSpentRows int64
+	for chunkStart := int64(0); chunkStart <= maxHeight; chunkStart += spentChunkSize {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		chunkEnd := chunkStart + spentChunkSize - 1
+		if chunkEnd > maxHeight {
+			chunkEnd = maxHeight
+		}
+
+		res, err := s.db.Syncer.Exec(ctx, `
+			UPDATE tx_vouts v SET spent_txid = vi.txid, spent_vin_n = vi.n
+			FROM tx_vins vi
+			JOIN transactions t ON t.txid = vi.txid
+			WHERE vi.prev_txid = v.txid AND vi.prev_vout = v.n
+			  AND v.spent_txid IS NULL AND vi.prev_txid != ''
+			  AND t.block_height >= $1 AND t.block_height <= $2`, chunkStart, chunkEnd)
+		if err != nil {
+			return fmt.Errorf("mark spent outputs chunk %d-%d: %w", chunkStart, chunkEnd, err)
+		}
+		totalSpentRows += res.RowsAffected()
+
+		if chunkStart > 0 && chunkStart%500000 == 0 {
+			slog.Info("backfill: spent outputs progress", "height", chunkEnd, "rows_so_far", totalSpentRows)
+		}
+	}
+	slog.Info("backfill: spent outputs marked", "rows", totalSpentRows, "elapsed", time.Since(start).Round(time.Second))
 
 	// 2. Compute address balances from ELA-only vouts
 	slog.Info("backfill: computing address balances")
-	_, err = s.db.Syncer.Exec(ctx, `
+	_, err := s.db.Syncer.Exec(ctx, `
 		INSERT INTO address_balances (address, balance_sela, total_received, total_sent, first_seen, last_seen)
 		SELECT
 			v.address,
@@ -362,100 +395,125 @@ func (s *Syncer) postSyncBackfill(ctx context.Context) error {
 	}
 
 	slog.Info("backfill complete", "total_elapsed", time.Since(start).Round(time.Second))
+	s.postSyncDone.Store(true)
 	return nil
 }
 
 // addressTransactionsBackfill populates the address_transactions table used for
-// per-address transaction history pages. This is intentionally run in the
-// background after live sync starts because it takes a long time on large chains
-// and its data is non-critical for blocks, governance, or charts.
+// per-address transaction history pages. Processes in height-range chunks to
+// avoid locking the entire table and to produce progress logs.
 func (s *Syncer) addressTransactionsBackfill(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	start := time.Now()
 	slog.Info("address_tx backfill: starting in background")
 
-	// Sent rows: address appeared in an input.
-	// Net value = total inputs - change outputs back to same address.
-	// Only ELA-asset vins/vouts are counted.
-	slog.Info("address_tx backfill: populating sent rows")
-	_, err := s.db.Syncer.Exec(ctx, `
-		INSERT INTO address_transactions (address, txid, height, direction, value_sela, fee_sela, timestamp, tx_type)
-		SELECT
-			vin_addr.address,
-			vin_addr.txid,
-			t.block_height,
-			'sent',
-			GREATEST(vin_addr.input_total - COALESCE(change.change_total, 0), 0),
-			t.fee_sela,
-			t.timestamp,
-			t.type
-		FROM (
-			SELECT vi.address, vi.txid, SUM(vi.value_sela) AS input_total
-			FROM tx_vins vi
-			JOIN tx_vouts prev ON prev.txid = vi.prev_txid AND prev.n = vi.prev_vout
-			WHERE vi.address != '' AND (prev.asset_id = '' OR prev.asset_id = $1)
-			GROUP BY vi.address, vi.txid
-		) vin_addr
-		JOIN transactions t ON t.txid = vin_addr.txid AND t.type != 0
-		LEFT JOIN (
-			SELECT address, txid, SUM(value_sela) AS change_total
-			FROM tx_vouts
-			WHERE address != '' AND (asset_id = '' OR asset_id = $1)
-			GROUP BY address, txid
-		) change ON change.address = vin_addr.address AND change.txid = vin_addr.txid
-		ON CONFLICT (address, txid, direction) DO NOTHING`, ELAAssetID)
-	if err != nil {
-		slog.Warn("address_tx backfill: sent rows failed (non-fatal)", "error", err)
-	}
-	slog.Info("address_tx backfill: sent rows done", "elapsed", time.Since(start).Round(time.Second))
-
-	if ctx.Err() != nil {
-		slog.Info("address_tx backfill: context cancelled, skipping received rows")
+	var maxHeight int64
+	if err := s.db.Syncer.QueryRow(ctx, "SELECT COALESCE(MAX(height),0) FROM blocks").Scan(&maxHeight); err != nil || maxHeight == 0 {
+		slog.Info("address_tx backfill: no blocks yet")
+		s.addrTxDone.Store(true)
 		return
 	}
 
-	// Received rows: address appeared only in outputs (not inputs) for this tx,
-	// OR it's a coinbase tx (type=0). Only ELA-asset vouts counted.
-	slog.Info("address_tx backfill: populating received rows")
-	_, err = s.db.Syncer.Exec(ctx, `
-		INSERT INTO address_transactions (address, txid, height, direction, value_sela, fee_sela, timestamp, tx_type)
-		SELECT
-			vout_addr.address,
-			vout_addr.txid,
-			t.block_height,
-			'received',
-			vout_addr.output_total,
-			0,
-			t.timestamp,
-			t.type
-		FROM (
-			SELECT address, txid, SUM(value_sela) AS output_total
-			FROM tx_vouts
-			WHERE address != '' AND (asset_id = '' OR asset_id = $1)
-			GROUP BY address, txid
-		) vout_addr
-		JOIN transactions t ON t.txid = vout_addr.txid
-		LEFT JOIN (
-			SELECT DISTINCT address, txid FROM tx_vins WHERE address != ''
-		) vin_presence ON vin_presence.address = vout_addr.address AND vin_presence.txid = vout_addr.txid
-		WHERE vin_presence.address IS NULL OR t.type = 0
-		ON CONFLICT (address, txid, direction) DO NOTHING`, ELAAssetID)
-	if err != nil {
-		slog.Warn("address_tx backfill: received rows failed (non-fatal)", "error", err)
+	const chunkSize int64 = 50000
+
+	for chunkStart := int64(0); chunkStart <= maxHeight; chunkStart += chunkSize {
+		if ctx.Err() != nil {
+			slog.Info("address_tx backfill: context cancelled")
+			return
+		}
+		chunkEnd := chunkStart + chunkSize - 1
+		if chunkEnd > maxHeight {
+			chunkEnd = maxHeight
+		}
+
+		chunkTimer := time.Now()
+
+		_, err := s.db.Syncer.Exec(ctx, `
+			INSERT INTO address_transactions (address, txid, height, direction, value_sela, fee_sela, timestamp, tx_type)
+			SELECT
+				vin_addr.address,
+				vin_addr.txid,
+				t.block_height,
+				'sent',
+				GREATEST(vin_addr.input_total - COALESCE(change.change_total, 0), 0),
+				t.fee_sela,
+				t.timestamp,
+				t.type
+			FROM (
+				SELECT vi.address, vi.txid, SUM(vi.value_sela) AS input_total
+				FROM tx_vins vi
+				JOIN tx_vouts prev ON prev.txid = vi.prev_txid AND prev.n = vi.prev_vout
+				JOIN transactions tx ON tx.txid = vi.txid
+				WHERE vi.address != '' AND (prev.asset_id = '' OR prev.asset_id = $1)
+				  AND tx.block_height >= $2 AND tx.block_height <= $3
+				GROUP BY vi.address, vi.txid
+			) vin_addr
+			JOIN transactions t ON t.txid = vin_addr.txid AND t.type != 0
+			LEFT JOIN (
+				SELECT address, txid, SUM(value_sela) AS change_total
+				FROM tx_vouts
+				WHERE address != '' AND (asset_id = '' OR asset_id = $1)
+				GROUP BY address, txid
+			) change ON change.address = vin_addr.address AND change.txid = vin_addr.txid
+			ON CONFLICT (address, txid, direction) DO NOTHING`, ELAAssetID, chunkStart, chunkEnd)
+		if err != nil {
+			slog.Warn("address_tx backfill: sent rows failed for chunk", "from", chunkStart, "to", chunkEnd, "error", err)
+		}
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		_, err = s.db.Syncer.Exec(ctx, `
+			INSERT INTO address_transactions (address, txid, height, direction, value_sela, fee_sela, timestamp, tx_type)
+			SELECT
+				vout_addr.address,
+				vout_addr.txid,
+				t.block_height,
+				'received',
+				vout_addr.output_total,
+				0,
+				t.timestamp,
+				t.type
+			FROM (
+				SELECT vo.address, vo.txid, SUM(vo.value_sela) AS output_total
+				FROM tx_vouts vo
+				JOIN transactions tx ON tx.txid = vo.txid
+				WHERE vo.address != '' AND (vo.asset_id = '' OR vo.asset_id = $1)
+				  AND tx.block_height >= $2 AND tx.block_height <= $3
+				GROUP BY vo.address, vo.txid
+			) vout_addr
+			JOIN transactions t ON t.txid = vout_addr.txid
+			LEFT JOIN (
+				SELECT DISTINCT address, txid FROM tx_vins WHERE address != ''
+			) vin_presence ON vin_presence.address = vout_addr.address AND vin_presence.txid = vout_addr.txid
+			WHERE vin_presence.address IS NULL OR t.type = 0
+			ON CONFLICT (address, txid, direction) DO NOTHING`, ELAAssetID, chunkStart, chunkEnd)
+		if err != nil {
+			slog.Warn("address_tx backfill: received rows failed for chunk", "from", chunkStart, "to", chunkEnd, "error", err)
+		}
+
+		slog.Info("address_tx backfill: chunk done",
+			"from", chunkStart, "to", chunkEnd,
+			"chunk_elapsed", time.Since(chunkTimer).Round(time.Second),
+			"total_elapsed", time.Since(start).Round(time.Second),
+		)
 	}
+
 	slog.Info("address_tx backfill: complete", "total_elapsed", time.Since(start).Round(time.Second))
+	s.addrTxDone.Store(true)
 }
 
 // governanceBackfill re-processes governance transaction types from committed
 // transaction data. Since initial sync only inserts core tables (blocks, txs,
 // vins, vouts), this pass populates producers, CR members, votes, proposals, etc.
+//
+// Accuracy: each governance tx is committed in its own DB transaction so a
+// failure never corrupts other rows. Vin/vout data is prefetched in bulk to
+// eliminate per-tx queries (N+1 problem).
 func (s *Syncer) governanceBackfill(ctx context.Context) error {
 	start := time.Now()
 
-	// The votes table is retained for historical audit only.
-	// BPoS staking display uses bpos_stakes (populated from RPC).
-
-	// Find all governance-relevant transactions
 	govTypes := []int{
 		TxRegisterProducer, TxUpdateProducer, TxCancelProducer, TxActivateProducer,
 		TxReturnDepositCoin,
@@ -470,6 +528,16 @@ func (s *Syncer) governanceBackfill(ctx context.Context) error {
 		TxSideChainPow, TxReturnSideChainDepositCoin,
 	}
 
+	// Collect all governance txids first
+	type govTxMeta struct {
+		txid           string
+		blockHeight    int64
+		timestamp      int64
+		txType         int
+		payloadVersion int
+		payloadJSON    string
+	}
+
 	rows, err := s.db.Syncer.Query(ctx, `
 		SELECT txid, block_height, type, payload_version, payload_json, timestamp
 		FROM transactions
@@ -478,68 +546,120 @@ func (s *Syncer) governanceBackfill(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("query governance txs: %w", err)
 	}
-	defer rows.Close()
+
+	var govTxs []govTxMeta
+	txidSet := make(map[string]struct{})
+	vinNeededSet := make(map[string]struct{})
+
+	for rows.Next() {
+		var m govTxMeta
+		if err := rows.Scan(&m.txid, &m.blockHeight, &m.txType, &m.payloadVersion, &m.payloadJSON, &m.timestamp); err != nil {
+			continue
+		}
+		govTxs = append(govTxs, m)
+		txidSet[m.txid] = struct{}{}
+		if m.txType == TxVoting || m.txType == TxReturnVotes ||
+			m.txType == TxExchangeVotes || m.txType == TxVotesRealWithdraw {
+			vinNeededSet[m.txid] = struct{}{}
+		}
+	}
+	rows.Close()
+
+	if len(govTxs) == 0 {
+		slog.Info("governance backfill: no governance transactions found")
+		s.govBackfillDone.Store(true)
+		return nil
+	}
+
+	slog.Info("governance backfill: prefetching vin/vout data", "govTxCount", len(govTxs))
+
+	// Prefetch ALL vins for txids that need them
+	vinMap := make(map[string][]node.VInInfo)
+	if len(vinNeededSet) > 0 {
+		vinTxids := make([]string, 0, len(vinNeededSet))
+		for txid := range vinNeededSet {
+			vinTxids = append(vinTxids, txid)
+		}
+		vinRows, vinErr := s.db.Syncer.Query(ctx,
+			"SELECT txid, prev_txid, prev_vout FROM tx_vins WHERE txid = ANY($1) ORDER BY txid, n", vinTxids)
+		if vinErr == nil {
+			for vinRows.Next() {
+				var txid, prevTx string
+				var prevN int
+				if vinRows.Scan(&txid, &prevTx, &prevN) == nil {
+					vinMap[txid] = append(vinMap[txid], node.VInInfo{TxID: prevTx, VOut: prevN})
+				}
+			}
+			vinRows.Close()
+		}
+	}
+
+	// Prefetch ALL vouts for all governance txids
+	type voutData struct {
+		N             int
+		Address       string
+		Value         string
+		AssetID       string
+		OutputType    int
+		OutputPayload *string
+	}
+	voutMap := make(map[string][]voutData)
+	allTxids := make([]string, 0, len(txidSet))
+	for txid := range txidSet {
+		allTxids = append(allTxids, txid)
+	}
+	voutRows, voutErr := s.db.Syncer.Query(ctx,
+		"SELECT txid, n, address, value_text, asset_id, output_type, output_payload FROM tx_vouts WHERE txid = ANY($1) ORDER BY txid, n", allTxids)
+	if voutErr == nil {
+		for voutRows.Next() {
+			var txid string
+			var vd voutData
+			if voutRows.Scan(&txid, &vd.N, &vd.Address, &vd.Value, &vd.AssetID, &vd.OutputType, &vd.OutputPayload) == nil {
+				voutMap[txid] = append(voutMap[txid], vd)
+			}
+		}
+		voutRows.Close()
+	}
+
+	slog.Info("governance backfill: prefetch complete, processing transactions",
+		"vins_cached", len(vinMap), "vouts_cached", len(voutMap))
 
 	var count int64
-	for rows.Next() {
-		var txid, payloadJSON string
-		var blockHeight, timestamp int64
-		var txType, payloadVersion int
-		if err := rows.Scan(&txid, &blockHeight, &txType, &payloadVersion, &payloadJSON, &timestamp); err != nil {
-			continue
+	for _, m := range govTxs {
+		if ctx.Err() != nil {
+			break
 		}
 
 		tx := &node.TransactionInfo{
-			TxID:           txid,
-			Type:           txType,
-			PayloadVersion: payloadVersion,
+			TxID:           m.txid,
+			Type:           m.txType,
+			PayloadVersion: m.payloadVersion,
 		}
-		if payloadJSON != "" {
-			tx.Payload = []byte(payloadJSON)
-		}
-
-		// Load vins for voter address resolution and vote deactivation.
-		// TxVoting needs first vin for voter address; TxReturnVotes, TxExchangeVotes,
-		// and TxVotesRealWithdraw need ALL vins to deactivate consumed vote UTXOs.
-		needsVins := txType == TxVoting || txType == TxReturnVotes ||
-			txType == TxExchangeVotes || txType == TxVotesRealWithdraw
-		if needsVins {
-			vinRows, vinErr := s.db.Syncer.Query(ctx,
-				"SELECT prev_txid, prev_vout FROM tx_vins WHERE txid=$1 ORDER BY n", txid)
-			if vinErr == nil {
-				for vinRows.Next() {
-					var prevTx string
-					var prevN int
-					vinRows.Scan(&prevTx, &prevN)
-					tx.VIn = append(tx.VIn, node.VInInfo{TxID: prevTx, VOut: prevN})
-				}
-				vinRows.Close()
-			}
+		if m.payloadJSON != "" {
+			tx.Payload = []byte(m.payloadJSON)
 		}
 
-		// Load vouts for output payload processing (votes from OTVote outputs)
-		voutRows, voutErr := s.db.Syncer.Query(ctx,
-			"SELECT n, address, value_text, asset_id, output_type, output_payload FROM tx_vouts WHERE txid=$1 ORDER BY n", txid)
-		if voutErr == nil {
-			for voutRows.Next() {
-				var vi node.VOutInfo
-				var opStr *string
-				if err := voutRows.Scan(&vi.N, &vi.Address, &vi.Value, &vi.AssetID, &vi.Type, &opStr); err == nil {
-					if opStr != nil && *opStr != "" && *opStr != "{}" {
-						vi.Payload = json.RawMessage(*opStr)
-					}
-					tx.VOut = append(tx.VOut, vi)
-				}
+		if vins, ok := vinMap[m.txid]; ok {
+			tx.VIn = vins
+		}
+
+		for _, vd := range voutMap[m.txid] {
+			vi := node.VOutInfo{
+				N: vd.N, Address: vd.Address, Value: vd.Value,
+				AssetID: vd.AssetID, Type: vd.OutputType,
 			}
-			voutRows.Close()
+			if vd.OutputPayload != nil && *vd.OutputPayload != "" && *vd.OutputPayload != "{}" {
+				vi.Payload = json.RawMessage(*vd.OutputPayload)
+			}
+			tx.VOut = append(tx.VOut, vi)
 		}
 
 		pgxTx, err := s.db.Syncer.Begin(ctx)
 		if err != nil {
 			continue
 		}
-		s.processor.txProc.processGovernanceTx(ctx, pgxTx, tx, blockHeight, timestamp)
-		s.processor.txProc.processOutputPayloads(ctx, pgxTx, tx, blockHeight)
+		s.processor.txProc.processGovernanceTx(ctx, pgxTx, tx, m.blockHeight, m.timestamp)
+		s.processor.txProc.processOutputPayloads(ctx, pgxTx, tx, m.blockHeight)
 		if err := pgxTx.Commit(ctx); err != nil {
 			pgxTx.Rollback(ctx)
 			continue
@@ -552,6 +672,7 @@ func (s *Syncer) governanceBackfill(ctx context.Context) error {
 	}
 
 	slog.Info("governance backfill complete", "transactions", count, "elapsed", time.Since(start).Round(time.Second))
+	s.govBackfillDone.Store(true)
 	return nil
 }
 
@@ -968,3 +1089,11 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 func (s *Syncer) LastHeight() int64  { return s.lastHeight.Load() }
 func (s *Syncer) ChainTip() int64   { return s.chainTip.Load() }
 func (s *Syncer) IsLive() bool      { return s.isLive.Load() }
+
+func (s *Syncer) BackfillStatus() map[string]bool {
+	return map[string]bool{
+		"postSync":            s.postSyncDone.Load(),
+		"governance":          s.govBackfillDone.Load(),
+		"addressTransactions": s.addrTxDone.Load(),
+	}
+}

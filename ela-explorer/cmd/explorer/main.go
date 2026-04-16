@@ -131,6 +131,7 @@ func main() {
 
 	// Start aggregator (producer votes, CR members, daily stats, chain stats)
 	agg := aggregator.New(database, nodeClient, wsHub)
+	apiServer.AttachAggregator(agg)
 	go agg.Run(ctx)
 
 	slog.Info("ela-explorer ready", "listen", cfg.ListenAddr)
@@ -161,7 +162,7 @@ func main() {
 }
 
 // selfTest runs once at startup to catch common misconfigurations early.
-func selfTest(ctx context.Context, database *db.Database, listenAddr string) {
+func selfTest(ctx context.Context, database *db.DB, listenAddr string) {
 	var failures int
 
 	// 1. Verify sync_state.last_height <= MAX(height) in blocks table

@@ -4,7 +4,7 @@ import type {
   AddressInfo, AddressStaking, RichAddress, Producer,
   ProducerDetail, ProducerStaker, CRMember, CRProposal, CRProposalDetail,
   BlockchainStats, Widgets, HashrateData, MempoolInfo, ChartDataPoint, SearchResult,
-  TopStaker, StakingSummary, ELAPrice, SupplyData,
+  TopStaker, StakingSummary, ELAPrice, SupplyData, SyncStatusDetail,
   BalanceHistoryPoint, VoteHistoryEntry, GovernanceActivity,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
@@ -186,6 +186,13 @@ export const blockchainApi = {
 
   getMempool: async () => {
     return unwrap<MempoolInfo>(await api.get('/mempool'));
+  },
+
+  // ── Sync Status ─────────────────────────────────────────
+
+  getSyncStatus: async (): Promise<SyncStatusDetail> => {
+    const res = await api.get<SyncStatusDetail>('/sync-status');
+    return res.data;
   },
 
   // ── Charts ──────────────────────────────────────────────

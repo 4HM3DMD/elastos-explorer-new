@@ -131,7 +131,9 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.db.API.Query(r.Context(), `
-		SELECT et.candidate_cid, et.nickname, et.final_votes_sela, et.voter_count,
+		SELECT et.candidate_cid,
+			COALESCE(NULLIF(et.nickname, ''), cm.nickname, '') AS nickname,
+			et.final_votes_sela, et.voter_count,
 			et.rank, et.elected, et.voting_start_height, et.voting_end_height, et.computed_at,
 			COALESCE(cm.did, '') AS did
 		FROM cr_election_tallies et

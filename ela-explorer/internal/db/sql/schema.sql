@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS tx_vouts (
 CREATE INDEX IF NOT EXISTS idx_vouts_address ON tx_vouts (address);
 CREATE INDEX IF NOT EXISTS idx_vouts_unspent ON tx_vouts (address) WHERE spent_txid IS NULL;
 CREATE INDEX IF NOT EXISTS idx_vouts_type ON tx_vouts (output_type) WHERE output_type > 0;
+CREATE INDEX IF NOT EXISTS idx_vouts_asset ON tx_vouts (asset_id) WHERE asset_id != '' AND asset_id != 'a3d0eaa466df74983b5d7c543de6904f4c9418ead5ffd6d25814234a96db37b0';
 
 CREATE TABLE IF NOT EXISTS tx_attributes (
     txid            CHAR(64)    NOT NULL REFERENCES transactions(txid) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,

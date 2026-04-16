@@ -475,6 +475,17 @@ export interface SyncStatus {
   gap: number;
 }
 
+export interface SyncStatusDetail {
+  phase: 'syncing' | 'backfilling' | 'ready';
+  blockSync: {
+    currentHeight: number;
+    chainTip: number;
+    progress: number;
+    isLive: boolean;
+  };
+  backfills: Record<string, boolean>;
+}
+
 export interface SupplyData {
   maxSupply: string;
   totalSupply: string;

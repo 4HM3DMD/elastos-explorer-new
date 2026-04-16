@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	gosync "sync"
+	"sync/atomic"
 	"time"
 
 	"ela-explorer/internal/db"
@@ -37,33 +39,43 @@ type Aggregator struct {
 	db   *db.DB
 	node *node.Client
 	hub  *ws.Hub
+
+	dailyStatsDone atomic.Bool
+	earlyVotesDone atomic.Bool
+	loopsDone      atomic.Int32 // counts distinct loops that completed at least once
 }
 
 func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub) *Aggregator {
 	return &Aggregator{db: database, node: nodeClient, hub: hub}
 }
 
+const requiredLoopsForReady = 5
+
 func (a *Aggregator) Run(ctx context.Context) {
 	go a.backfillDailyStats(ctx)
 	go a.backfillEarlyVotes(ctx)
 
-	go a.runLoop(ctx, "producers", 60*time.Second, a.refreshProducers)
-	go a.runLoop(ctx, "bpos_stakes", 60*time.Second, a.refreshBPoSStakes)
-	go a.runLoop(ctx, "bpos_rewards", 120*time.Second, a.refreshBPoSRewards)
-	go a.runLoop(ctx, "cr_members", 120*time.Second, a.refreshCRMembers)
-	go a.runLoop(ctx, "cr_elections", 60*time.Second, a.refreshElectionTallies)
-	go a.runLoop(ctx, "cr_proposals", 120*time.Second, a.refreshProposals)
-	go a.runLoop(ctx, "proposal_drafts", 60*time.Second, a.refreshProposalDraftData)
-	go a.runLoop(ctx, "review_comments", 2*time.Minute, a.backfillReviewComments)
-	go a.runLoop(ctx, "daily_stats", 5*time.Minute, a.refreshDailyStats)
-	go a.runLoop(ctx, "chain_stats", 30*time.Second, a.refreshChainStats)
+	go a.runLoop(ctx, "producers", 60*time.Second, a.refreshProducers, true)
+	go a.runLoop(ctx, "bpos_stakes", 60*time.Second, a.refreshBPoSStakes, false)
+	go a.runLoop(ctx, "bpos_rewards", 120*time.Second, a.refreshBPoSRewards, false)
+	go a.runLoop(ctx, "cr_members", 120*time.Second, a.refreshCRMembers, true)
+	go a.runLoop(ctx, "cr_elections", 60*time.Second, a.refreshElectionTallies, true)
+	go a.runLoop(ctx, "cr_proposals", 120*time.Second, a.refreshProposals, true)
+	go a.runLoop(ctx, "proposal_drafts", 60*time.Second, a.refreshProposalDraftData, false)
+	go a.runLoop(ctx, "review_comments", 2*time.Minute, a.backfillReviewComments, false)
+	go a.runLoop(ctx, "daily_stats", 5*time.Minute, a.refreshDailyStats, false)
+	go a.runLoop(ctx, "chain_stats", 30*time.Second, a.refreshChainStats, true)
 
 	<-ctx.Done()
 }
 
-func (a *Aggregator) runLoop(ctx context.Context, name string, interval time.Duration, fn func(context.Context) error) {
+func (a *Aggregator) runLoop(ctx context.Context, name string, interval time.Duration, fn func(context.Context) error, critical bool) {
+	counted := false
 	if err := fn(ctx); err != nil {
 		slog.Warn("aggregator initial run failed", "name", name, "error", err)
+	} else if critical && !counted {
+		counted = true
+		a.loopsDone.Add(1)
 	}
 
 	ticker := time.NewTicker(interval)
@@ -76,8 +88,19 @@ func (a *Aggregator) runLoop(ctx context.Context, name string, interval time.Dur
 		case <-ticker.C:
 			if err := fn(ctx); err != nil {
 				slog.Warn("aggregator run failed", "name", name, "error", err)
+			} else if critical && !counted {
+				counted = true
+				a.loopsDone.Add(1)
 			}
 		}
+	}
+}
+
+func (a *Aggregator) BackfillStatus() map[string]bool {
+	return map[string]bool{
+		"dailyStats":          a.dailyStatsDone.Load(),
+		"earlyVotes":          a.earlyVotesDone.Load(),
+		"aggregatorFirstCycle": a.loopsDone.Load() >= int32(requiredLoopsForReady),
 	}
 }
 
@@ -383,78 +406,144 @@ func (a *Aggregator) backfillEarlyVotes(ctx context.Context) {
 	// that includes carry-over votes from previous terms.
 	_, _ = a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies`)
 	slog.Info("backfillEarlyVotes: cleared all tallies for full recompute")
+	a.earlyVotesDone.Store(true)
+}
+
+type voteRow struct {
+	txid, address, candidate string
+	voutN                    int
+	amountSela               int64
+	stakeHeight              int64
 }
 
 func (a *Aggregator) scanBlockRangeForCRCVotes(ctx context.Context, startHeight, endHeight int64, label string) {
-	slog.Info("backfillEarlyVotes: starting scan", "range", label, "from", startHeight, "to", endHeight)
+	slog.Info("backfillEarlyVotes: starting parallel scan", "range", label, "from", startHeight, "to", endHeight)
 
-	inserted := 0
-	for height := startHeight; height <= endHeight; height++ {
-		if ctx.Err() != nil {
-			return
-		}
+	const workers = 8
+	const batchInsertSize = 500
 
-		block, err := a.node.GetBlockByHeight(ctx, height)
-		if err != nil {
-			slog.Warn("backfillEarlyVotes: getblock failed", "height", height, "error", err)
-			time.Sleep(time.Second)
-			height-- // retry
-			continue
-		}
+	heights := make(chan int64, workers*2)
+	results := make(chan []voteRow, workers*2)
 
-		for _, tx := range block.Tx {
-			for _, vout := range tx.VOut {
-				if vout.Type != 1 { // OTVote
-					continue
+	var wg gosync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for height := range heights {
+				if ctx.Err() != nil {
+					return
 				}
-				if vout.Payload == nil || len(vout.Payload) == 0 {
-					continue
-				}
-
-				var voteOutput node.VoteOutputInfo
-				if err := json.Unmarshal(vout.Payload, &voteOutput); err != nil {
-					continue
-				}
-
-				outputValue := parseELAToSela(vout.Value)
-
-				for _, content := range voteOutput.Contents {
-					if content.VoteType != 1 { // VoteCRC only
-						continue
+				var block *node.BlockInfo
+				var err error
+				for attempt := 0; attempt < 3; attempt++ {
+					block, err = a.node.GetBlockByHeight(ctx, height)
+					if err == nil {
+						break
 					}
-					allCands := content.AllCandidates()
-					candidateCount := int64(len(allCands))
-					if candidateCount == 0 {
-						continue
-					}
-					for _, cv := range allCands {
-						var amountSela int64
-						if voteOutput.Version == 0 {
-							amountSela = outputValue / candidateCount
-						} else {
-							amountSela = parseELAToSela(cv.Votes)
+					time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+				}
+				if err != nil {
+					slog.Warn("backfillEarlyVotes: getblock failed after retries", "height", height, "error", err)
+					continue
+				}
+
+				var votes []voteRow
+				for _, tx := range block.Tx {
+					for _, vout := range tx.VOut {
+						if vout.Type != 1 || vout.Payload == nil || len(vout.Payload) == 0 {
+							continue
 						}
-
-						if _, err := a.db.Syncer.Exec(ctx, `
-							INSERT INTO votes (txid, vout_n, address, producer_pubkey, candidate, vote_type, amount_sela, lock_time, stake_height, expiry_height, staking_rights, is_active)
-							VALUES ($1, $2, $3, $4, $5, 1, $6, 0, $7, 0, 0, TRUE)
-							ON CONFLICT (txid, vout_n, candidate, vote_type) DO NOTHING`,
-							tx.TxID, vout.N, vout.Address, cv.Candidate, cv.Candidate,
-							amountSela, height,
-						); err != nil {
-							slog.Warn("backfillEarlyVotes: insert failed", "error", err)
-						} else {
-							inserted++
+						var voteOutput node.VoteOutputInfo
+						if err := json.Unmarshal(vout.Payload, &voteOutput); err != nil {
+							continue
+						}
+						outputValue := parseELAToSela(vout.Value)
+						for _, content := range voteOutput.Contents {
+							if content.VoteType != 1 {
+								continue
+							}
+							allCands := content.AllCandidates()
+							candidateCount := int64(len(allCands))
+							if candidateCount == 0 {
+								continue
+							}
+							for _, cv := range allCands {
+								var amountSela int64
+								if voteOutput.Version == 0 {
+									amountSela = outputValue / candidateCount
+								} else {
+									amountSela = parseELAToSela(cv.Votes)
+								}
+								votes = append(votes, voteRow{
+									txid: tx.TxID, voutN: vout.N, address: vout.Address,
+									candidate: cv.Candidate, amountSela: amountSela, stakeHeight: height,
+								})
+							}
 						}
 					}
+				}
+				if len(votes) > 0 {
+					results <- votes
 				}
 			}
-		}
+		}()
+	}
 
-		if height%10000 == 0 {
-			slog.Info("backfillEarlyVotes: progress", "range", label, "height", height, "inserted", inserted)
+	go func() {
+		for h := startHeight; h <= endHeight; h++ {
+			if ctx.Err() != nil {
+				break
+			}
+			heights <- h
+		}
+		close(heights)
+		wg.Wait()
+		close(results)
+	}()
+
+	var inserted int64
+	var batch []voteRow
+	flushBatch := func() {
+		if len(batch) == 0 {
+			return
+		}
+		pgxTx, err := a.db.Syncer.Begin(ctx)
+		if err != nil {
+			slog.Warn("backfillEarlyVotes: begin batch tx failed", "error", err)
+			batch = batch[:0]
+			return
+		}
+		for _, v := range batch {
+			if _, err := pgxTx.Exec(ctx, `
+				INSERT INTO votes (txid, vout_n, address, producer_pubkey, candidate, vote_type, amount_sela, lock_time, stake_height, expiry_height, staking_rights, is_active)
+				VALUES ($1, $2, $3, $4, $5, 1, $6, 0, $7, 0, 0, TRUE)
+				ON CONFLICT (txid, vout_n, candidate, vote_type) DO NOTHING`,
+				v.txid, v.voutN, v.address, v.candidate, v.candidate,
+				v.amountSela, v.stakeHeight,
+			); err != nil {
+				slog.Warn("backfillEarlyVotes: insert failed", "error", err)
+			} else {
+				inserted++
+			}
+		}
+		if err := pgxTx.Commit(ctx); err != nil {
+			pgxTx.Rollback(ctx)
+			slog.Warn("backfillEarlyVotes: commit batch failed", "error", err)
+		}
+		batch = batch[:0]
+	}
+
+	for votes := range results {
+		batch = append(batch, votes...)
+		if len(batch) >= batchInsertSize {
+			flushBatch()
+		}
+		if inserted > 0 && inserted%5000 == 0 {
+			slog.Info("backfillEarlyVotes: progress", "range", label, "inserted", inserted)
 		}
 	}
+	flushBatch()
 
 	slog.Info("backfillEarlyVotes: scan complete", "range", label, "inserted", inserted)
 }
@@ -1147,7 +1236,8 @@ func (a *Aggregator) refreshBPoSRewards(ctx context.Context) error {
 }
 
 // backfillDailyStats populates historical daily_stats rows for all calendar days
-// with indexed blocks. Runs once at startup and skips days already present.
+// with indexed blocks. Uses a single bulk-aggregate query instead of per-day
+// queries to avoid N+1 performance issues.
 func (a *Aggregator) backfillDailyStats(ctx context.Context) {
 	var existingRows int64
 	if err := a.db.Syncer.QueryRow(ctx, "SELECT COUNT(*) FROM daily_stats").Scan(&existingRows); err != nil {
@@ -1168,62 +1258,92 @@ func (a *Aggregator) backfillDailyStats(ctx context.Context) {
 
 	if int64(totalDays)-existingRows < 2 {
 		slog.Info("backfillDailyStats: already up-to-date", "rows", existingRows, "totalDays", totalDays)
+		a.dailyStatsDone.Store(true)
 		return
 	}
 
-	slog.Info("backfillDailyStats: starting", "from", startDay.Format("2006-01-02"), "to", endDay.Format("2006-01-02"), "existing", existingRows)
+	slog.Info("backfillDailyStats: starting bulk aggregate", "from", startDay.Format("2006-01-02"), "to", endDay.Format("2006-01-02"), "existing", existingRows)
+	start := time.Now()
+
+	tag, err := a.db.Syncer.Exec(ctx, `
+		INSERT INTO daily_stats (date, block_count, tx_count, total_volume_sela, total_fees_sela, active_addresses, avg_block_size, avg_block_time)
+		SELECT
+			d.date,
+			COALESCE(b.block_count, 0),
+			COALESCE(b.tx_count, 0),
+			COALESCE(b.total_volume, 0),
+			COALESCE(b.total_fees, 0),
+			0,
+			COALESCE(b.avg_size, 0),
+			COALESCE(b.avg_time, 0)
+		FROM generate_series($1::date, $2::date, '1 day'::interval) AS d(date)
+		JOIN LATERAL (
+			SELECT
+				COUNT(*) AS block_count,
+				COALESCE(SUM(tx_count), 0) AS tx_count,
+				COALESCE(SUM(total_value_sela), 0) AS total_volume,
+				COALESCE(SUM(total_fees_sela), 0) AS total_fees,
+				COALESCE(AVG(size), 0)::BIGINT AS avg_size,
+				CASE WHEN COUNT(*) > 1
+					THEN (MAX(timestamp) - MIN(timestamp))::REAL / NULLIF(COUNT(*) - 1, 0)
+					ELSE 0
+				END AS avg_time
+			FROM blocks
+			WHERE timestamp >= EXTRACT(EPOCH FROM d.date)::BIGINT
+			  AND timestamp < EXTRACT(EPOCH FROM d.date + '1 day'::interval)::BIGINT
+		) b ON b.block_count > 0
+		ON CONFLICT (date) DO NOTHING`,
+		startDay.Format("2006-01-02"), endDay.Format("2006-01-02"),
+	)
+	if err != nil {
+		slog.Warn("backfillDailyStats: bulk insert failed, falling back to per-day", "error", err)
+		a.backfillDailyStatsFallback(ctx, startDay, endDay)
+		return
+	}
+
+	filled := tag.RowsAffected()
+	slog.Info("backfillDailyStats: complete", "filled", filled, "elapsed", time.Since(start).Round(time.Second))
+	a.dailyStatsDone.Store(true)
+}
+
+// backfillDailyStatsFallback is the original per-day loop, used only if the
+// bulk aggregate fails (e.g. generate_series not available on older PG).
+func (a *Aggregator) backfillDailyStatsFallback(ctx context.Context, startDay, endDay time.Time) {
 	start := time.Now()
 	filled := 0
 
 	for d := startDay; !d.After(endDay); d = d.AddDate(0, 0, 1) {
 		if ctx.Err() != nil {
-			slog.Info("backfillDailyStats: cancelled", "filled", filled)
 			return
 		}
-
 		dayStr := d.Format("2006-01-02")
 		dayStart := d.Unix()
 		dayEnd := dayStart + 86400
 
-		// Skip if row already exists
 		var exists bool
 		if err := a.db.Syncer.QueryRow(ctx,
 			"SELECT EXISTS(SELECT 1 FROM daily_stats WHERE date=$1)", dayStr).Scan(&exists); err == nil && exists {
 			continue
 		}
 
-		var blockCount, txCount, totalVolume, totalFees, activeAddresses int64
+		var blockCount, txCount, totalVolume, totalFees int64
 		var avgBlockSize int64
 		var avgBlockTime float64
 
 		_ = a.db.Syncer.QueryRow(ctx,
-			"SELECT COUNT(*) FROM blocks WHERE timestamp >= $1 AND timestamp < $2",
-			dayStart, dayEnd).Scan(&blockCount)
-
+			"SELECT COUNT(*) FROM blocks WHERE timestamp >= $1 AND timestamp < $2", dayStart, dayEnd).Scan(&blockCount)
 		if blockCount == 0 {
 			continue
 		}
 
 		_ = a.db.Syncer.QueryRow(ctx,
-			"SELECT COUNT(*) FROM transactions WHERE timestamp >= $1 AND timestamp < $2",
-			dayStart, dayEnd).Scan(&txCount)
-
+			"SELECT COUNT(*) FROM transactions WHERE timestamp >= $1 AND timestamp < $2", dayStart, dayEnd).Scan(&txCount)
 		_ = a.db.Syncer.QueryRow(ctx,
 			"SELECT COALESCE(SUM(total_value_sela),0), COALESCE(SUM(total_fees_sela),0) FROM blocks WHERE timestamp >= $1 AND timestamp < $2",
 			dayStart, dayEnd).Scan(&totalVolume, &totalFees)
-
-		_ = a.db.Syncer.QueryRow(ctx, `
-			SELECT COUNT(DISTINCT address) FROM (
-				SELECT address FROM tx_vouts WHERE txid IN (SELECT txid FROM transactions WHERE timestamp >= $1 AND timestamp < $2)
-				UNION
-				SELECT address FROM tx_vins WHERE txid IN (SELECT txid FROM transactions WHERE timestamp >= $1 AND timestamp < $2)
-			) combined WHERE address != ''`,
-			dayStart, dayEnd).Scan(&activeAddresses)
-
 		_ = a.db.Syncer.QueryRow(ctx,
 			"SELECT COALESCE(AVG(size),0)::BIGINT FROM blocks WHERE timestamp >= $1 AND timestamp < $2",
 			dayStart, dayEnd).Scan(&avgBlockSize)
-
 		if blockCount > 1 {
 			_ = a.db.Syncer.QueryRow(ctx,
 				`SELECT (MAX(timestamp)-MIN(timestamp))::REAL / NULLIF(COUNT(*)-1, 0)
@@ -1233,21 +1353,20 @@ func (a *Aggregator) backfillDailyStats(ctx context.Context) {
 
 		if _, err := a.db.Syncer.Exec(ctx, `
 			INSERT INTO daily_stats (date, block_count, tx_count, total_volume_sela, total_fees_sela, active_addresses, avg_block_size, avg_block_time)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			VALUES ($1, $2, $3, $4, $5, 0, $6, $7)
 			ON CONFLICT (date) DO NOTHING`,
-			dayStr, blockCount, txCount, totalVolume, totalFees, activeAddresses, avgBlockSize, avgBlockTime,
+			dayStr, blockCount, txCount, totalVolume, totalFees, avgBlockSize, avgBlockTime,
 		); err != nil {
-			slog.Warn("backfillDailyStats: insert failed", "date", dayStr, "error", err)
 			continue
 		}
 		filled++
-
 		if filled%100 == 0 {
-			slog.Info("backfillDailyStats: progress", "filled", filled, "current", dayStr)
+			slog.Info("backfillDailyStats fallback: progress", "filled", filled, "current", dayStr)
 		}
 	}
 
-	slog.Info("backfillDailyStats: complete", "filled", filled, "elapsed", time.Since(start).Round(time.Second))
+	slog.Info("backfillDailyStats fallback: complete", "filled", filled, "elapsed", time.Since(start).Round(time.Second))
+	a.dailyStatsDone.Store(true)
 }
 
 // tryParseELAToSela converts an ELA string like "1.50000000" to sela (int64)

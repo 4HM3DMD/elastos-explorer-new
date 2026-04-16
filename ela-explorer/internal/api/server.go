@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"ela-explorer/internal/aggregator"
 	"ela-explorer/internal/cache"
 	"ela-explorer/internal/db"
 	"ela-explorer/internal/metrics"
@@ -22,12 +23,13 @@ import (
 )
 
 type Server struct {
-	db     *db.DB
-	node   *node.Client
-	syncer *syncer.Syncer
-	wsHub  *ws.Hub
-	cache  *cache.TTLCache[string, any]
-	router chi.Router
+	db         *db.DB
+	node       *node.Client
+	syncer     *syncer.Syncer
+	aggregator *aggregator.Aggregator
+	wsHub      *ws.Hub
+	cache      *cache.TTLCache[string, any]
+	router     chi.Router
 }
 
 type ServerConfig struct {
@@ -100,6 +102,7 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/hashrate", s.getHashrate)
 		r.Get("/stakers", s.getTopStakers)
 		r.Get("/ela-price", s.getELAPrice)
+		r.Get("/sync-status", s.getSyncStatus)
 	})
 	r.Get("/health", s.healthCheck)
 
@@ -121,6 +124,10 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 
 func (s *Server) AttachWebSocket(hub *ws.Hub) {
 	s.wsHub = hub
+}
+
+func (s *Server) AttachAggregator(agg *aggregator.Aggregator) {
+	s.aggregator = agg
 }
 
 func (s *Server) Handler() http.Handler {
@@ -346,6 +353,62 @@ func bearerAuthMiddleware(token string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func (s *Server) getSyncStatus(w http.ResponseWriter, r *http.Request) {
+	lastSynced := s.syncer.LastHeight()
+	chainTip := s.syncer.ChainTip()
+	isLive := s.syncer.IsLive()
+
+	var progress float64
+	if chainTip > 0 {
+		progress = float64(lastSynced) / float64(chainTip) * 100
+		if progress > 100 {
+			progress = 100
+		}
+	}
+
+	syncerBackfills := s.syncer.BackfillStatus()
+
+	backfills := map[string]bool{
+		"postSync":            syncerBackfills["postSync"],
+		"governance":          syncerBackfills["governance"],
+		"addressTransactions": syncerBackfills["addressTransactions"],
+	}
+
+	if s.aggregator != nil {
+		for k, v := range s.aggregator.BackfillStatus() {
+			backfills[k] = v
+		}
+	}
+
+	allDone := true
+	for _, v := range backfills {
+		if !v {
+			allDone = false
+			break
+		}
+	}
+
+	blocksCaughtUp := chainTip > 0 && (chainTip-lastSynced) < 10
+
+	phase := "syncing"
+	if isLive && allDone {
+		phase = "ready"
+	} else if isLive || blocksCaughtUp {
+		phase = "backfilling"
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"phase": phase,
+		"blockSync": map[string]any{
+			"currentHeight": lastSynced,
+			"chainTip":      chainTip,
+			"progress":      progress,
+			"isLive":        isLive,
+		},
+		"backfills": backfills,
+	})
 }
 
 func isHex64(s string) bool {

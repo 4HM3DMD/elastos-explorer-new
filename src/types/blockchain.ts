@@ -346,7 +346,7 @@ export interface ProducerStaker {
 }
 
 // ============================================================
-// CR (Cyber Republic) Governance
+// Elastos DAO Governance
 // ============================================================
 
 export interface CRMember {
@@ -476,7 +476,7 @@ export interface SyncStatus {
 }
 
 export interface SyncStatusDetail {
-  phase: 'syncing' | 'backfilling' | 'ready';
+  phase: 'syncing' | 'backfilling' | 'ready' | 'node-syncing';
   blockSync: {
     currentHeight: number;
     chainTip: number;
@@ -484,6 +484,21 @@ export interface SyncStatusDetail {
     isLive: boolean;
   };
   backfills: Record<string, boolean>;
+  nodeHealth?: {
+    referenceHeight: number;
+    peerCount: number;
+    lastBlockAgeSec: number;
+    nodeBehind: boolean;
+    nodeGap: number;
+  };
+  validation?: {
+    lastCheckAt: string;
+    hashMismatch: boolean;
+    hashMismatchHeight: number;
+    missingBlocks: number;
+    negativeBalances: number;
+    chainStatsAccurate: boolean;
+  };
 }
 
 export interface SupplyData {
@@ -664,12 +679,12 @@ export const TX_TYPE_MAP: Record<string, TxTypeInfo> = {
   'Inactive Arbitrators':      { label: 'Network Enforcement',   description: 'Inactive validators penalized by the network',                  category: 'network',    color: 'text-red-500 dark:text-red-400',    icon: 'ShieldWarning' },
   'Next Turn DPoS Info':       { label: 'Validator Rotation',    description: 'Scheduled the next set of active BPoS validators',              category: 'network',    color: 'text-zinc-500 dark:text-zinc-400',  icon: 'ArrowsClockwise' },
   'Proposal Result':           { label: 'Proposal Outcome',      description: 'Final result of a governance proposal',                         category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'SealCheck' },
-  'Register CR':               { label: 'Council Registration',  description: 'Applied to join the Cyber Republic council',                    category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'IdentificationBadge' },
-  'Unregister CR':             { label: 'Council Resignation',   description: 'Left the Cyber Republic council',                               category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'UserMinus' },
+  'Register CR':               { label: 'Council Registration',  description: 'Applied to join the Elastos DAO council',                    category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'IdentificationBadge' },
+  'Unregister CR':             { label: 'Council Resignation',   description: 'Left the Elastos DAO council',                               category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'UserMinus' },
   'Update CR':                 { label: 'Council Update',        description: 'Updated council member information',                             category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Wrench' },
   'Return CR Deposit':         { label: 'Council Deposit Refund', description: 'Council deposit returned',                                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Coins' },
-  'CR Proposal':               { label: 'Governance Proposal',   description: 'Submitted a community governance proposal',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Scroll' },
-  'CR Proposal Review':        { label: 'Proposal Vote',         description: 'Council member voted on a proposal',                            category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Stamp' },
+  'CR Proposal':               { label: 'DAO Proposal',          description: 'Submitted a community governance proposal',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Scroll' },
+  'CR Proposal Review':        { label: 'DAO Proposal Review',   description: 'Council member voted on a proposal',                            category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Stamp' },
   'CR Proposal Tracking':      { label: 'Proposal Progress',     description: 'Reported progress on an approved proposal',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'ListChecks' },
   'CR Appropriation':          { label: 'Treasury Disbursement', description: 'Community treasury funds distributed',                           category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Bank' },
   'CR Proposal Withdraw':      { label: 'Proposal Fund Request', description: 'Requested funds from an approved proposal',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'HandCoins' },
@@ -683,9 +698,9 @@ export const TX_TYPE_MAP: Record<string, TxTypeInfo> = {
   'Staking Reward Withdraw':   { label: 'Reward Withdrawal',     description: 'Withdrew claimed staking rewards',                              category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'Wallet' },
   'Exchange Votes':            { label: 'Vote Conversion',       description: 'Converted voting tokens between formats',                       category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'ArrowsClockwise' },
   'BPoS Vote':                 { label: 'Staking Vote',          description: 'Voted for a validator by staking ELA',                          category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'CheckSquareOffset' },
-  'CR Election Vote':          { label: 'CR Election Vote',      description: 'Voted in a Cyber Republic council election',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'CheckSquareOffset' },
-  'CR Impeachment Vote':       { label: 'CR Impeachment Vote',   description: 'Voted to impeach a Cyber Republic council member',               category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'ShieldWarning' },
-  'CR Proposal Vote':          { label: 'CR Proposal Vote',      description: 'Voted on a Cyber Republic proposal',                             category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Stamp' },
+  'CR Election Vote':          { label: 'DAO Election Vote',    description: 'Voted in an Elastos DAO council election',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'CheckSquareOffset' },
+  'CR Impeachment Vote':       { label: 'Council Impeachment Vote', description: 'Voted to impeach an Elastos DAO council member',              category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'ShieldWarning' },
+  'CR Proposal Vote':          { label: 'DAO Proposal Vote',    description: 'Voted on an Elastos DAO proposal',                               category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Stamp' },
   'Delegate Vote':             { label: 'Delegate Vote',         description: 'Voted for a legacy DPoS delegate',                               category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'CheckSquareOffset' },
   'Multi Vote':                { label: 'Multi Vote',            description: 'Transaction containing multiple vote types',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'CheckSquareOffset' },
   'Return Votes':              { label: 'Unstake',               description: 'Removed a staking vote',                                        category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'ArrowBendUpLeft' },
@@ -702,9 +717,9 @@ export const TX_TYPE_COLORS: Record<string, string> = Object.fromEntries(
 
 export const VOTE_TYPE_NAMES: Record<number, string> = {
   0: 'BPoS Delegate (legacy)',
-  1: 'CR Council',
-  2: 'CR Proposal',
-  3: 'CR Impeachment',
+  1: 'DAO Council',
+  2: 'DAO Proposal',
+  3: 'Council Impeachment',
   4: 'BPoS Validator',
 };
 

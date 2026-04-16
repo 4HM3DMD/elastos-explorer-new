@@ -60,7 +60,7 @@ const CRCouncil = () => {
         }
       }
     } catch {
-      setError('Failed to fetch CR Council members');
+      setError('Failed to fetch Elastos DAO Council members');
     } finally {
       setLoading(false);
     }
@@ -110,7 +110,7 @@ const CRCouncil = () => {
 
   return (
     <div className="px-4 lg:px-6 py-6 space-y-6">
-      <SEO title="CR Council" description="Cyber Republic council members governing the Elastos network. View council terms, elected members, and voting data." path="/governance" />
+      <SEO title="Elastos DAO Council" description="Elastos DAO council members governing the Elastos network. View council terms, elected members, and voting data." path="/governance" />
       {/* Page header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -118,7 +118,7 @@ const CRCouncil = () => {
             <Users size={16} className="text-brand" />
           </div>
           <div>
-            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">CR Council</h1>
+            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">Elastos DAO Council</h1>
             <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">
               {isCurrentTerm ? members.length : historicalCandidates.length} {isCurrentTerm ? 'council members' : 'elected members'} &middot; {termLabel}
             </p>

@@ -298,12 +298,12 @@ const API_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/address/{address}/vote-history',
-        description: 'Paginated vote history for an address (BPoS staking and CR governance votes).',
+        description: 'Paginated vote history for an address (BPoS staking and DAO governance votes).',
         params: [
           { name: 'address', type: 'string', required: true, description: 'Elastos address' },
           { name: 'page', type: 'integer', required: false, description: 'Page number', default: '1' },
           { name: 'pageSize', type: 'integer', required: false, description: 'Items per page (max 100)', default: '20' },
-          { name: 'category', type: 'string', required: false, description: 'Filter: "staking" (BPoS types 0,4), "governance" (CR types 1,2,3), or omit for all' },
+          { name: 'category', type: 'string', required: false, description: 'Filter: "staking" (BPoS types 0,4), "governance" (DAO types 1,2,3), or omit for all' },
         ],
         response: `{
   "data": [
@@ -324,7 +324,7 @@ const API_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/address/{address}/governance',
-        description: 'Unified governance activity timeline for an address: CR election votes, proposal votes, and impeachment votes.',
+        description: 'Unified governance activity timeline for an address: DAO election votes, proposal votes, and impeachment votes.',
         params: [
           { name: 'address', type: 'string', required: true, description: 'Elastos address' },
           { name: 'page', type: 'integer', required: false, description: 'Page number', default: '1' },
@@ -458,13 +458,13 @@ const API_GROUPS: EndpointGroup[] = [
   },
   {
     id: 'governance',
-    label: 'Governance (CR)',
+    label: 'Governance (DAO)',
     icon: Landmark,
     endpoints: [
       {
         method: 'GET',
         path: '/cr/members',
-        description: 'Current Cyber Republic council members with their status and votes.',
+        description: 'Current Elastos DAO council members with their status and votes.',
         response: `{
   "data": [
     {
@@ -481,7 +481,7 @@ const API_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/cr/elections',
-        description: 'Summary of all CR election terms.',
+        description: 'Summary of all DAO election terms.',
         response: `[
   {
     "term": 3,
@@ -519,7 +519,7 @@ const API_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/cr/proposals',
-        description: 'Paginated list of CR proposals with optional status filter.',
+        description: 'Paginated list of DAO proposals with optional status filter.',
         params: [
           { name: 'page', type: 'integer', required: false, description: 'Page number', default: '1' },
           { name: 'pageSize', type: 'integer', required: false, description: 'Items per page', default: '20' },
@@ -562,7 +562,7 @@ const API_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/cr/proposal-image/{draftHash}/{filename}',
-        description: 'Serves embedded images from CR proposal draft ZIP files.',
+        description: 'Serves embedded images from DAO proposal draft ZIP files.',
         params: [
           { name: 'draftHash', type: 'string', required: true, description: 'Proposal draft hash' },
           { name: 'filename', type: 'string', required: true, description: 'Image filename within the ZIP' },

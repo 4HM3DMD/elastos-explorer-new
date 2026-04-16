@@ -348,7 +348,7 @@ const CRProposals = () => {
 
   return (
     <div className="px-4 lg:px-6 py-6 space-y-6">
-      <SEO title="CR Proposals" description="Community proposals for Elastos governance. Track proposal status, council votes, budgets, and implementation progress." path="/governance/proposals" />
+      <SEO title="DAO Proposals" description="Elastos DAO proposals for Elastos governance. Track proposal status, council votes, budgets, and implementation progress." path="/governance/proposals" />
       {/* Page header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -356,7 +356,7 @@ const CRProposals = () => {
             <FileText size={16} className="text-brand" />
           </div>
           <div>
-            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">CR Proposals</h1>
+            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">DAO Proposals</h1>
             <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">{totalItems.toLocaleString()} proposals indexed</p>
           </div>
         </div>

@@ -8,7 +8,7 @@ import { formatEla, fmtTime } from '../utils/format';
 import { cn } from '../lib/cn';
 
 const EVENT_CONFIG: Record<string, { label: string; style: string; Icon: typeof Vote }> = {
-  election_vote:     { label: 'CR Election Vote',   style: 'bg-violet-500/15 text-violet-400', Icon: Vote },
+  election_vote:     { label: 'DAO Election Vote',   style: 'bg-violet-500/15 text-violet-400', Icon: Vote },
   impeachment_vote:  { label: 'Impeachment Vote',   style: 'bg-red-500/15 text-red-400',       Icon: Scale },
   proposal_authored: { label: 'Proposal Authored',   style: 'bg-sky-500/15 text-sky-400',       Icon: FileText },
   proposal_reviewed: { label: 'Proposal Reviewed',   style: 'bg-amber-500/15 text-amber-400',   Icon: ThumbsUp },

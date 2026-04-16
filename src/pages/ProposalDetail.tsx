@@ -568,7 +568,7 @@ const ProposalDetail = () => {
     <div className="px-4 lg:px-6 py-6 space-y-6">
       <SEO
         title={proposal ? (proposal.title || `Proposal #${proposal.proposalNumber ?? ''}`) : 'Proposal Details'}
-        description={proposal ? `CR proposal on Elastos: ${proposal.title || 'Untitled'}. Status: ${proposal.status}. ${proposal.voteCount} support, ${proposal.rejectCount} reject.` : 'CR proposal details on the Elastos network.'}
+        description={proposal ? `DAO proposal on Elastos: ${proposal.title || 'Untitled'}. Status: ${proposal.status}. ${proposal.voteCount} support, ${proposal.rejectCount} reject.` : 'DAO proposal details on the Elastos network.'}
         path={`/governance/proposal/${hash}`}
       />
       {/* Page header card */}

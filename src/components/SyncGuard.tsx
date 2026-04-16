@@ -6,10 +6,10 @@ const POLL_INTERVAL_MS = 5000;
 
 const BACKFILL_LABELS: Record<string, string> = {
   postSync: 'Address balances & spent outputs',
-  governance: 'Governance data (producers, CR, votes)',
+  governance: 'Governance data (producers, DAO, votes)',
   addressTransactions: 'Address transaction history',
   dailyStats: 'Historical daily statistics',
-  earlyVotes: 'Early CR election votes',
+  earlyVotes: 'Early DAO election votes',
   aggregatorFirstCycle: 'Real-time data aggregation',
 };
 
@@ -20,16 +20,20 @@ interface SyncGuardProps {
 const SyncGuard = ({ children }: SyncGuardProps) => {
   const [status, setStatus] = useState<SyncStatusDetail | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const [error, setError] = useState(false);
+  const [nodeBannerDismissed, setNodeBannerDismissed] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
       const data = await blockchainApi.getSyncStatus();
       setStatus(data);
-      setError(false);
-      if (data.phase === 'ready') setDismissed(false);
+      setFetchError(false);
+      if (data.phase === 'ready') {
+        setDismissed(false);
+        setNodeBannerDismissed(false);
+      }
     } catch {
-      setError(true);
+      setFetchError(true);
     }
   }, []);
 
@@ -39,23 +43,98 @@ const SyncGuard = ({ children }: SyncGuardProps) => {
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  if (error || !status || status.phase === 'ready') {
+  if (!status && !fetchError) {
     return <>{children}</>;
   }
 
-  if (status.phase === 'syncing') {
+  if (status?.phase === 'syncing') {
     return <SyncingOverlay status={status} />;
   }
+
+  if (status?.phase === 'node-syncing') {
+    const gap = status.nodeHealth?.nodeGap ?? 0;
+    return (
+      <>
+        {children}
+        {!nodeBannerDismissed && (
+          <NodeSyncingBanner gap={gap} onDismiss={() => setNodeBannerDismissed(true)} />
+        )}
+      </>
+    );
+  }
+
+  const hasValidationWarning = status?.validation && (
+    status.validation.hashMismatch ||
+    status.validation.negativeBalances > 0 ||
+    status.validation.missingBlocks > 0
+  );
 
   return (
     <>
       {children}
-      {!dismissed && (
+      {fetchError && <StatusIndicator type="error" message="Unable to verify sync status" />}
+      {status?.phase === 'backfilling' && !dismissed && (
         <BackfillCard status={status} onDismiss={() => setDismissed(true)} />
+      )}
+      {status?.phase === 'ready' && status.nodeHealth?.nodeBehind && !nodeBannerDismissed && (
+        <NodeSyncingBanner
+          gap={status.nodeHealth.nodeGap}
+          onDismiss={() => setNodeBannerDismissed(true)}
+        />
+      )}
+      {status?.phase === 'ready' && hasValidationWarning && (
+        <StatusIndicator type="warning" message="Data integrity issue detected" />
       )}
     </>
   );
 };
+
+const StatusIndicator = ({ type, message }: { type: 'error' | 'warning'; message: string }) => {
+  const bgColor = type === 'error' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)';
+  const borderColor = type === 'error' ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.25)';
+  const dotColor = type === 'error' ? '#ef4444' : '#f59e0b';
+
+  return (
+    <div
+      className="fixed bottom-4 left-4 z-[9997] px-3 py-2 rounded-lg text-xs flex items-center gap-2"
+      style={{ background: bgColor, border: `1px solid ${borderColor}` }}
+    >
+      <span className="relative flex h-2 w-2 shrink-0">
+        <span
+          className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+          style={{ background: dotColor }}
+        />
+        <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: dotColor }} />
+      </span>
+      <span className="text-secondary">{message}</span>
+    </div>
+  );
+};
+
+const NodeSyncingBanner = ({ gap, onDismiss }: { gap: number; onDismiss: () => void }) => (
+  <div
+    className="fixed top-0 left-0 right-0 z-[9998] flex items-center justify-center gap-3 px-4 py-2"
+    style={{ background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.25)' }}
+  >
+    <span className="relative flex h-2 w-2 shrink-0">
+      <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: '#f59e0b' }} />
+      <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: '#f59e0b' }} />
+    </span>
+    <span className="text-xs text-secondary">
+      The blockchain node is catching up to the network. Data shown may be behind by{' '}
+      <span className="font-medium text-primary tabular-nums">{gap.toLocaleString()}</span> blocks.
+    </span>
+    <button
+      onClick={onDismiss}
+      className="text-muted hover:text-primary transition-colors p-0.5 ml-auto shrink-0"
+      aria-label="Dismiss"
+    >
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+        <path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    </button>
+  </div>
+);
 
 const SyncingOverlay = ({ status }: { status: SyncStatusDetail }) => {
   const { currentHeight, chainTip, progress } = status.blockSync;

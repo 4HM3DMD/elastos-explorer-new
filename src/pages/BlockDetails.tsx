@@ -207,7 +207,7 @@ const BlockDetails = () => {
               <div className="grid grid-cols-3 gap-3">
                 {block.rewardMiner && <RewardBox label="Miner" value={block.rewardMiner} />}
                 {block.rewardDpos && <RewardBox label="BPoS Stakers" value={block.rewardDpos} />}
-                {block.rewardCr && <RewardBox label="CR Fund" value={block.rewardCr} />}
+                {block.rewardCr && <RewardBox label="DAO Fund" value={block.rewardCr} />}
               </div>
             </>
           )}

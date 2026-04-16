@@ -35,9 +35,9 @@ function AddressBadge({ address, apiLabels }: { address: string; apiLabels?: Rec
 const VOTE_CARD_CONFIG: Record<string, { title: string; Icon: typeof Vote; iconClass: string; badgeClass: string }> = {
   bposVote:             { title: 'Staking Votes',        Icon: Vote,        iconClass: 'text-brand',  badgeClass: 'text-sky-400' },
   delegateVote:         { title: 'Delegate Votes',       Icon: Vote,        iconClass: 'text-brand',  badgeClass: 'text-sky-400' },
-  crcElectionVote:      { title: 'CR Election Votes',    Icon: Landmark,    iconClass: 'text-violet-400', badgeClass: 'text-violet-400' },
-  crcImpeachmentVote:   { title: 'CR Impeachment Votes', Icon: ShieldAlert, iconClass: 'text-red-400',    badgeClass: 'text-red-400' },
-  crcProposalVote:      { title: 'CR Proposal Votes',    Icon: Stamp,       iconClass: 'text-violet-400', badgeClass: 'text-violet-400' },
+  crcElectionVote:      { title: 'DAO Election Votes',    Icon: Landmark,    iconClass: 'text-violet-400', badgeClass: 'text-violet-400' },
+  crcImpeachmentVote:   { title: 'Council Impeachment Votes', Icon: ShieldAlert, iconClass: 'text-red-400',    badgeClass: 'text-red-400' },
+  crcProposalVote:      { title: 'DAO Proposal Votes',    Icon: Stamp,       iconClass: 'text-violet-400', badgeClass: 'text-violet-400' },
   multiVote:            { title: 'Multiple Vote Types',  Icon: Vote,        iconClass: 'text-brand',  badgeClass: 'text-violet-400' },
 };
 

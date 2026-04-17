@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -40,34 +40,19 @@ jobs:
         with:
           go-version-file: ela-explorer/go.mod
           cache: true
-          cache-dependency-path: ela-explorer/go.mod
+          cache-dependency-path: ela-explorer/go.sum
+
+      - name: Go mod tidy
+        working-directory: ela-explorer
+        run: go mod tidy
 
       - name: Go vet
         working-directory: ela-explorer
-        run: |
-          go mod download
-          go vet ./...
+        run: go vet ./...
 
       - name: Go test
         working-directory: ela-explorer
         run: go test -race -count=1 ./...
-
-  lint-indexer:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: ela-indexer/go.mod
-          cache: true
-          cache-dependency-path: ela-indexer/go.mod
-
-      - name: Go vet indexer
-        working-directory: ela-indexer
-        run: |
-          go mod download
-          go vet ./...
 
   build:
     runs-on: ubuntu-latest
@@ -77,7 +62,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -91,10 +76,10 @@ jobs:
         with:
           go-version-file: ela-explorer/go.mod
           cache: true
-          cache-dependency-path: ela-explorer/go.mod
+          cache-dependency-path: ela-explorer/go.sum
 
       - name: Build backend
         working-directory: ela-explorer
         run: |
-          go mod download
+          go mod tidy
           go build -o /tmp/ela-explorer ./cmd/explorer

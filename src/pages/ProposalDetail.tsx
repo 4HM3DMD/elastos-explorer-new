@@ -435,12 +435,12 @@ const CouncilReviews = ({ reviews, crVotes }: { reviews: CRProposalDetail['revie
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted">
+                <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-[11px] text-muted min-w-0">
                   <HashDisplay hash={r.did} length={14} showCopyButton isClickable={false} className="text-[11px]" />
                   {r.reviewHeight > 0 && (
                     <>
                       <span className="text-[var(--color-border)]">·</span>
-                      <Link to={`/block/${r.reviewHeight}`} className="font-mono link-brand hover:underline">
+                      <Link to={`/block/${r.reviewHeight}`} className="font-mono link-brand hover:underline shrink-0">
                         #{r.reviewHeight.toLocaleString()}
                       </Link>
                     </>
@@ -448,7 +448,7 @@ const CouncilReviews = ({ reviews, crVotes }: { reviews: CRProposalDetail['revie
                   {r.txid && (
                     <>
                       <span className="text-[var(--color-border)]">·</span>
-                      <Link to={`/tx/${r.txid}`} className="inline-flex items-center gap-0.5 link-brand hover:underline">
+                      <Link to={`/tx/${r.txid}`} className="inline-flex items-center gap-0.5 link-brand hover:underline shrink-0">
                         <ExternalLink size={9} /> Tx
                       </Link>
                     </>

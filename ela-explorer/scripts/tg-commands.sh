@@ -118,11 +118,13 @@ build_status_report() {
     if [[ "$api_code" == "200" ]]; then api_icon="🟢"; fi
 
     # --- Nginx ---
-    local nginx_icon="🔴" nginx_text="not serving"
-    local nginx_body
-    nginx_body=$(curl -s --max-time 5 "http://127.0.0.1/" 2>/dev/null | head -1 || true)
-    if echo "$nginx_body" | grep -qi "doctype\|html"; then
-        nginx_icon="🟢"; nginx_text="serving HTML"
+    # UFW blocks port 80/443 from localhost (Cloudflare-only rules), so curl
+    # to 127.0.0.1 always returns 000. Use systemctl as the sole indicator.
+    local nginx_icon="🔴" nginx_text="not running"
+    local nginx_active
+    nginx_active=$(systemctl is-active nginx 2>/dev/null || true)
+    if [[ "$nginx_active" == "active" ]]; then
+        nginx_icon="🟢"; nginx_text="active"
     fi
 
     # --- Sync status ---

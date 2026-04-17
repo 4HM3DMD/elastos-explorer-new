@@ -119,8 +119,9 @@ docker-compose.override.yml
 # Local development
 .local
 
-# Cursor IDE workspace
+# IDE / AI assistant workspaces
 .cursor/
+.claude/
 
 # Internal planning / AI conversation dumps
 CHAT-CONTEXT-DUMP.md

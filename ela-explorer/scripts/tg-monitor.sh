@@ -443,33 +443,31 @@ check_api() {
 
 # --- Check 5: Nginx ---
 check_nginx() {
-    local body
-    body=$(curl -s --max-time 5 "http://127.0.0.1/" 2>/dev/null | head -1 || true)
+    # UFW on this server blocks port 80/443 from all IPs except Cloudflare,
+    # including localhost — so curl http://127.0.0.1/ always returns 000.
+    # Use systemctl process state as the sole nginx health indicator.
+    local nginx_active
+    nginx_active=$(systemctl is-active nginx 2>/dev/null || true)
 
-    if echo "$body" | grep -qi "doctype\|html"; then
+    if [[ "$nginx_active" == "active" ]]; then
         if [[ "$(prev_status nginx)" != "ok" ]]; then
-            RECOVERIES+=("Nginx frontend recovered")
+            RECOVERIES+=("Nginx recovered")
             reset_fixes "nginx"
         fi
         set_status "nginx" "ok"
     else
         set_status "nginx" "warning"
-        local msg="Nginx not serving frontend HTML"
-        local msg_hash="nginx_down"
-
-        if [[ "$body" == "SEO template not loaded" ]]; then
-            msg="Nginx returning 'SEO template not loaded' — index.html missing"
-            msg_hash="nginx_seo"
-        fi
+        local msg="Nginx process not active (state: $nginx_active)"
+        local msg_hash="nginx_${nginx_active}"
 
         local fix_result=""
         fix_result=$(try_autofix "nginx" "$COOLDOWN_NGINX" "systemctl restart nginx" "Restarting Nginx") || true
 
         if [[ "$fix_result" == "ATTEMPTED" ]]; then
-            local recheck
-            recheck=$(curl -s --max-time 5 "http://127.0.0.1/" 2>/dev/null | head -1 || true)
-            if echo "$recheck" | grep -qi "doctype\|html"; then
-                msg="Nginx was not serving — auto-restarted successfully"
+            local recheck_active
+            recheck_active=$(systemctl is-active nginx 2>/dev/null || true)
+            if [[ "$recheck_active" == "active" ]]; then
+                msg="Nginx was down — auto-restarted successfully"
                 set_status "nginx" "ok"
                 reset_fixes "nginx"
             fi

@@ -275,6 +275,15 @@
   .link-blue:hover {
     color: #60A5FA;
   }
+
+  .link-orange {
+    @apply transition-colors duration-150;
+    color: var(--color-brand);
+  }
+
+  .link-orange:hover {
+    color: var(--color-brand-light);
+  }
 }
 
 /* ── Markdown Content ── */

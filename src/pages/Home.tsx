@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import InlineSearch from '../components/InlineSearch';
-import { fmtTime, truncHash, fmtEla } from '../utils/format';
+import RelativeTime from '../components/RelativeTime';
+import { truncHash, fmtEla } from '../utils/format';
 import { getTypeLabel, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
 import NetworkStatsGrid from '../components/NetworkStatsGrid';
@@ -212,7 +213,7 @@ const Home = () => {
                     <span className="text-[14px] text-white font-normal tracking-[0.56px]">{block.txCount} txs</span>
                     <p className="text-[10px] text-white/50 mt-0.5 flex items-center justify-end gap-1 tracking-[0.4px]">
                       <Clock size={10} />
-                      {fmtTime(block.timestamp)}
+                      <RelativeTime ts={block.timestamp} className="text-[10px] text-white/50" />
                     </p>
                   </div>
                 </div>
@@ -259,7 +260,7 @@ const Home = () => {
                   })()}
                   <p className="text-[10px] text-white/50 mt-0.5 flex items-center justify-end gap-1 tracking-[0.4px]">
                     <Clock size={10} />
-                    {fmtTime(tx.timestamp)}
+                    <RelativeTime ts={tx.timestamp} className="text-[10px] text-white/50" />
                   </p>
                 </div>
               </div>

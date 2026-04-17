@@ -13,7 +13,8 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import DetailRow from '../components/DetailRow';
 import TransferSummaryView from '../components/TransferSummary';
 import TxPayloadCard from '../components/TxPayloadCard';
-import { fmtTime, fmtAbsTime, fmtEla } from '../utils/format';
+import RelativeTime from '../components/RelativeTime';
+import { fmtEla } from '../utils/format';
 import { getTypeLabel } from '../utils/txTypeHelper';
 import { summarizeTransaction } from '../utils/txSummary';
 import { sumSela } from '../utils/sela';
@@ -155,6 +156,7 @@ const TransactionDetails = () => {
             resolvedPayload={tx.resolvedPayload}
             payload={tx.payload}
             apiLabels={tx.addressLabels}
+            blockHeight={tx.blockHeight}
           />
           {hasPayload(tx.payload) && (
             <div>
@@ -186,8 +188,7 @@ const TransactionDetails = () => {
           {tx.blockHash && <span className="text-muted ml-2 text-xs font-mono">{tx.blockHash.slice(0, 16)}…</span>}
         </DetailRow>
         <DetailRow label="Timestamp">
-          <span>{fmtAbsTime(tx.timestamp)}</span>
-          <span className="text-muted ml-2">({fmtTime(tx.timestamp)})</span>
+          <RelativeTime ts={tx.timestamp} defaultMode="absolute" />
         </DetailRow>
         <DetailRow label="Type">{getTypeLabel(tx.typeName)} (0x{tx.type.toString(16)})</DetailRow>
         <DetailRow label="Version">{tx.version}</DetailRow>

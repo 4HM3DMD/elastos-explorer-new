@@ -12,7 +12,8 @@ import HashDisplay from '../components/HashDisplay';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import DetailRow from '../components/DetailRow';
 import TransferSummaryView from '../components/TransferSummary';
-import { fmtTime, fmtAbsTime, fmtEla } from '../utils/format';
+import RelativeTime from '../components/RelativeTime';
+import { fmtEla } from '../utils/format';
 import { getTypeLabel, getTypeColor, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
 import { cn } from '../lib/cn';
@@ -100,8 +101,9 @@ const BlockDetails = () => {
                 Block #{block.height.toLocaleString()}
               </h1>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[11px] md:text-xs text-muted tracking-[0.48px]">
-                  {block.consensusMode || block.era || 'AuxPoW'} &middot; {fmtTime(block.timestamp)}
+                <span className="text-[11px] md:text-xs text-muted tracking-[0.48px] inline-flex items-center gap-1">
+                  <span>{block.consensusMode || block.era || 'AuxPoW'} &middot;</span>
+                  <RelativeTime ts={block.timestamp} />
                 </span>
                 <span className="inline-flex items-center gap-1 text-[10px] font-medium text-accent-green">
                   <CheckCircle size={10} /> {block.confirmations.toLocaleString()} confirmations
@@ -146,12 +148,11 @@ const BlockDetails = () => {
           <DetailRow label="Hash"><HashDisplay hash={block.hash} length={24} showCopyButton /></DetailRow>
           <DetailRow label="Merkle Root"><HashDisplay hash={block.merkleroot} length={24} /></DetailRow>
           <DetailRow label="Timestamp">
-            <span>{fmtAbsTime(block.timestamp)}</span>
-            <span className="text-muted ml-2">({fmtTime(block.timestamp)})</span>
+            <RelativeTime ts={block.timestamp} defaultMode="absolute" />
           </DetailRow>
           {block.medianTime > 0 && (
             <DetailRow label="Median Time">
-              <span>{fmtAbsTime(block.medianTime)}</span>
+              <RelativeTime ts={block.medianTime} defaultMode="absolute" />
             </DetailRow>
           )}
           <DetailRow label="Mined by">

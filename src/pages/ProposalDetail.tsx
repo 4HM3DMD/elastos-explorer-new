@@ -12,7 +12,7 @@ import HashDisplay from '../components/HashDisplay';
 import MarkdownContent from '../components/MarkdownContent';
 import AddressAvatar from '../components/AddressAvatar';
 import { PageSkeleton } from '../components/LoadingSkeleton';
-import { fmtEla } from '../utils/format';
+import { fmtEla, fmtElaSmart, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
 
@@ -38,15 +38,28 @@ function getTypeName(type: number): string {
   return PROPOSAL_TYPE_NAMES[type] ?? `Type ${type}`;
 }
 
-function formatELA(amount: string | undefined): string {
+/** Per-stage budget lines and ambiguous totals (node mixes sela / ELA / legacy int). */
+function formatBudgetLine(amount: string | undefined): string {
+  if (!amount || amount === '0') return '0 ELA';
+  return `${fmtElaSmart(amount)} ELA`;
+}
+
+/** Remaining budget from getcrproposalstate — always ELA decimal string. */
+function formatAvailableEla(amount: string | undefined): string {
   if (!amount || amount === '0') return '0 ELA';
   return `${fmtEla(amount)} ELA`;
+}
+
+function formatProposalTotalEla(budgetTotal: string | undefined, budgets: ProposalBudgetItem[] | null): string {
+  const n = resolveProposalBudgetEla(budgetTotal, budgets);
+  if (!n || n === 0) return '0 ELA';
+  return `${fmtEla(n)} ELA`;
 }
 
 function getDisplayTitle(p: CRProposalDetail): string {
   if (p.title) return p.title;
   const typeName = getTypeName(p.proposalType);
-  const author = p.crMemberName || 'Unknown';
+  const author = p.ownerName || p.crMemberName || 'Unknown';
   return `${typeName} by ${author}`;
 }
 
@@ -234,6 +247,8 @@ const BudgetBreakdown = ({ budgets, budgetTotal, currentStage, trackingCount, av
       ? Math.max(...budgets.map(b => b.stage))
       : (trackingCount ?? 0);
 
+  const resolvedTotalEla = resolveProposalBudgetEla(budgetTotal, budgets);
+
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 sm:px-5 border-b border-[var(--color-border)]">
@@ -241,10 +256,10 @@ const BudgetBreakdown = ({ budgets, budgetTotal, currentStage, trackingCount, av
           <h3 className="text-sm font-semibold text-primary">Budget Breakdown</h3>
           <div className="flex items-center gap-3 flex-wrap">
             {availableAmount && availableAmount !== '0' && (
-              <span className="text-xs text-muted">Remaining: <span className="text-green-400 font-mono">{formatELA(availableAmount)}</span></span>
+              <span className="text-xs text-muted">Remaining: <span className="text-green-400 font-mono">{formatAvailableEla(availableAmount)}</span></span>
             )}
-            {budgetTotal && budgetTotal !== '0' && (
-              <span className="text-sm font-mono font-bold text-amber-400">{formatELA(budgetTotal)}</span>
+            {resolvedTotalEla > 0 && (
+              <span className="text-sm font-mono font-bold text-amber-400">{fmtEla(resolvedTotalEla)} ELA</span>
             )}
           </div>
         </div>
@@ -258,7 +273,7 @@ const BudgetBreakdown = ({ budgets, budgetTotal, currentStage, trackingCount, av
             <div key={i} className="px-4 py-2.5 flex items-center justify-between">
               <div>
                 <div className="text-xs text-muted">Stage {b.stage} · {BUDGET_TYPE_LABELS[b.type] ?? `Type ${b.type}`}</div>
-                <div className="text-sm font-mono text-primary mt-0.5">{formatELA(b.amount)}</div>
+                <div className="text-sm font-mono text-primary mt-0.5">{formatBudgetLine(b.amount)}</div>
               </div>
               {budgetStatus === 'Withdrawn' ? (
                 <span className="inline-flex items-center gap-1 text-xs text-green-400"><CheckCircle2 size={12} /> Withdrawn</span>
@@ -288,7 +303,7 @@ const BudgetBreakdown = ({ budgets, budgetTotal, currentStage, trackingCount, av
                 <tr key={i}>
                   <td className="py-2.5 px-4 font-mono text-sm">{b.stage}</td>
                   <td className="py-2.5 px-4 text-sm text-secondary">{BUDGET_TYPE_LABELS[b.type] ?? `Type ${b.type}`}</td>
-                  <td className="py-2.5 px-4 text-right font-mono text-sm text-primary">{formatELA(b.amount)}</td>
+                  <td className="py-2.5 px-4 text-right font-mono text-sm text-primary">{formatBudgetLine(b.amount)}</td>
                   <td className="py-2.5 px-4 text-center">
                     {budgetStatus === 'Withdrawn' ? (
                       <span className="inline-flex items-center gap-1 text-xs text-green-400"><CheckCircle2 size={13} /> Withdrawn</span>
@@ -557,6 +572,7 @@ const ProposalDetail = () => {
   const statusColor = PROPOSAL_STATUS_COLORS[proposal.status] || 'bg-gray-500/20 text-gray-400';
   const statusLabel = PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status;
   const hasBudget = Array.isArray(proposal.budgets) && proposal.budgets.length > 0;
+  const resolvedBudgetEla = resolveProposalBudgetEla(proposal.budgetTotal, proposal.budgets);
   const hasTeam = Array.isArray(proposal.implementationTeam) && proposal.implementationTeam.length > 0;
   const hasRecipient = !!proposal.recipient && proposal.recipient.length > 0;
   const articleSections = getArticleSections(proposal);
@@ -607,12 +623,19 @@ const ProposalDetail = () => {
                 <span className="badge bg-[var(--color-surface-secondary)] text-secondary">
                   {getTypeName(proposal.proposalType)}
                 </span>
-                <span className="text-[11px] md:text-xs text-muted">
-                  by <span className="text-primary font-medium">{proposal.crMemberName || 'Unknown'}</span>
-                  {' · '}
-                  <Link to={`/block/${proposal.registerHeight}`} className="font-mono text-brand hover:text-brand-200">
-                    Block {proposal.registerHeight.toLocaleString()}
-                  </Link>
+                <span className="text-[11px] md:text-xs text-muted flex flex-col gap-0.5 sm:block sm:space-x-0">
+                  <span>
+                    Promoted by <span className="text-primary font-medium">{proposal.crMemberName || 'Unknown'}</span>
+                    {' · '}
+                    <Link to={`/block/${proposal.registerHeight}`} className="font-mono text-brand hover:text-brand-200">
+                      Block {proposal.registerHeight.toLocaleString()}
+                    </Link>
+                  </span>
+                  {proposal.ownerName && proposal.ownerName.trim() !== (proposal.crMemberName || '').trim() && (
+                    <span>
+                      Drafted by <span className="text-primary font-medium">{proposal.ownerName}</span>
+                    </span>
+                  )}
                 </span>
               </div>
             </div>
@@ -640,13 +663,13 @@ const ProposalDetail = () => {
               {hasVoterReject && (
                 <div className="pt-2 border-t border-[var(--color-border)]">
                   <span className="text-xs text-muted">Voter Rejection</span>
-                  <p className="text-sm font-mono font-bold text-red-400">{formatELA(proposal.voterReject)}</p>
+                  <p className="text-sm font-mono font-bold text-red-400">{formatBudgetLine(proposal.voterReject)}</p>
                 </div>
               )}
-              {hasBudget && proposal.budgetTotal && proposal.budgetTotal !== '0' && (
+              {hasBudget && resolvedBudgetEla > 0 && (
                 <div className="pt-2 border-t border-[var(--color-border)] flex items-center justify-between">
                   <span className="text-xs text-muted">Budget</span>
-                  <span className="text-sm font-mono font-semibold text-amber-400">{formatELA(proposal.budgetTotal)}</span>
+                  <span className="text-sm font-mono font-semibold text-amber-400">{formatProposalTotalEla(proposal.budgetTotal, proposal.budgets)}</span>
                 </div>
               )}
             </div>
@@ -723,7 +746,7 @@ const ProposalDetail = () => {
                 {hasVoterReject && (
                   <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
                     <span className="text-xs text-muted">Voter Rejection</span>
-                    <p className="text-sm font-mono font-bold text-red-400 mt-0.5">{formatELA(proposal.voterReject)}</p>
+                    <p className="text-sm font-mono font-bold text-red-400 mt-0.5">{formatBudgetLine(proposal.voterReject)}</p>
                   </div>
                 )}
               </div>
@@ -747,15 +770,28 @@ const ProposalDetail = () => {
                   </div>
                 </MetaRow>
 
-                {hasBudget && proposal.budgetTotal && proposal.budgetTotal !== '0' && (
+                {proposal.ownerName && proposal.ownerName.trim() !== (proposal.crMemberName || '').trim() && (
+                  <MetaRow label="Drafted by">
+                    <div className="text-right min-w-0">
+                      <div className="font-medium truncate">{proposal.ownerName}</div>
+                      {proposal.ownerPublicKey && (
+                        <Link to={`/validator/${proposal.ownerPublicKey}`} className="link-brand font-mono text-[10px] truncate block mt-0.5">
+                          {proposal.ownerPublicKey.slice(0, 10)}…{proposal.ownerPublicKey.slice(-6)}
+                        </Link>
+                      )}
+                    </div>
+                  </MetaRow>
+                )}
+
+                {hasBudget && resolvedBudgetEla > 0 && (
                   <MetaRow label="Budget">
-                    <span className="font-mono font-semibold text-amber-400">{formatELA(proposal.budgetTotal)}</span>
+                    <span className="font-mono font-semibold text-amber-400">{formatProposalTotalEla(proposal.budgetTotal, proposal.budgets)}</span>
                   </MetaRow>
                 )}
 
                 {proposal.availableAmount && proposal.availableAmount !== '0' && (
                   <MetaRow label="Remaining">
-                    <span className="font-mono text-green-400">{formatELA(proposal.availableAmount)}</span>
+                    <span className="font-mono text-green-400">{formatAvailableEla(proposal.availableAmount)}</span>
                   </MetaRow>
                 )}
 

@@ -129,8 +129,17 @@ func main() {
 		}
 	}()
 
-	// Start aggregator (producer votes, CR members, daily stats, chain stats)
-	agg := aggregator.New(database, nodeClient, wsHub)
+	// Create reference RPC clients for cross-checking chain height
+	var referenceClients []*node.Client
+	for _, refURL := range cfg.ReferenceRPCURLs {
+		referenceClients = append(referenceClients, node.NewClient(refURL, "", ""))
+	}
+	if len(referenceClients) > 0 {
+		slog.Info("reference RPC clients configured", "count", len(referenceClients), "urls", cfg.ReferenceRPCURLs)
+	}
+
+	// Start aggregator (producer votes, CR members, daily stats, chain stats, validation)
+	agg := aggregator.New(database, nodeClient, wsHub, referenceClients)
 	apiServer.AttachAggregator(agg)
 	go agg.Run(ctx)
 

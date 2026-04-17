@@ -7,7 +7,8 @@ import HashDisplay from '../components/HashDisplay';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import { cn } from '../lib/cn';
-import { fmtTime, truncHash, fmtEla } from '../utils/format';
+import RelativeTime from '../components/RelativeTime';
+import { truncHash, fmtEla } from '../utils/format';
 import { toSela } from '../utils/sela';
 import { getTypeLabel, getTypeInfo, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
@@ -45,7 +46,7 @@ const TX_TYPE_FILTERS: { label: string; simplifiedLabel: string; value: number |
   { label: 'Claim Staking Reward',   simplifiedLabel: 'Claim Rewards',         value: 0x60 },
   { label: 'Staking Reward Withdraw', simplifiedLabel: 'Reward Withdrawals',   value: 0x61 },
   { label: 'Exchange Votes',         simplifiedLabel: 'Vote Conversions',      value: 0x62 },
-  { label: 'Return Votes',           simplifiedLabel: 'Unstake',               value: 0x64 },
+  { label: 'Return Votes',           simplifiedLabel: 'Vote Withdrawals',      value: 0x64 },
   { label: 'Register Producer',      simplifiedLabel: 'Validator Registrations', value: 0x09 },
   { label: 'Update Producer',        simplifiedLabel: 'Validator Updates',     value: 0x0b },
   { label: 'Cancel Producer',        simplifiedLabel: 'Validator Resignations', value: 0x0a },
@@ -259,7 +260,7 @@ const TransactionsList = () => {
                       <td className="whitespace-nowrap">
                         <span className="text-xs text-muted flex items-center gap-1">
                           <Clock size={11} className="shrink-0" aria-hidden />
-                          {fmtTime(tx.timestamp)}
+                          <RelativeTime ts={tx.timestamp} />
                         </span>
                       </td>
                     </tr>

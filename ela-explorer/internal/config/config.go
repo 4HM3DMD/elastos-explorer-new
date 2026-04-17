@@ -50,6 +50,9 @@ type Config struct {
 
 	// Security
 	MetricsAuthToken string
+
+	// Reference RPC nodes for cross-checking chain height
+	ReferenceRPCURLs []string
 }
 
 func Load() (*Config, error) {
@@ -86,6 +89,8 @@ func Load() (*Config, error) {
 		WSMaxPerIP:   envIntOr("WS_MAX_PER_IP", 20),
 
 		MetricsAuthToken: envOr("METRICS_AUTH_TOKEN", ""),
+
+		ReferenceRPCURLs: envStringSlice("REFERENCE_RPC_URLS", nil),
 	}
 
 	if err := c.validate(); err != nil {
@@ -138,6 +143,19 @@ func envIntOr(key string, fallback int) int {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
+	}
+	return fallback
+}
+
+func envStringSlice(key string, fallback []string) []string {
+	if v := os.Getenv(key); v != "" {
+		var result []string
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				result = append(result, s)
+			}
+		}
+		return result
 	}
 	return fallback
 }

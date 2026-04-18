@@ -322,11 +322,32 @@ const StakerDetail = () => {
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3">
-        <MiniStat icon={Lock} label="Locked ELA" value={`${fmtEla(data.totalLocked, { compact: true })} ELA`} />
+        <MiniStat icon={Lock} label="Staked ELA" value={`${fmtEla(data.totalStaked ?? data.totalLocked, { compact: true })} ELA`} />
         <MiniStat icon={Shield} label="Voting Rights" value={fmtEla(data.totalStakingRights, { compact: true })} />
         <MiniStat icon={Vote} label="Active Stakes" value={fmtNumber(data.activeVotes)} />
         <MiniStat icon={Gift} label="Claimable" value={claimable > 0 ? `${fmtEla(data.claimable ?? '0', { compact: true })} ELA` : '\u2014'} />
       </div>
+
+      {(data.totalPledged || data.totalNonPledged) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted -mt-1">
+          <span>
+            Pledged:{' '}
+            <span className="text-primary font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {fmtEla(data.totalPledged ?? data.totalLocked, { compact: true })} ELA
+            </span>
+          </span>
+          <span className="opacity-40">·</span>
+          <span
+            title="Staked but not pledged on votes"
+            className="cursor-help underline decoration-dotted underline-offset-2"
+          >
+            Non-pledged:{' '}
+            <span className="text-primary font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {fmtEla(data.totalNonPledged ?? '0', { compact: true })} ELA
+            </span>
+          </span>
+        </div>
+      )}
 
       {/* Earnings */}
       {totalEarned > 0 && (

@@ -243,6 +243,9 @@ export interface AddressStaking {
   address: string;
   originAddress?: string;
   totalLocked: string;
+  totalStaked?: string;
+  totalPledged?: string;
+  totalNonPledged?: string;
   totalStakingRights: string;
   activeVotes: number;
   stakes: StakeEntry[];
@@ -272,6 +275,9 @@ export interface TopStaker {
   address: string;
   originAddress?: string;
   totalLocked: string;
+  totalStaked?: string;
+  totalPledged?: string;
+  totalNonPledged?: string;
   votingRights: string;
   voteCount: number;
   label?: string;

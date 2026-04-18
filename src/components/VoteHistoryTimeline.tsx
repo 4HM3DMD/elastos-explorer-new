@@ -78,11 +78,32 @@ const VoteHistoryTimeline = ({ address }: Props) => {
       {isStakeAddress && !loading && staking && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard icon={Coins} label="Total Staked" value={`${fmtELA(staking.totalLocked)} ELA`} color="blue" />
+            <StatCard icon={Coins} label="Staked ELA" value={`${fmtELA(staking.totalStaked ?? staking.totalLocked)} ELA`} color="blue" />
             <StatCard icon={Shield} label="Voting Rights" value={`${fmtELA(staking.totalStakingRights)} ELA`} color="green" />
             <StatCard icon={Coins} label="Claimable" value={`${fmtELA(staking.claimable)} ELA`} color="orange" />
             <StatCard icon={Coins} label="Total Rewards" value={`${fmtELA(staking.totalRewards)} ELA`} color="purple" />
           </div>
+
+          {(staking.totalPledged || staking.totalNonPledged) && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted -mt-3">
+              <span>
+                Pledged:{' '}
+                <span className="text-primary font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtELA(staking.totalPledged ?? staking.totalLocked)} ELA
+                </span>
+              </span>
+              <span className="opacity-40">·</span>
+              <span
+                title="Staked but not pledged on votes"
+                className="cursor-help underline decoration-dotted underline-offset-2"
+              >
+                Non-pledged:{' '}
+                <span className="text-primary font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtELA(staking.totalNonPledged ?? '0')} ELA
+                </span>
+              </span>
+            </div>
+          )}
 
           {staking.stakes && staking.stakes.length > 0 && (
             <div className="card overflow-hidden">

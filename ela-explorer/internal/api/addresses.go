@@ -232,23 +232,6 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 		`SELECT COUNT(*), COALESCE(SUM(raw_amount_sela), 0), COALESCE(SUM(vote_rights_sela), 0)
 		 FROM bpos_stakes WHERE stake_address = $1`, address).Scan(&totalCount, &totalStaked, &totalRights)
 
-	// Stake-pool balance (deposits via TxExchangeVotes minus withdrawals) is already
-	// tracked in address_balances for S-prefixed stake addresses.
-	var stakeBalanceSela int64
-	_ = s.db.API.QueryRow(r.Context(),
-		"SELECT COALESCE(balance_sela, 0) FROM address_balances WHERE address = $1",
-		address).Scan(&stakeBalanceSela)
-
-	pledgedSela := totalStaked
-	nonPledgedSela := stakeBalanceSela - pledgedSela
-	if nonPledgedSela < 0 {
-		nonPledgedSela = 0
-	}
-	displayedStakedSela := stakeBalanceSela
-	if pledgedSela > displayedStakedSela {
-		displayedStakedSela = pledgedSela
-	}
-
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT b.refer_key, b.producer_key,
 		       COALESCE(NULLIF(p.nickname, ''), cr.nickname, '') AS resolved_name,
@@ -298,9 +281,6 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 	result := map[string]any{
 		"address":            address,
 		"totalLocked":        selaToELA(totalStaked),
-		"totalStaked":        selaToELA(displayedStakedSela),
-		"totalPledged":       selaToELA(pledgedSela),
-		"totalNonPledged":    selaToELA(nonPledgedSela),
 		"totalStakingRights": selaToELA(totalRights),
 		"activeVotes":        totalCount,
 		"stakes":             stakes,
@@ -423,13 +403,11 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 		       COUNT(*) AS vote_count,
 		       al.label,
 		       COALESCE(r.claimable_sela, 0),
-		       COALESCE(r.claimed_sela, 0),
-		       COALESCE(ab.balance_sela, 0) AS stake_balance
+		       COALESCE(r.claimed_sela, 0)
 		FROM bpos_stakes b
 		LEFT JOIN address_labels al ON al.address = b.stake_address
 		LEFT JOIN bpos_rewards r ON r.stake_address = b.stake_address
-		LEFT JOIN address_balances ab ON ab.address = b.stake_address
-		GROUP BY b.stake_address, al.label, r.claimable_sela, r.claimed_sela, ab.balance_sela
+		GROUP BY b.stake_address, al.label, r.claimable_sela, r.claimed_sela
 		ORDER BY total_rights DESC
 		LIMIT $1 OFFSET $2`, pageSize, offset)
 	if err != nil {
@@ -442,33 +420,21 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 	rank := offset + 1
 	for rows.Next() {
 		var addr string
-		var totalStaked, totalRights, claimableSela, claimedSela, stakeBalanceSela int64
+		var totalStaked, totalRights, claimableSela, claimedSela int64
 		var voteCount int
 		var label *string
-		if err := rows.Scan(&addr, &totalStaked, &totalRights, &voteCount, &label, &claimableSela, &claimedSela, &stakeBalanceSela); err != nil {
+		if err := rows.Scan(&addr, &totalStaked, &totalRights, &voteCount, &label, &claimableSela, &claimedSela); err != nil {
 			continue
 		}
-		pledgedSela := totalStaked
-		nonPledgedSela := stakeBalanceSela - pledgedSela
-		if nonPledgedSela < 0 {
-			nonPledgedSela = 0
-		}
-		displayedStakedSela := stakeBalanceSela
-		if pledgedSela > displayedStakedSela {
-			displayedStakedSela = pledgedSela
-		}
 		entry := map[string]any{
-			"rank":            rank,
-			"address":         addr,
-			"totalLocked":     selaToELA(totalStaked),
-			"totalStaked":     selaToELA(displayedStakedSela),
-			"totalPledged":    selaToELA(pledgedSela),
-			"totalNonPledged": selaToELA(nonPledgedSela),
-			"votingRights":    selaToELA(totalRights),
-			"voteCount":       voteCount,
-			"claimable":       selaToELA(claimableSela),
-			"claimed":         selaToELA(claimedSela),
-			"totalRewards":    selaToELA(claimableSela + claimedSela),
+			"rank":         rank,
+			"address":      addr,
+			"totalLocked":  selaToELA(totalStaked),
+			"votingRights": selaToELA(totalRights),
+			"voteCount":    voteCount,
+			"claimable":    selaToELA(claimableSela),
+			"claimed":      selaToELA(claimedSela),
+			"totalRewards": selaToELA(claimableSela + claimedSela),
 		}
 		if label != nil {
 			entry["label"] = *label

@@ -87,7 +87,7 @@ const Staking = () => {
               <tr>
                 <th className="w-12 sm:w-16">#</th>
                 <th>Address</th>
-                <th>Staked ELA</th>
+                <th>Locked ELA</th>
                 <th>Voting Rights</th>
               </tr>
             </thead>
@@ -133,20 +133,9 @@ const Staking = () => {
                         </div>
                       </td>
                       <td>
-                        <div className="min-w-0">
-                          <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                            {fmtEla(s.totalStaked ?? s.totalLocked, { compact: true })}
-                          </span>
-                          {(s.totalPledged || s.totalNonPledged) && (
-                            <div className="text-[10px] text-muted mt-0.5 whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                              P: {fmtEla(s.totalPledged ?? s.totalLocked, { compact: true })}
-                              <span className="opacity-40"> · </span>
-                              <span title="Staked but not pledged on votes" className="cursor-help">
-                                NP: {fmtEla(s.totalNonPledged ?? '0', { compact: true })}
-                              </span>
-                            </div>
-                          )}
-                        </div>
+                        <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtEla(s.totalLocked, { compact: true })}
+                        </span>
                       </td>
                       <td>
                         <span className="font-mono text-xs text-accent-blue whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>

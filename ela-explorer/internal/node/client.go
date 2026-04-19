@@ -483,6 +483,52 @@ func (c *Client) GetAllDPoSV2RewardInfo(ctx context.Context) ([]DPoSV2RewardInfo
 	return infos, nil
 }
 
+// GetVoteRights calls `getvoterights` for the given stake addresses in
+// chunks, merging results into a single map keyed by StakeAddress. Per-chunk
+// failures are logged and skipped so a single bad batch can't poison the
+// whole refresh. Returns an error only when no chunk succeeded.
+func (c *Client) GetVoteRights(ctx context.Context, addrs []string) (map[string]*VoteRightsInfo, error) {
+	const chunkSize = 100
+	out := make(map[string]*VoteRightsInfo, len(addrs))
+	if len(addrs) == 0 {
+		return out, nil
+	}
+	var firstErr error
+	for start := 0; start < len(addrs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(addrs) {
+			end = len(addrs)
+		}
+		chunk := addrs[start:end]
+		result, err := c.callObject(ctx, "getvoterights", map[string]any{
+			"stakeaddresses": chunk,
+		})
+		if err != nil {
+			slog.Warn("getvoterights chunk failed", "start", start, "size", len(chunk), "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		var infos []VoteRightsInfo
+		if err := json.Unmarshal(result, &infos); err != nil {
+			slog.Warn("parse getvoterights chunk failed", "start", start, "error", err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parse getvoterights: %w", err)
+			}
+			continue
+		}
+		for i := range infos {
+			info := infos[i]
+			out[info.StakeAddress] = &info
+		}
+	}
+	if len(out) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
 func (c *Client) SendRawTransaction(ctx context.Context, rawTx string) (string, error) {
 	result, err := c.call(ctx, "sendrawtransaction", rawTx)
 	if err != nil {

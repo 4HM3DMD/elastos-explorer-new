@@ -189,6 +189,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 		"totalIndexedSupply": selaToELA(circulatingSupply),
 		"totalStaked":        selaToELA(totalStakedSela),
 		"totalLocked":        selaToELA(totalLockedSela),
+		"idleStake":          selaToELA(totalStakedSela - totalLockedSela),
 		"totalVoters":        totalVoters,
 		"avgBlockTime":       math.Round(avgBlockTime*100) / 100,
 		"syncStatus": map[string]any{
@@ -272,6 +273,7 @@ func (s *Server) getSupply(w http.ResponseWriter, r *http.Request) {
 		"circulatingSupply":  selaToELA(circSupplySela),
 		"totalStaked":        selaToELA(totalStakedSela),
 		"totalLocked":        selaToELA(totalLockedSela),
+		"idleStake":          selaToELA(totalStakedSela - totalLockedSela),
 		"totalBurned":        selaToELA(burnedSela),
 		"daoTreasury":        selaToELA(daoTreasurySela),
 		"stakingRewardsPool": selaToELA(stakeRewardPoolSela),

@@ -40,14 +40,20 @@ type Aggregator struct {
 	node *node.Client
 	hub  *ws.Hub
 
+	stakeIdleEnabled bool
+
 	dailyStatsDone atomic.Bool
 	earlyVotesDone atomic.Bool
 	loopsDone      atomic.Int32 // counts distinct loops that completed at least once
 }
 
 func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub) *Aggregator {
-	return &Aggregator{db: database, node: nodeClient, hub: hub}
+	return &Aggregator{db: database, node: nodeClient, hub: hub, stakeIdleEnabled: true}
 }
+
+// SetStakeIdleEnabled toggles the voter_rights refresh loop. When false, the
+// loop short-circuits and API handlers should omit the new fields.
+func (a *Aggregator) SetStakeIdleEnabled(v bool) { a.stakeIdleEnabled = v }
 
 const requiredLoopsForReady = 5
 
@@ -58,6 +64,7 @@ func (a *Aggregator) Run(ctx context.Context) {
 	go a.runLoop(ctx, "producers", 60*time.Second, a.refreshProducers, true)
 	go a.runLoop(ctx, "bpos_stakes", 60*time.Second, a.refreshBPoSStakes, false)
 	go a.runLoop(ctx, "bpos_rewards", 120*time.Second, a.refreshBPoSRewards, false)
+	go a.runLoop(ctx, "voter_rights", 60*time.Second, a.refreshVoterRights, false)
 	go a.runLoop(ctx, "cr_members", 120*time.Second, a.refreshCRMembers, true)
 	go a.runLoop(ctx, "cr_elections", 60*time.Second, a.refreshElectionTallies, true)
 	go a.runLoop(ctx, "cr_proposals", 120*time.Second, a.refreshProposals, true)
@@ -1232,6 +1239,141 @@ func (a *Aggregator) refreshBPoSRewards(ctx context.Context) error {
 	}
 
 	slog.Debug("refreshed BPoS rewards", "count", len(rewards))
+	return nil
+}
+
+// isValidStakeAddress performs a cheap pre-RPC sanity check: stake addresses
+// start with 'S' and are base58 (no '0', 'O', 'I', 'l'). This filters out
+// obviously malformed rows before they reach the node.
+func isValidStakeAddress(s string) bool {
+	if len(s) < 10 || len(s) > 48 || s[0] != 'S' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= '1' && c <= '9') ||
+			(c >= 'A' && c <= 'H') || (c >= 'J' && c <= 'N') || (c >= 'P' && c <= 'Z') ||
+			(c >= 'a' && c <= 'k') || (c >= 'm' && c <= 'z')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// refreshVoterRights enumerates every stake address we've seen pledge to a
+// BPoS validator and calls `getvoterights` to snapshot each address's
+// total/pledged/idle ELA. The aggregate pool-wide idle stake is already shown
+// chain-wide; this loop persists the per-address breakdown that makes it
+// possible to render "Pledged / Idle" for an individual staker.
+func (a *Aggregator) refreshVoterRights(ctx context.Context) error {
+	if !a.stakeIdleEnabled {
+		return nil
+	}
+
+	if _, err := a.db.Syncer.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS voter_rights (
+			stake_address     TEXT PRIMARY KEY,
+			total_sela        BIGINT NOT NULL DEFAULT 0,
+			pledged_sela      BIGINT NOT NULL DEFAULT 0,
+			idle_sela         BIGINT NOT NULL DEFAULT 0,
+			last_updated      BIGINT NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure voter_rights table: %w", err)
+	}
+	if _, err := a.db.Syncer.Exec(ctx,
+		"CREATE INDEX IF NOT EXISTS idx_voter_rights_updated ON voter_rights(last_updated)"); err != nil {
+		slog.Debug("voter_rights: updated index", "error", err)
+	}
+
+	rows, err := a.db.Syncer.Query(ctx, `SELECT DISTINCT stake_address FROM bpos_stakes`)
+	if err != nil {
+		return fmt.Errorf("select stake addresses: %w", err)
+	}
+	defer rows.Close()
+
+	var valid []string
+	skipped := 0
+	for rows.Next() {
+		var addr string
+		if err := rows.Scan(&addr); err != nil {
+			continue
+		}
+		if !isValidStakeAddress(addr) {
+			skipped++
+			continue
+		}
+		valid = append(valid, addr)
+	}
+	if len(valid) == 0 {
+		slog.Debug("refreshVoterRights: no stake addresses to refresh")
+		return nil
+	}
+
+	started := time.Now()
+	results, rpcErr := a.node.GetVoteRights(ctx, valid)
+	if rpcErr != nil && len(results) == 0 {
+		return fmt.Errorf("getvoterights: %w", rpcErr)
+	}
+
+	now := time.Now().Unix()
+	processed := 0
+	errs := 0
+	idleMissingWarned := false
+
+	for _, addr := range valid {
+		info := results[addr]
+		if info == nil {
+			continue
+		}
+		totalSela := parseELAToSela(info.TotalVotesRight)
+		var pledgedSela int64
+		for _, entry := range info.UsedVotesInfo.UsedDPoSV2Votes {
+			for _, v := range entry.Info {
+				pledgedSela += parseELAToSela(v.Votes)
+			}
+		}
+		var idleSela int64
+		if len(info.RemainVoteRight) >= 5 {
+			idleSela = parseELAToSela(info.RemainVoteRight[4])
+		} else if !idleMissingWarned {
+			idleMissingWarned = true
+			slog.Warn("refreshVoterRights: remainvoteright has fewer than 5 entries",
+				"address", safeTruncate(addr, 16), "len", len(info.RemainVoteRight))
+		}
+		if pledgedSela > totalSela && totalSela > 0 {
+			slog.Warn("refreshVoterRights: pledged exceeds total",
+				"address", safeTruncate(addr, 16), "pledged", pledgedSela, "total", totalSela)
+		}
+		if _, err := a.db.Syncer.Exec(ctx, `
+			INSERT INTO voter_rights (stake_address, total_sela, pledged_sela, idle_sela, last_updated)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (stake_address) DO UPDATE SET
+				total_sela=$2, pledged_sela=$3, idle_sela=$4, last_updated=$5`,
+			addr, totalSela, pledgedSela, idleSela, now,
+		); err != nil {
+			errs++
+			slog.Warn("upsert voter_rights failed", "address", safeTruncate(addr, 16), "error", err)
+			continue
+		}
+		processed++
+	}
+
+	// Only run stale cleanup when at least one chunk succeeded (results map has
+	// entries); otherwise a full RPC outage would nuke our table.
+	if len(results) > 0 {
+		cutoff := now - 300
+		if _, err := a.db.Syncer.Exec(ctx,
+			"DELETE FROM voter_rights WHERE last_updated < $1", cutoff); err != nil {
+			slog.Warn("refreshVoterRights: stale cleanup failed", "error", err)
+		}
+	}
+
+	slog.Info("refreshed voter_rights",
+		"processed", processed,
+		"skipped", skipped,
+		"errors", errs,
+		"duration_ms", time.Since(started).Milliseconds())
 	return nil
 }
 

@@ -131,6 +131,7 @@ func main() {
 
 	// Start aggregator (producer votes, CR members, daily stats, chain stats)
 	agg := aggregator.New(database, nodeClient, wsHub)
+	agg.SetStakeIdleEnabled(cfg.StakeIdleEnabled)
 	apiServer.AttachAggregator(agg)
 	go agg.Run(ctx)
 

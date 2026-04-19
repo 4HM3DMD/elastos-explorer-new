@@ -309,6 +309,20 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 		result["originAddress"] = originAddress
 	}
 
+	// Per-address stake breakdown (total / pledged / idle) sourced from the
+	// voter_rights snapshot. Only populated for addresses that have appeared
+	// as a BPoS staker; NULL rows leave these fields absent for back-compat.
+	var vrTotal, vrPledged, vrIdle, vrUpdated int64
+	if err := s.db.API.QueryRow(r.Context(),
+		`SELECT total_sela, pledged_sela, idle_sela, last_updated
+		 FROM voter_rights WHERE stake_address = $1`, address,
+	).Scan(&vrTotal, &vrPledged, &vrIdle, &vrUpdated); err == nil {
+		result["totalStaked"] = selaToELA(vrTotal)
+		result["totalPledged"] = selaToELA(vrPledged)
+		result["totalIdle"] = selaToELA(vrIdle)
+		result["voterRightsUpdated"] = vrUpdated
+	}
+
 	writeJSON(w, 200, APIResponse{Data: result})
 }
 
@@ -403,11 +417,17 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 		       COUNT(*) AS vote_count,
 		       al.label,
 		       COALESCE(r.claimable_sela, 0),
-		       COALESCE(r.claimed_sela, 0)
+		       COALESCE(r.claimed_sela, 0),
+		       COALESCE(vr.total_sela, 0),
+		       COALESCE(vr.pledged_sela, 0),
+		       COALESCE(vr.idle_sela, 0),
+		       (vr.stake_address IS NOT NULL) AS has_rights
 		FROM bpos_stakes b
 		LEFT JOIN address_labels al ON al.address = b.stake_address
 		LEFT JOIN bpos_rewards r ON r.stake_address = b.stake_address
-		GROUP BY b.stake_address, al.label, r.claimable_sela, r.claimed_sela
+		LEFT JOIN voter_rights vr ON vr.stake_address = b.stake_address
+		GROUP BY b.stake_address, al.label, r.claimable_sela, r.claimed_sela,
+		         vr.total_sela, vr.pledged_sela, vr.idle_sela, vr.stake_address
 		ORDER BY total_rights DESC
 		LIMIT $1 OFFSET $2`, pageSize, offset)
 	if err != nil {
@@ -421,9 +441,13 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var addr string
 		var totalStaked, totalRights, claimableSela, claimedSela int64
+		var vrTotal, vrPledged, vrIdle int64
+		var hasRights bool
 		var voteCount int
 		var label *string
-		if err := rows.Scan(&addr, &totalStaked, &totalRights, &voteCount, &label, &claimableSela, &claimedSela); err != nil {
+		if err := rows.Scan(&addr, &totalStaked, &totalRights, &voteCount, &label,
+			&claimableSela, &claimedSela,
+			&vrTotal, &vrPledged, &vrIdle, &hasRights); err != nil {
 			continue
 		}
 		entry := map[string]any{
@@ -435,6 +459,11 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 			"claimable":    selaToELA(claimableSela),
 			"claimed":      selaToELA(claimedSela),
 			"totalRewards": selaToELA(claimableSela + claimedSela),
+		}
+		if hasRights {
+			entry["totalStaked"] = selaToELA(vrTotal)
+			entry["totalPledged"] = selaToELA(vrPledged)
+			entry["totalIdle"] = selaToELA(vrIdle)
 		}
 		if label != nil {
 			entry["label"] = *label

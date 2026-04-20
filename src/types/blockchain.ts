@@ -597,6 +597,13 @@ export interface VoteHistoryEntry {
   producerPubkey?: string;
   amount: string;
   lockTime: number;
+  // Current on-chain locktime for BPoSv2 votes whose stake identity (by
+  // transaction_hash) is still in bpos_stakes. Reflects the latest value
+  // post any renewals. Absent when the vote row is truly ended (UTXO
+  // consumed and no follow-on stake) or for non-BPoSv2 vote types.
+  // When set, UI should prefer it over lockTime and treat as Active iff
+  // currentLockTime > chainTip.
+  currentLockTime?: number;
   stakeHeight: number;
   isActive: boolean;
   spentTxid?: string;

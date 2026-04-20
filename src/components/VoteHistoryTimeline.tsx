@@ -194,15 +194,22 @@ const VoteHistoryTimeline = ({ address }: Props) => {
                 ? getElectionTargetTerm(v.stakeHeight)
                 : isGovernance ? getTermFromHeight(v.stakeHeight) : 0;
               // Two BPoS vote states on the UI (per operator rule):
-              //   active — UTXO unspent AND lockTime still in the future
-              //   ended  — everything else (UTXO spent OR lockTime has passed)
-              // Rationale: once lockTime is reached the vote no longer counts
-              // for the validator, so it's effectively done regardless of
-              // whether the user has withdrawn the UTXO yet. Collapsing the
-              // two "not active" reasons into one badge keeps the UI simple.
-              const lockReached = chainTip > 0 && v.lockTime > 0 && chainTip >= v.lockTime;
-              const showActiveBadge = isStaking && v.isActive && !lockReached;
-              const showEndedBadge  = isStaking && (!v.isActive || lockReached);
+              //   active — the stake (by original tx identity) is STILL live on-chain
+              //            AND its current locktime is in the future
+              //   ended  — everything else (either no longer on-chain, or locktime passed)
+              //
+              // For BPoSv2, the node treats renewals as preserving the original
+              // tx's stake identity — so we ask bpos_stakes (refreshed from
+              // the node every 60s) whether this txid is still an active
+              // stake and, if so, use the CURRENT locktime (post renewals)
+              // rather than the original one recorded in the votes row.
+              // If currentLockTime is absent, fall back to v.lockTime and
+              // v.isActive for the legacy check.
+              const effectiveLockTime = v.currentLockTime ?? v.lockTime;
+              const stillOnChain = v.currentLockTime !== undefined || v.isActive;
+              const lockReached = chainTip > 0 && effectiveLockTime > 0 && chainTip >= effectiveLockTime;
+              const showActiveBadge = isStaking && stillOnChain && !lockReached;
+              const showEndedBadge  = isStaking && !showActiveBadge;
 
               return (
                 <div key={`${v.txid}-${v.candidate}-${i}`} className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-3 hover:bg-hover transition-colors gap-2">

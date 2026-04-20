@@ -673,17 +673,30 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		queryArgs = append(queryArgs, typeFilter)
 	}
 
+	// LEFT JOIN bpos_stakes bs ON v.txid = bs.transaction_hash AND v.vote_type = 4
+	//   — surfaces whether the stake identity (the creation tx) is STILL
+	//   represented in the node's authoritative active-stakes set. This
+	//   is the key to rendering "Active" vs "Ended" correctly after a
+	//   renewal: when user renews, the original vote row's UTXO is
+	//   consumed (v.is_active=FALSE) but the node keeps reporting the
+	//   stake under the ORIGINAL transactionhash with an updated locktime
+	//   — we want the UI to call that Active, not Ended.
+	//   bs.lock_time reflects the CURRENT on-chain locktime (post any
+	//   renewals); the UI uses it instead of v.lock_time for display when
+	//   present.
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT v.txid, v.vote_type, v.candidate, v.producer_pubkey, v.amount_sela,
 		       v.lock_time, v.stake_height, v.is_active, v.spent_txid,
 		       COALESCE(v.spent_height, 0),
 		       COALESCE(p.nickname, '') AS producer_name,
 		       COALESCE(cr.nickname, '') AS cr_name,
-		       COALESCE(t.timestamp, 0)
+		       COALESCE(t.timestamp, 0),
+		       bs.lock_time AS current_lock_time
 		FROM votes v
 		LEFT JOIN producers p ON v.producer_pubkey = p.owner_pubkey AND v.producer_pubkey != ''
 		LEFT JOIN cr_members cr ON (v.candidate = cr.cid OR v.candidate = cr.did) AND v.vote_type IN (1,2,3,4)
 		LEFT JOIN transactions t ON v.txid = t.txid
+		LEFT JOIN bpos_stakes bs ON bs.transaction_hash = v.txid AND v.vote_type = 4
 		`+whereClause+`
 		ORDER BY v.stake_height DESC
 		LIMIT $2 OFFSET $3`, queryArgs...)
@@ -697,13 +710,15 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var txid, candidate, producerPubkey, producerName, crName string
 		var spentTxid *string
+		var currentLockTime *int64
 		var voteType int
 		var amountSela, lockTime, stakeHeight, spentHeight, timestamp int64
 		var isActive bool
 
 		if err := rows.Scan(&txid, &voteType, &candidate, &producerPubkey, &amountSela,
 			&lockTime, &stakeHeight, &isActive, &spentTxid,
-			&spentHeight, &producerName, &crName, &timestamp); err != nil {
+			&spentHeight, &producerName, &crName, &timestamp,
+			&currentLockTime); err != nil {
 			slog.Warn("getAddressVoteHistory: scan failed", "error", err)
 			continue
 		}
@@ -741,6 +756,14 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		if spentHeight > 0 {
 			entry["spentHeight"] = spentHeight
+		}
+		// currentLockTime: present only for BPoSv2 votes whose stake
+		// identity (by transaction_hash) is still in bpos_stakes. Reflects
+		// the latest on-chain locktime (post any renewals). When set, the
+		// UI should prefer it over lockTime and treat the vote as Active
+		// iff currentLockTime > chainTip.
+		if currentLockTime != nil {
+			entry["currentLockTime"] = *currentLockTime
 		}
 
 		entries = append(entries, entry)

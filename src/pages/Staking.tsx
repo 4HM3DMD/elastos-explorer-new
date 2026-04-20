@@ -103,7 +103,12 @@ const Staking = () => {
           doesn't: distinct stakers, voting rights, unclaimed rewards. */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
         <MiniStat icon={Users} label="Total Stakers" value={fmtNumber(total)} />
-        <MiniStat icon={Shield} label="Voting Rights" value={summary ? fmtEla(summary.totalVotingRights, { compact: true }) : '\u2014'} />
+        <MiniStat
+          icon={Shield}
+          label="Voting Rights"
+          value={summary ? fmtEla(summary.totalVotingRights, { compact: true }) : '\u2014'}
+          tooltip="Effective vote weight in validator election and reward distribution. BPoS v2 formula: staked ELA × log₁₀(days locked). Longer locks earn more voting rights per ELA — a stake locked 100 days carries 2× the weight of the same ELA locked 10 days. Legacy DPoS v1 stakes count 1:1 with ELA."
+        />
         <MiniStat icon={Gift} label="Unclaimed Rewards" value={summary ? `${fmtEla(summary.totalUnclaimed, { compact: true })} ELA` : '\u2014'} />
       </div>
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,13 @@ import (
 	"ela-explorer/internal/db"
 	"ela-explorer/internal/metrics"
 	"ela-explorer/internal/node"
+)
+
+// Exponential backoff bounds for live-sync poll failures. Doubles on each
+// consecutive failure with ±25% jitter; resets to zero on the next success.
+const (
+	liveSyncBaseBackoff = 2 * time.Second
+	liveSyncMaxBackoff  = 60 * time.Second
 )
 
 func isBlockNotFound(err error) bool {
@@ -689,21 +697,64 @@ func (s *Syncer) liveSync(ctx context.Context) error {
 	ticker := time.NewTicker(time.Duration(s.pollIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
+	// Consecutive-failure count drives the exponential backoff in the error
+	// branch. errBlockPending is NOT a failure (the node just hasn't produced
+	// the next block yet), so it does not increment this counter.
+	consecutiveFails := 0
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := s.pollAndProcess(ctx); err != nil {
-				if errors.Is(err, errBlockPending) {
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				slog.Error("live sync poll error", "error", err)
-				time.Sleep(2 * time.Second)
+			err := s.pollAndProcess(ctx)
+			if err == nil {
+				consecutiveFails = 0
+				continue
+			}
+			if errors.Is(err, errBlockPending) {
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			consecutiveFails++
+			backoff := computeBackoff(consecutiveFails)
+			slog.Error("live sync poll error",
+				"error", err,
+				"consecutive_fails", consecutiveFails,
+				"backoff", backoff.Round(time.Millisecond),
+			)
+			// Use a timer + ctx.Done() instead of time.Sleep so a shutdown
+			// during a long backoff exits promptly.
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
 			}
 		}
 	}
+}
+
+// computeBackoff returns liveSyncBaseBackoff * 2^(fails-1) capped at
+// liveSyncMaxBackoff, with ±25% jitter so concurrent retriers don't
+// resonate on the node RPC.
+func computeBackoff(fails int) time.Duration {
+	if fails < 1 {
+		fails = 1
+	}
+	// 1<<30 is enough headroom to never overflow before we hit the cap.
+	shift := fails - 1
+	if shift > 30 {
+		shift = 30
+	}
+	d := liveSyncBaseBackoff << shift
+	if d > liveSyncMaxBackoff || d < 0 {
+		d = liveSyncMaxBackoff
+	}
+	// ±25% jitter
+	jitter := time.Duration(rand.Int63n(int64(d) / 2)) - d/4
+	return d + jitter
 }
 
 func (s *Syncer) pollAndProcess(ctx context.Context) error {

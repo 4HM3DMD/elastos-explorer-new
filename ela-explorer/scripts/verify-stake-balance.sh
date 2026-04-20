@@ -33,8 +33,8 @@ approx_eq() {
 }
 
 # ---- 1) Pull per-address staking from our API ----
-log "GET ${API_BASE}/api/v1/addresses/${ADDR}/staking"
-api_json="$(curl -fsS "${API_BASE}/api/v1/addresses/${ADDR}/staking" || true)"
+log "GET ${API_BASE}/api/v1/address/${ADDR}/staking"
+api_json="$(curl -fsS "${API_BASE}/api/v1/address/${ADDR}/staking" || true)"
 if [[ -z "$api_json" ]]; then
   err "API request failed or returned empty body"
   exit 1

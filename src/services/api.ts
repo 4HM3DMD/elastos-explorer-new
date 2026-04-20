@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import type {
   APIResponse, Block, BlockSummary, Transaction, TransactionSummary,
   AddressInfo, AddressStaking, RichAddress, Producer,
@@ -13,6 +13,81 @@ const api = axios.create({
   baseURL: getCurrentNetworkConfig().apiUrl,
   timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 15000,
 });
+
+// ============================================================================
+// Retry with exponential backoff + degraded-mode signalling
+// ----------------------------------------------------------------------------
+// Only idempotent methods (GET/HEAD) retry. Only network errors, 5xx, and 429
+// are retried. Non-retryable errors (4xx, cancellation) fail immediately.
+// The degraded-mode subscribers fire once when >=2 consecutive failures occur
+// and once more when a request succeeds after a degraded period — driving the
+// <DegradedBanner /> UI without per-component plumbing.
+// ============================================================================
+
+const MAX_RETRIES = 2;                 // 3 total attempts (initial + 2 retries)
+const BASE_BACKOFF_MS = 400;           // 400ms → 800ms → 1600ms-ish
+const DEGRADED_THRESHOLD = 2;          // consecutive failures before banner shows
+
+type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number };
+
+let consecutiveFailures = 0;
+let degraded = false;
+const subscribers = new Set<(d: boolean) => void>();
+
+function setDegraded(next: boolean): void {
+  if (next === degraded) return;
+  degraded = next;
+  subscribers.forEach((fn) => fn(next));
+}
+
+export function subscribeBackendHealth(fn: (degraded: boolean) => void): () => void {
+  subscribers.add(fn);
+  fn(degraded);
+  return () => { subscribers.delete(fn); };
+}
+
+export function isBackendDegraded(): boolean {
+  return degraded;
+}
+
+function shouldRetry(method: string | undefined, error: AxiosError): boolean {
+  const m = (method || 'get').toLowerCase();
+  if (m !== 'get' && m !== 'head') return false;
+  if (axios.isCancel(error)) return false;
+  // Network layer: no response received at all → retry.
+  if (!error.response) return true;
+  const status = error.response.status;
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function backoffDelay(attempt: number): number {
+  // Full jitter: uniform(0, BASE * 2^attempt)
+  return Math.round(Math.random() * BASE_BACKOFF_MS * (1 << attempt));
+}
+
+api.interceptors.response.use(
+  (response) => {
+    if (consecutiveFailures > 0) {
+      consecutiveFailures = 0;
+      setDegraded(false);
+    }
+    return response;
+  },
+  async (error: AxiosError) => {
+    const cfg = error.config as RetryConfig | undefined;
+    const retried = cfg?._retryCount ?? 0;
+
+    if (cfg && retried < MAX_RETRIES && shouldRetry(cfg.method, error)) {
+      cfg._retryCount = retried + 1;
+      await new Promise((resolve) => setTimeout(resolve, backoffDelay(retried)));
+      return api.request(cfg as AxiosRequestConfig);
+    }
+
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= DEGRADED_THRESHOLD) setDegraded(true);
+    return Promise.reject(error);
+  },
+);
 
 function unwrap<T>(response: { data: APIResponse<T> }): T {
   if (response.data?.error) throw new Error(response.data.error);

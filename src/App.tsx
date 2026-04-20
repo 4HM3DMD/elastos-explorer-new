@@ -5,6 +5,7 @@ import { HelmetProvider } from 'react-helmet-async';
 import { Toaster } from 'sonner';
 import Layout from './components/Layout.js';
 import ScrollToTop from './components/ScrollToTop.js';
+import DegradedBanner from './components/DegradedBanner.js';
 
 const Home = lazy(() => import('./pages/Home.js'));
 const BlocksList = lazy(() => import('./pages/BlocksList.js'));
@@ -133,6 +134,7 @@ function App() {
     <HelmetProvider>
       <Router>
         <ScrollToTop />
+        <DegradedBanner />
         <Layout>
           <ErrorBoundary>
             <AnimatedRoutes />

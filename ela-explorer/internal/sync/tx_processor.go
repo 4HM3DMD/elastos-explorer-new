@@ -1103,7 +1103,23 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 		amountSela := parseELAToSela(renewal.VotesInfo.Votes)
 		stakingRights := computeStakingRights(VoteDposV2, amountSela, renewal.VotesInfo.LockTime, blockHeight)
 
-		if _, err := pgxTx.Exec(ctx, "UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3 WHERE (renewal_ref=$1 OR txid=$1) AND is_active=TRUE",
+		// Deactivate the previous vote(s) chained off this renewal.ReferKey.
+		// The `AND txid != $2` guard is critical: on any re-processing of
+		// this same block (reorg rewind+replay, crash-recovery re-scan,
+		// backfill hitting a block we already indexed), the row inserted by
+		// the previous pass carries renewal_ref = $1 and is_active = TRUE,
+		// so WITHOUT this guard the UPDATE would match the row *we just
+		// created* and mark it spent by its own transaction. That left the
+		// DB with is_active=f / spent_txid=<self-txid>, causing the
+		// staking UI to mis-render renewed stakes as "ended" even while
+		// the node RPC still reported them active. See:
+		//   https://.../tx/9c3694a4...066d8615
+		//   DB: spent_txid == txid (the dead-giveaway)
+		if _, err := pgxTx.Exec(ctx, `
+			UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3
+			WHERE (renewal_ref=$1 OR txid=$1)
+			  AND is_active=TRUE
+			  AND txid != $2`,
 			renewal.ReferKey, tx.TxID, blockHeight); err != nil {
 			slog.Warn("handleVoting: deactivate renewal failed", "error", err)
 		}
@@ -1111,7 +1127,11 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 		if _, err := pgxTx.Exec(ctx, `
 			INSERT INTO votes (txid, vout_n, address, producer_pubkey, candidate, vote_type, amount_sela, lock_time, stake_height, expiry_height, staking_rights, is_active, renewal_ref)
 			VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
-			ON CONFLICT (txid, vout_n, candidate, vote_type) DO NOTHING`,
+			ON CONFLICT (txid, vout_n, candidate, vote_type) DO UPDATE SET
+				is_active=TRUE, spent_txid=NULL, spent_height=NULL,
+				lock_time=EXCLUDED.lock_time, expiry_height=EXCLUDED.expiry_height,
+				amount_sela=EXCLUDED.amount_sela, staking_rights=EXCLUDED.staking_rights,
+				renewal_ref=EXCLUDED.renewal_ref`,
 			tx.TxID, voterAddr, renewal.VotesInfo.Candidate, renewal.VotesInfo.Candidate, VoteDposV2,
 			amountSela, renewal.VotesInfo.LockTime, blockHeight, renewal.VotesInfo.LockTime,
 			stakingRights, renewal.ReferKey,

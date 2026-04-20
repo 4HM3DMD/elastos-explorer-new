@@ -1359,12 +1359,14 @@ func (a *Aggregator) refreshVoterRights(ctx context.Context) error {
 		processed++
 	}
 
-	// Only run stale cleanup when at least one chunk succeeded (results map has
-	// entries); otherwise a full RPC outage would nuke our table.
-	if len(results) > 0 {
-		cutoff := now - 300
+	// Set-difference cleanup: delete rows whose stake_address is no longer in
+	// bpos_stakes. Uses the enumerated `valid` list — NOT time-based — so a
+	// single flaky chunk can't wipe otherwise-fine rows. Gated by
+	// len(results) > 0 so a full RPC outage still can't nuke the table.
+	// Mirrors the pattern in refreshBPoSStakes (see DELETE ... != ALL above).
+	if len(results) > 0 && len(valid) > 0 {
 		if _, err := a.db.Syncer.Exec(ctx,
-			"DELETE FROM voter_rights WHERE last_updated < $1", cutoff); err != nil {
+			"DELETE FROM voter_rights WHERE stake_address != ALL($1)", valid); err != nil {
 			slog.Warn("refreshVoterRights: stale cleanup failed", "error", err)
 		}
 	}

@@ -62,5 +62,54 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 			"note", "one-time correction for tx_processor.go bug prior to this release")
 	}
 
+	// Heal #2 (2026-04 renewal-resurrection bug in Heal #1) — Heal #1 was
+	// too permissive: it restored every self-spent row to is_active=TRUE,
+	// but ~90% of those rows had legitimately been consumed by a LATER
+	// renewal tx. The bug had overwritten their correct spent_txid with
+	// self-txid; restoring them to active erased the real consumer.
+	//
+	// Fix by cross-checking tx_vins, the authoritative consumer record:
+	//   - If a later tx's vin references (prev_txid=vote.txid, prev_vout=0),
+	//     the row's correct state is is_active=FALSE with spent_txid set
+	//     to that consumer. Re-apply the correct state.
+	//   - If no consumer exists in tx_vins, Heal #1's restoration was
+	//     correct — leave it alone.
+	//
+	// Scope: BPoSv2 votes (vote_type=4) that currently look truly-active
+	// (is_active=TRUE, spent_txid=NULL, renewal_ref NOT NULL) AND have a
+	// matching consumer in tx_vins. This combination only occurs on rows
+	// Heal #1 touched in error; a naturally-active unspent row has no
+	// tx_vins consumer. Idempotent: zero rows match after the first pass.
+	res, err = pool.Exec(ctx, `
+		WITH consumers AS (
+			SELECT v.txid                  AS vote_txid,
+			       tv.txid                 AS consumer_txid,
+			       COALESCE(t.block_height, 0) AS consumer_block
+			FROM votes v
+			JOIN tx_vins tv
+			  ON tv.prev_txid = v.txid
+			 AND tv.prev_vout = 0
+			LEFT JOIN transactions t ON t.txid = tv.txid
+			WHERE v.vote_type = 4
+			  AND v.is_active = TRUE
+			  AND v.spent_txid IS NULL
+			  AND v.renewal_ref IS NOT NULL
+		)
+		UPDATE votes v
+		SET is_active    = FALSE,
+		    spent_txid   = c.consumer_txid,
+		    spent_height = NULLIF(c.consumer_block, 0)
+		FROM consumers c
+		WHERE v.txid = c.vote_txid`)
+	if err != nil {
+		return fmt.Errorf("heal #2 (renewal resurrection correction): %w", err)
+	}
+	if n := res.RowsAffected(); n > 0 {
+		slog.Warn("data-heal applied: corrected rows Heal #1 wrongly resurrected",
+			"heal", "renewal-resurrection-correction",
+			"rows_corrected", n,
+			"note", "set is_active=FALSE + real spent_txid from tx_vins")
+	}
+
 	return nil
 }

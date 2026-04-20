@@ -383,6 +383,18 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 	pageSize := clampPageSize(parseInt(r.URL.Query().Get("pageSize"), 50), 200)
 	offset := (page - 1) * pageSize
 
+	// Full-response LRU cache. voter_rights refreshes every 60s so the cache
+	// TTL (see ServerConfig.CacheTTL; default 30s) is safely shorter than the
+	// data refresh interval — users never see data >60s stale. Keyed on
+	// (page, pageSize) so /stakers?pageSize=50 and ?pageSize=20 don't collide.
+	cacheKey := fmt.Sprintf("topStakers:p%d:s%d", page, pageSize)
+	if cached, ok := s.cache.Get(cacheKey); ok {
+		if resp, ok := cached.(APIResponse); ok {
+			writeJSON(w, 200, resp)
+			return
+		}
+	}
+
 	var total int64
 	if err := s.db.API.QueryRow(r.Context(),
 		"SELECT COUNT(DISTINCT stake_address) FROM bpos_stakes").Scan(&total); err != nil {
@@ -479,10 +491,17 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 			stakeAddrs[i] = s["address"].(string)
 		}
 		originMap := make(map[string]string, len(stakeAddrs))
+		// tx_vins.txid is character(64), bpos_stakes.transaction_hash is text.
+		// Without an explicit cast the planner can't use the tx_vins_pkey(txid,n)
+		// index — it falls back to a parallel seq scan of all ~13M rows (~2s).
+		// Casting bpos_stakes.transaction_hash to character(64) on the join
+		// lets the planner probe the PK directly (~5ms).
 		if origRows, err := s.db.API.Query(r.Context(), `
 			SELECT DISTINCT ON (b.stake_address) b.stake_address, v.address
 			FROM bpos_stakes b
-			JOIN tx_vins v ON v.txid = b.transaction_hash AND v.n = 0
+			JOIN tx_vins v
+			  ON v.txid = b.transaction_hash::character(64)
+			 AND v.n = 0
 			WHERE b.stake_address = ANY($1)`, stakeAddrs); err != nil {
 			slog.Warn("getTopStakers: origin address resolution failed", "error", err)
 		} else {
@@ -508,7 +527,9 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 		"totalUnclaimed":    selaToELA(totalUnclaimedSela),
 	}
 
-	writeJSON(w, 200, APIResponse{Data: stakers, Total: total, Page: page, Size: pageSize, Summary: summary})
+	resp := APIResponse{Data: stakers, Total: total, Page: page, Size: pageSize, Summary: summary}
+	s.cache.Set(cacheKey, resp)
+	writeJSON(w, 200, resp)
 }
 
 // ── Balance History ─────────────────────────────────────────────────────────

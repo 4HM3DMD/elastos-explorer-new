@@ -93,7 +93,7 @@ const MarkdownContent = ({ content, className, draftHash }: MarkdownContentProps
   }
 
   return (
-    <div className={cn('markdown-content', className)}>
+    <div className={cn('markdown-content overflow-hidden', className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{ a: MarkdownLink }}

@@ -1,34 +1,43 @@
-import { useState, useEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { CRProposal } from '../types/blockchain';
-import { PROPOSAL_STATUS_COLORS, PROPOSAL_STATUS_LABELS, PROPOSAL_TYPE_NAMES } from '../types/blockchain';
-import { FileText, Users, Coins, GitBranch, ThumbsUp, ThumbsDown, Minus, Hash, ExternalLink, Clock } from 'lucide-react';
+import { PROPOSAL_STATUS_COLORS, PROPOSAL_STATUS_LABELS } from '../types/blockchain';
+import { FileText, Users, Coins, GitBranch, ThumbsUp, ThumbsDown, Minus, Hash, ExternalLink, Clock, ChevronDown, X } from 'lucide-react';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
-import { fmtEla } from '../utils/format';
+import { fmtEla, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
 
 const CR_VOTING_PERIOD_BLOCKS = 5040;
 const VETO_PERIOD_BLOCKS = 5040;
-
-const PROPOSAL_STATUSES = [
-  { raw: 'All', label: 'All' },
-  { raw: 'Registered', label: 'Under Review' },
-  { raw: 'VoterAgreed', label: 'Passed' },
-  { raw: 'Notification', label: 'Veto Period' },
-  { raw: 'Finished', label: 'Final' },
-  { raw: 'CRCanceled', label: 'Rejected' },
-  { raw: 'VoterCanceled', label: 'Vetoed' },
-  { raw: 'Terminated', label: 'Terminated' },
-] as const;
-
 const PAGE_SIZE = 20;
+const PORTAL_BANNER_DISMISS_KEY = 'dao-portal-banner-dismissed';
+
+type FilterRaw = 'All' | 'Registered' | 'Notification' | 'VoterAgreed' | 'Finished' | 'CRCanceled' | 'VoterCanceled' | 'Terminated';
+
+const PRIMARY_FILTERS: { raw: FilterRaw; label: string }[] = [
+  { raw: 'All',          label: 'All' },
+  { raw: 'Registered',   label: 'Under Review' },
+  { raw: 'Notification', label: 'Veto Period' },
+  { raw: 'VoterAgreed',  label: 'Passed' },
+];
+
+const OTHERS_FILTERS: { raw: FilterRaw; label: string }[] = [
+  { raw: 'Finished',      label: 'Final' },
+  { raw: 'CRCanceled',    label: 'Rejected' },
+  { raw: 'VoterCanceled', label: 'Vetoed' },
+  { raw: 'Terminated',    label: 'Terminated' },
+];
+
+const FILTER_LABEL_BY_RAW: Record<string, string> = Object.fromEntries(
+  [...PRIMARY_FILTERS, ...OTHERS_FILTERS].map(f => [f.raw, f.label])
+);
 
 const NAV_TABS = [
-  { label: 'Council Members', path: '/governance', icon: Users },
-  { label: 'Proposals', path: '/governance/proposals', icon: FileText },
+  { label: 'Council Members', path: '/governance',           icon: Users },
+  { label: 'Proposals',       path: '/governance/proposals', icon: FileText },
 ] as const;
 
 const STATUS_BORDER_COLORS: Record<string, string> = {
@@ -44,65 +53,27 @@ const STATUS_BORDER_COLORS: Record<string, string> = {
   Aborted:       'border-l-gray-600',
 };
 
-const STATUS_CARD_STYLES: Record<string, { base: React.CSSProperties; hover: React.CSSProperties }> = {
+const STATUS_CARD_STYLES: Record<string, { base: CSSProperties; hover: CSSProperties }> = {
   Registered: {
-    base: {
-      boxShadow: '0 0 12px rgba(59,130,246,0.08), inset 0 1px 0 rgba(59,130,246,0.06)',
-      borderColor: 'rgba(59,130,246,0.25)',
-    },
-    hover: {
-      boxShadow: '0 0 16px rgba(59,130,246,0.15), inset 0 1px 0 rgba(59,130,246,0.08)',
-      borderColor: 'rgba(59,130,246,0.4)',
-    },
+    base:  { boxShadow: '0 0 12px rgba(59,130,246,0.08), inset 0 1px 0 rgba(59,130,246,0.06)', borderColor: 'rgba(59,130,246,0.25)' },
+    hover: { boxShadow: '0 0 16px rgba(59,130,246,0.15), inset 0 1px 0 rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.4)' },
   },
   Notification: {
-    base: {
-      boxShadow: '0 0 12px rgba(168,85,247,0.08), inset 0 1px 0 rgba(168,85,247,0.06)',
-      borderColor: 'rgba(168,85,247,0.25)',
-    },
-    hover: {
-      boxShadow: '0 0 16px rgba(168,85,247,0.15), inset 0 1px 0 rgba(168,85,247,0.08)',
-      borderColor: 'rgba(168,85,247,0.4)',
-    },
+    base:  { boxShadow: '0 0 12px rgba(168,85,247,0.08), inset 0 1px 0 rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.25)' },
+    hover: { boxShadow: '0 0 16px rgba(168,85,247,0.15), inset 0 1px 0 rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.4)' },
   },
 };
 
-function formatBudget(budgetTotal?: string): string {
-  if (!budgetTotal || budgetTotal === '0' || budgetTotal === '') return '';
-  return `${fmtEla(budgetTotal, { compact: true })} ELA`;
-}
-
-function getProposalTypeName(type: number): string {
-  return PROPOSAL_TYPE_NAMES[type] ?? `Type ${type}`;
+function formatBudgetList(budgetTotal?: string, budgets?: CRProposal['budgets']): string {
+  const ela = resolveProposalBudgetEla(budgetTotal, budgets ?? null);
+  if (!ela || ela === 0) return '';
+  return `${fmtEla(ela, { compact: true })} ELA`;
 }
 
 function getProposalDisplayTitle(p: CRProposal): string {
   if (p.title) return p.title;
-  const typeName = getProposalTypeName(p.proposalType);
-  const author = p.crMemberName || 'Unknown';
-  return `${typeName} by ${author}`;
-}
-
-function stripFormatting(text: string): string {
-  return text
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/(\*\*|__)(.*?)\1/g, '$2')
-    .replace(/(\*|_)(.*?)\1/g, '$2')
-    .replace(/#{1,6}\s+/g, '')
-    .replace(/~~(.*?)~~/g, '$1')
-    .replace(/`{1,3}[^`]*`{1,3}/g, '')
-    .replace(/\n{2,}/g, ' ')
-    .replace(/\n/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+  const author = p.ownerName || p.crMemberName || 'Unknown';
+  return `Proposal by ${author}`;
 }
 
 const VOTING_OPEN_STATUSES = new Set(['Registered']);
@@ -169,18 +140,23 @@ function getCountdown(status: string, registerHeight: number, currentHeight: num
   return null;
 }
 
-const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: number }) => {
+function padNumber(n: number, width: number): string {
+  const s = n.toString();
+  if (s.length >= width) return s;
+  return '0'.repeat(width - s.length) + s;
+}
+
+const ProposalCard = ({ p, currentHeight, padWidth }: { p: CRProposal; currentHeight: number; padWidth: number }) => {
   const statusColor = PROPOSAL_STATUS_COLORS[p.status] || 'bg-gray-500/20 text-gray-400';
   const borderColor = STATUS_BORDER_COLORS[p.status] || 'border-l-gray-500';
   const hash = p.proposalHash ?? '';
   const displayTitle = getProposalDisplayTitle(p);
-  const budget = formatBudget(p.budgetTotal);
+  const budget = formatBudgetList(p.budgetTotal, p.budgets);
   const hasTracking = (p.trackingCount ?? 0) > 0;
   const totalBudgetStages =
     (p.budgets?.length ?? 0) > 0
       ? Math.max(...(p.budgets!.map(b => b.stage)))
       : (p.trackingCount ?? 0);
-  const typeName = getProposalTypeName(p.proposalType);
   const statusLabel = PROPOSAL_STATUS_LABELS[p.status] ?? p.status;
 
   const countdown = getCountdown(p.status, p.registerHeight, currentHeight);
@@ -191,11 +167,13 @@ const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: numb
     ? (hovered ? { ...cardGlow.base, ...cardGlow.hover } : cardGlow.base)
     : undefined;
 
+  const proposalNum = p.proposalNumber;
+
   return (
     <Link
       to={`/governance/proposal/${hash}`}
       className={cn(
-        'card block p-4 sm:p-5 border-l-[3px] transition-all duration-200 group',
+        'card block p-3 sm:p-3.5 border-l-[3px] transition-all duration-200 group',
         !cardGlow && 'hover:border-[var(--color-border-strong)]',
         borderColor
       )}
@@ -203,8 +181,8 @@ const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: numb
       onMouseEnter={cardGlow ? () => setHovered(true) : undefined}
       onMouseLeave={cardGlow ? () => setHovered(false) : undefined}
     >
-      <div className="flex items-center justify-between gap-3 mb-2.5">
-        <div className="flex items-center gap-2 flex-wrap min-w-0">
+      <div className="flex items-center justify-between gap-2.5 mb-2">
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <span className={cn('badge', statusColor)}>{statusLabel}</span>
           {countdown && (
             <span className={cn(
@@ -222,7 +200,6 @@ const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: numb
               }
             </span>
           )}
-          <span className="badge bg-[var(--color-surface-secondary)] text-secondary">{typeName}</span>
         </div>
         {budget && (
           <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-amber-400 shrink-0">
@@ -232,27 +209,35 @@ const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: numb
         )}
       </div>
 
-      <div className="mb-3">
-        <h3 className="text-sm sm:text-base font-semibold text-primary line-clamp-2 group-hover:text-brand transition-colors leading-snug">
-          {p.proposalNumber != null && <span className="text-muted font-mono mr-1.5">#{p.proposalNumber}</span>}
+      <div className="mb-2 flex items-start gap-2">
+        {proposalNum != null && (
+          <span className="inline-flex items-center shrink-0 mt-0.5 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono text-[11px] font-semibold tabular-nums leading-none tracking-tight">
+            #{padNumber(proposalNum, padWidth)}
+          </span>
+        )}
+        <h3 className="text-sm sm:text-[15px] font-semibold text-primary line-clamp-2 group-hover:text-brand transition-colors leading-snug min-w-0">
           {displayTitle}
         </h3>
-        {p.abstract && (
-          <p className="text-xs text-secondary line-clamp-2 mt-1.5 leading-relaxed">{stripFormatting(p.abstract)}</p>
-        )}
       </div>
 
-      <div className="flex items-center justify-between gap-3 flex-wrap pt-2.5 border-t border-[var(--color-border)]/50">
-        <div className="flex items-center gap-3 text-[11px] text-muted min-w-0">
-          <span className="truncate">
-            Promoted by <span className="text-primary font-medium">{p.crMemberName || 'Unknown'}</span>
-          </span>
-          {p.registerHeight != null && p.registerHeight > 0 && (
-            <span className="inline-flex items-center gap-0.5 font-mono shrink-0">
-              <Hash size={9} className="opacity-50" />
-              {p.registerHeight.toLocaleString()}
+      <div className="flex items-center justify-between gap-3 flex-wrap pt-2 border-t border-[var(--color-border)]/50">
+        <div className="flex flex-col gap-0.5 min-w-0 text-[11px] text-muted">
+          {p.ownerName && p.ownerName.trim() !== (p.crMemberName || '').trim() && (
+            <span className="truncate">
+              Drafted by <span className="text-primary font-medium">{p.ownerName}</span>
             </span>
           )}
+          <div className="flex items-center gap-3 flex-wrap min-w-0">
+            <span className="truncate">
+              Promoted by <span className="text-primary font-medium">{p.crMemberName || 'Unknown'}</span>
+            </span>
+            {p.registerHeight != null && p.registerHeight > 0 && (
+              <span className="inline-flex items-center gap-0.5 font-mono shrink-0">
+                <Hash size={9} className="opacity-50" />
+                {p.registerHeight.toLocaleString()}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {hasTracking && (
@@ -274,19 +259,19 @@ const ProposalCard = ({ p, currentHeight }: { p: CRProposal; currentHeight: numb
 };
 
 const ProposalCardSkeleton = () => (
-  <div className="card p-4 sm:p-5 border-l-[3px] border-l-[var(--color-border)]">
-    <div className="flex items-center justify-between gap-3 mb-2.5">
-      <div className="flex gap-2">
+  <div className="card p-3 sm:p-3.5 border-l-[3px] border-l-[var(--color-border)]">
+    <div className="flex items-center justify-between gap-2.5 mb-2">
+      <div className="flex gap-1.5">
         <div className="h-5 w-24 animate-shimmer rounded-md" />
         <div className="h-5 w-16 animate-shimmer rounded-md" />
       </div>
       <div className="h-4 w-20 animate-shimmer rounded" />
     </div>
-    <div className="mb-3">
-      <div className="h-5 w-4/5 animate-shimmer rounded mb-1.5" />
-      <div className="h-3.5 w-3/5 animate-shimmer rounded" />
+    <div className="mb-2 flex items-start gap-2">
+      <div className="h-5 w-12 animate-shimmer rounded-md shrink-0" />
+      <div className="h-5 w-4/5 animate-shimmer rounded" />
     </div>
-    <div className="flex items-center justify-between gap-3 pt-2.5 border-t border-[var(--color-border)]/50">
+    <div className="flex items-center justify-between gap-3 pt-2 border-t border-[var(--color-border)]/50">
       <div className="flex gap-2">
         <div className="h-3 w-28 animate-shimmer rounded" />
         <div className="h-3 w-14 animate-shimmer rounded" />
@@ -299,6 +284,109 @@ const ProposalCardSkeleton = () => (
   </div>
 );
 
+type StatCounts = { total: number; passed: number; underReview: number };
+
+const StatStrip = ({ counts, loading }: { counts: StatCounts | null; loading: boolean }) => {
+  const cells: { label: string; value: number | null; accent: string }[] = [
+    { label: 'Total proposals', value: counts?.total        ?? null, accent: 'text-primary' },
+    { label: 'Passed',          value: counts?.passed       ?? null, accent: 'text-green-400' },
+    { label: 'Under review',    value: counts?.underReview  ?? null, accent: 'text-blue-400' },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+      {cells.map(c => (
+        <div key={c.label} className="card px-3 py-2.5 sm:py-3">
+          <div className="text-[10px] sm:text-[11px] text-muted uppercase tracking-wider mb-1">{c.label}</div>
+          {loading || c.value == null ? (
+            <div className="h-6 w-16 animate-shimmer rounded" />
+          ) : (
+            <div className={cn('text-lg sm:text-xl font-[200] tabular-nums tracking-tight', c.accent)}>
+              {c.value.toLocaleString()}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const OthersDropdown = ({
+  activeRaw,
+  onPick,
+}: {
+  activeRaw: FilterRaw;
+  onPick: (raw: FilterRaw) => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const isActiveInOthers = OTHERS_FILTERS.some(f => f.raw === activeRaw);
+  const activeLabel = isActiveInOthers ? FILTER_LABEL_BY_RAW[activeRaw] : 'Others';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-pressed={isActiveInOthers}
+        className={cn(
+          'px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-all duration-200 border inline-flex items-center gap-1.5',
+          isActiveInOthers
+            ? 'bg-brand text-white border-brand shadow-sm shadow-brand/20'
+            : 'border-[var(--color-border)] text-secondary hover:text-primary hover:border-[var(--color-border-strong)]'
+        )}
+      >
+        {activeLabel}
+        <ChevronDown size={11} className={cn('transition-transform duration-150', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className="absolute left-0 top-[calc(100%+4px)] z-20 min-w-[160px] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-secondary)] shadow-lg py-1"
+        >
+          {OTHERS_FILTERS.map(({ raw, label }) => {
+            const isSel = raw === activeRaw;
+            return (
+              <button
+                key={raw}
+                role="option"
+                aria-selected={isSel}
+                type="button"
+                onClick={() => { onPick(raw); setOpen(false); }}
+                className={cn(
+                  'w-full text-left px-3 py-1.5 text-xs transition-colors',
+                  isSel
+                    ? 'bg-brand/10 text-brand font-semibold'
+                    : 'text-secondary hover:text-primary hover:bg-white/[0.04]'
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const CRProposals = () => {
   const [proposals, setProposals] = useState<CRProposal[]>([]);
   const [loading, setLoading] = useState(true);
@@ -306,8 +394,21 @@ const CRProposals = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
-  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [statusFilter, setStatusFilter] = useState<FilterRaw>('All');
   const [currentHeight, setCurrentHeight] = useState(0);
+
+  const [counts, setCounts] = useState<StatCounts | null>(null);
+  const [countsLoading, setCountsLoading] = useState(true);
+
+  const [bannerHidden, setBannerHidden] = useState(() => {
+    try { return typeof window !== 'undefined' && window.localStorage.getItem(PORTAL_BANNER_DISMISS_KEY) === '1'; }
+    catch { return false; }
+  });
+
+  const dismissBanner = useCallback(() => {
+    setBannerHidden(true);
+    try { window.localStorage.setItem(PORTAL_BANNER_DISMISS_KEY, '1'); } catch { /* ignore */ }
+  }, []);
 
   const fetchProposals = useCallback(async () => {
     try {
@@ -323,7 +424,7 @@ const CRProposals = () => {
       setTotalPages(Math.max(1, Math.ceil(response.total / PAGE_SIZE)));
       if (stats) setCurrentHeight(stats.latestHeight);
     } catch {
-      setError('Failed to fetch CR proposals');
+      setError('Failed to fetch DAO proposals');
     } finally {
       setLoading(false);
     }
@@ -332,6 +433,34 @@ const CRProposals = () => {
   useEffect(() => {
     fetchProposals();
   }, [fetchProposals]);
+
+  // Fetch aggregate counts once on mount. Stats are independent of the active filter.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setCountsLoading(true);
+        const [all, passed, under] = await Promise.all([
+          blockchainApi.getCRProposals(1, 1),
+          blockchainApi.getCRProposals(1, 1, 'VoterAgreed'),
+          blockchainApi.getCRProposals(1, 1, 'Registered'),
+        ]);
+        if (cancelled) return;
+        setCounts({ total: all.total, passed: passed.total, underReview: under.total });
+      } catch {
+        if (!cancelled) setCounts(null);
+      } finally {
+        if (!cancelled) setCountsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const padWidth = useMemo(() => {
+    const n = counts?.total ?? totalItems;
+    if (n <= 0) return 2;
+    return Math.max(2, String(n).length);
+  }, [counts?.total, totalItems]);
 
   if (loading && proposals.length === 0) return <PageSkeleton />;
 
@@ -344,10 +473,10 @@ const CRProposals = () => {
     );
   }
 
-  const activeFilterLabel = PROPOSAL_STATUSES.find(s => s.raw === statusFilter)?.label ?? 'All';
+  const activeFilterLabel = FILTER_LABEL_BY_RAW[statusFilter] ?? 'All';
 
   return (
-    <div className="px-4 lg:px-6 py-6 space-y-6">
+    <div className="px-4 lg:px-6 py-6 space-y-5">
       <SEO title="DAO Proposals" description="Elastos DAO proposals for Elastos governance. Track proposal status, council votes, budgets, and implementation progress." path="/governance/proposals" />
       {/* Page header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -357,7 +486,9 @@ const CRProposals = () => {
           </div>
           <div>
             <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">DAO Proposals</h1>
-            <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">{totalItems.toLocaleString()} proposals indexed</p>
+            <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">
+              Governance on Elastos · sorted by newest
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
@@ -384,9 +515,12 @@ const CRProposals = () => {
         </div>
       </div>
 
-      {/* Status filter pills */}
-      <div className="flex flex-wrap gap-1.5 sm:gap-2">
-        {PROPOSAL_STATUSES.map(({ raw, label }) => {
+      {/* Stat strip */}
+      <StatStrip counts={counts} loading={countsLoading} />
+
+      {/* Filter bar: primary pills + Others dropdown + active count */}
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+        {PRIMARY_FILTERS.map(({ raw, label }) => {
           const isActive = statusFilter === raw;
           return (
             <button
@@ -401,43 +535,48 @@ const CRProposals = () => {
               )}
             >
               {label}
-              {isActive && totalItems > 0 && (
-                <span className="ml-1.5 text-[10px] opacity-80">({totalItems})</span>
-              )}
             </button>
           );
         })}
-      </div>
 
-      {/* Result count */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <FileText size={13} className="text-muted" />
-          <span className="text-xs text-muted">
-            Showing <span className="text-primary font-semibold">{totalItems.toLocaleString()}</span> {activeFilterLabel !== 'All' ? activeFilterLabel.toLowerCase() : ''} proposal{totalItems !== 1 ? 's' : ''}
-          </span>
+        <OthersDropdown
+          activeRaw={statusFilter}
+          onPick={(raw) => { setStatusFilter(raw); setCurrentPage(1); }}
+        />
+
+        <div className="ml-auto text-[11px] text-muted tabular-nums">
+          {totalItems.toLocaleString()} {activeFilterLabel !== 'All' ? activeFilterLabel.toLowerCase() : 'total'}
         </div>
-        <span className="text-[10px] text-muted font-mono">Newest first</span>
       </div>
 
-      {/* DAO Portal banner */}
-      <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-brand/20 bg-brand/5">
-        <span className="text-xs text-secondary leading-relaxed">
-          To submit a proposal or learn more about the Elastos DAO process, visit the{' '}
-          <a
-            href="https://elastos.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-semibold text-brand hover:underline"
+      {/* DAO Portal banner (dismissible) */}
+      {!bannerHidden && (
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-brand/20 bg-brand/5">
+          <span className="text-xs text-secondary leading-relaxed flex-1">
+            To submit a proposal or learn more about the Elastos DAO process, visit the{' '}
+            <a
+              href="https://elastos.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-semibold text-brand hover:underline"
+            >
+              Elastos DAO Portal <ExternalLink size={10} />
+            </a>
+          </span>
+          <button
+            type="button"
+            onClick={dismissBanner}
+            aria-label="Dismiss"
+            className="shrink-0 p-1 rounded-md text-muted hover:text-primary hover:bg-white/[0.06] transition-colors"
           >
-            Elastos DAO Portal <ExternalLink size={10} />
-          </a>
-        </span>
-      </div>
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Proposal cards */}
       {loading ? (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {Array.from({ length: 6 }).map((_, i) => (
             <ProposalCardSkeleton key={i} />
           ))}
@@ -449,9 +588,9 @@ const CRProposals = () => {
           <p className="text-xs text-muted">Try selecting a different status filter</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {proposals.map((p) => (
-            <ProposalCard key={p.proposalHash || p.txHash} p={p} currentHeight={currentHeight} />
+            <ProposalCard key={p.proposalHash || p.txHash} p={p} currentHeight={currentHeight} padWidth={padWidth} />
           ))}
         </div>
       )}

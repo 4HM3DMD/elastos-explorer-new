@@ -3,12 +3,15 @@ import { Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { VoteHistoryEntry, AddressStaking } from '../types/blockchain';
 import { VOTE_TYPE_NAMES } from '../types/blockchain';
-import { Shield, Coins, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Shield, Coins, CheckCircle, XCircle, ArrowRight, Lock } from 'lucide-react';
 import Pagination from './Pagination';
 import StatCard from './StatCard';
-import { formatEla, fmtTime } from '../utils/format';
+import RelativeTime from './RelativeTime';
+import { formatEla } from '../utils/format';
+import { getTermFromHeight, getElectionTargetTerm } from '../constants/governance';
 import { cn } from '../lib/cn';
 
+/** voteType 0 = Delegate (legacy DPoS), 1 = DAO Council, 2 = DAO Proposal, 3 = Council Impeachment, 4 = BPoS */
 const VOTE_TYPE_STYLES: Record<number, string> = {
   0: 'bg-zinc-500/15 text-zinc-400',
   1: 'bg-violet-500/15 text-violet-400',
@@ -16,6 +19,9 @@ const VOTE_TYPE_STYLES: Record<number, string> = {
   3: 'bg-red-500/15 text-red-400',
   4: 'bg-sky-500/15 text-sky-400',
 };
+
+const STAKING_VOTE_TYPES = new Set([0, 4]);
+const GOVERNANCE_VOTE_TYPES = new Set([1, 2, 3]);
 
 interface Props {
   address: string;
@@ -117,17 +123,29 @@ const VoteHistoryTimeline = ({ address }: Props) => {
                   <div key={s.txid + s.candidateFull} className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-3 hover:bg-hover transition-colors gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-primary">{s.producerName || s.candidate}</span>
+                        {s.producerName ? (
+                          <Link to={`/validator/${s.candidateFull}`} className="text-sm font-medium text-primary hover:text-brand">
+                            {s.producerName}
+                          </Link>
+                        ) : (
+                          <Link to={`/validator/${s.candidateFull}`} className="text-sm font-mono text-primary hover:text-brand">
+                            {s.candidate}
+                          </Link>
+                        )}
                         <span className="badge bg-sky-500/15 text-sky-400 text-[10px]">BPoS</span>
+                        <span className="text-[10px] text-accent-green font-medium inline-flex items-center gap-0.5">
+                          <CheckCircle size={10} /> Counting
+                        </span>
                       </div>
                       <Link to={`/tx/${s.txid}`} className="link-blue text-xs font-mono mt-0.5 block truncate">
                         {s.txid.slice(0, 16)}...
                       </Link>
                     </div>
                     <div className="text-right shrink-0 pl-8 sm:pl-0">
-                      <p className="text-sm font-semibold text-primary">{fmtELA(s.amount)} ELA</p>
-                      <p className="text-[11px] text-muted">
-                        Rights: {fmtELA(s.votingRights)} &middot; Lock: {s.lockTime.toLocaleString()} blocks
+                      <p className="text-sm font-semibold text-primary" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtELA(s.amount)} ELA</p>
+                      <p className="text-[11px] text-muted flex items-center justify-end gap-2">
+                        <span>Rights: {fmtELA(s.votingRights)}</span>
+                        <span className="inline-flex items-center gap-0.5"><Lock size={9} /> Unlocks #{s.lockTime.toLocaleString()}</span>
                       </p>
                     </div>
                   </div>
@@ -155,39 +173,81 @@ const VoteHistoryTimeline = ({ address }: Props) => {
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {votes.map((v, i) => {
-              const isBPoS = v.voteType === 0 || v.voteType === 4;
+              const isStaking = STAKING_VOTE_TYPES.has(v.voteType);
+              const isGovernance = GOVERNANCE_VOTE_TYPES.has(v.voteType);
+              // voteType 1 = DAO Council election (elects UPCOMING term → offset formula)
+              // voteType 2 = DAO Proposal review, voteType 3 = Council Impeachment (both during term)
+              const term = v.voteType === 1
+                ? getElectionTargetTerm(v.stakeHeight)
+                : isGovernance ? getTermFromHeight(v.stakeHeight) : 0;
+              // `isActive` is backend-accurate for BPoS (tracks UTXO spent state).
+              // For governance votes (one-off actions), `isActive` is always false; don't show status badge.
+              const showActiveBadge = isStaking && v.isActive;
+              const showEndedBadge = isStaking && !v.isActive;
+
               return (
-              <div key={`${v.txid}-${v.candidate}-${i}`} className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-3 hover:bg-hover transition-colors gap-2">
-                <div className="flex items-start gap-3 min-w-0">
-                  <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5', isBPoS && v.isActive ? 'bg-emerald-500/10' : 'bg-zinc-500/10')}>
-                    {isBPoS && v.isActive ? <CheckCircle size={16} className="text-accent-green" /> : <XCircle size={16} className="text-muted" />}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded', VOTE_TYPE_STYLES[v.voteType] ?? VOTE_TYPE_STYLES[0])}>
-                        {VOTE_TYPE_NAMES[v.voteType] ?? v.voteTypeName}
-                      </span>
-                      <span className="text-sm text-primary font-medium truncate">
-                        {v.candidateName || v.candidate.slice(0, 16) + '...'}
-                      </span>
-                      {isBPoS && v.isActive && <span className="text-[10px] text-accent-green font-medium">Active</span>}
-                      {isBPoS && !v.isActive && <span className="text-[10px] text-muted">Spent</span>}
+                <div key={`${v.txid}-${v.candidate}-${i}`} className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-3 hover:bg-hover transition-colors gap-2">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className={cn(
+                      'w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
+                      showActiveBadge ? 'bg-emerald-500/10' : isGovernance ? 'bg-violet-500/10' : 'bg-zinc-500/10',
+                    )}>
+                      {showActiveBadge ? (
+                        <CheckCircle size={16} className="text-accent-green" />
+                      ) : showEndedBadge ? (
+                        <XCircle size={16} className="text-muted" />
+                      ) : (
+                        <Shield size={14} className="text-violet-400" />
+                      )}
                     </div>
-                    <Link to={`/tx/${v.txid}`} className="link-blue text-xs font-mono mt-0.5 block truncate">
-                      {v.txid.slice(0, 20)}...
-                    </Link>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded', VOTE_TYPE_STYLES[v.voteType] ?? VOTE_TYPE_STYLES[0])}>
+                          {VOTE_TYPE_NAMES[v.voteType] ?? v.voteTypeName}
+                        </span>
+                        {term > 0 && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400">
+                            Term {term}
+                          </span>
+                        )}
+                        <span className="text-sm text-primary font-medium truncate">
+                          {v.candidateName || v.candidate.slice(0, 16) + '...'}
+                        </span>
+                        {showActiveBadge && (
+                          <span className="text-[10px] text-accent-green font-medium inline-flex items-center gap-0.5">
+                            <CheckCircle size={10} /> Active
+                          </span>
+                        )}
+                        {showEndedBadge && (
+                          <span className="text-[10px] text-muted font-medium">Ended</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                        <Link to={`/tx/${v.txid}`} className="link-blue text-xs font-mono truncate">
+                          {v.txid.slice(0, 20)}...
+                        </Link>
+                        {showEndedBadge && v.spentTxid && (
+                          <Link
+                            to={`/tx/${v.spentTxid}`}
+                            className="text-[11px] text-secondary hover:text-brand inline-flex items-center gap-0.5 transition-colors"
+                            title="View the withdrawal transaction that ended this vote"
+                          >
+                            Withdrawn{v.spentHeight ? ` at #${v.spentHeight.toLocaleString()}` : ''} <ArrowRight size={10} />
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0 sm:ml-3 pl-11 sm:pl-0">
+                    <p className="text-sm font-semibold text-primary" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtELA(v.amount)} ELA</p>
+                    <div className="flex items-center gap-2 justify-end mt-0.5 flex-wrap">
+                      <span className="text-[11px] text-secondary">Block #{v.stakeHeight.toLocaleString()}</span>
+                      {v.timestamp > 0 && (
+                        <RelativeTime ts={v.timestamp} className="text-[11px] text-muted" />
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div className="text-right shrink-0 sm:ml-3 pl-11 sm:pl-0">
-                  <p className="text-sm font-semibold text-primary">{fmtELA(v.amount)} ELA</p>
-                  <div className="flex items-center gap-2 justify-end mt-0.5">
-                    <span className="text-[11px] text-secondary">Block #{v.stakeHeight.toLocaleString()}</span>
-                    {v.timestamp > 0 && (
-                      <span className="text-[11px] text-muted"><Clock size={9} className="inline mr-0.5" />{fmtTime(v.timestamp)}</span>
-                    )}
-                  </div>
-                </div>
-              </div>
               );
             })}
           </div>

@@ -36,19 +36,41 @@ const (
 )
 
 type Aggregator struct {
-	db   *db.DB
-	node *node.Client
-	hub  *ws.Hub
+	db               *db.DB
+	node             *node.Client
+	hub              *ws.Hub
+	referenceClients []*node.Client
 
 	stakeIdleEnabled bool
 
 	dailyStatsDone atomic.Bool
 	earlyVotesDone atomic.Bool
-	loopsDone      atomic.Int32 // counts distinct loops that completed at least once
+	loopsDone      atomic.Int32
+
+	// Validation state — guarded by validationMu
+	validationMu       gosync.RWMutex
+	referenceHeight    int64
+	localNodeHeight    int64
+	nodeBehind         bool
+	peerCount          int
+	lastBlockAge       time.Duration
+	hashMismatchHeight int64
+	missingBlockCount  int
+	negativeBalances   int
+	chainStatsAccurate bool
+	lastValidation     time.Time
 }
 
-func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub) *Aggregator {
-	return &Aggregator{db: database, node: nodeClient, hub: hub, stakeIdleEnabled: true}
+func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub, referenceClients []*node.Client) *Aggregator {
+	return &Aggregator{
+		db:                 database,
+		node:               nodeClient,
+		hub:                hub,
+		referenceClients:   referenceClients,
+		hashMismatchHeight: -1,
+		chainStatsAccurate: true,
+		stakeIdleEnabled:   true,
+	}
 }
 
 // SetStakeIdleEnabled toggles the voter_rights refresh loop. When false, the
@@ -72,6 +94,7 @@ func (a *Aggregator) Run(ctx context.Context) {
 	go a.runLoop(ctx, "review_comments", 2*time.Minute, a.backfillReviewComments, false)
 	go a.runLoop(ctx, "daily_stats", 5*time.Minute, a.refreshDailyStats, false)
 	go a.runLoop(ctx, "chain_stats", 30*time.Second, a.refreshChainStats, true)
+	go a.runLoop(ctx, "validation", 2*time.Minute, a.runValidation, false)
 
 	<-ctx.Done()
 }
@@ -105,10 +128,279 @@ func (a *Aggregator) runLoop(ctx context.Context, name string, interval time.Dur
 
 func (a *Aggregator) BackfillStatus() map[string]bool {
 	return map[string]bool{
-		"dailyStats":          a.dailyStatsDone.Load(),
-		"earlyVotes":          a.earlyVotesDone.Load(),
+		"dailyStats":           a.dailyStatsDone.Load(),
+		"earlyVotes":           a.earlyVotesDone.Load(),
 		"aggregatorFirstCycle": a.loopsDone.Load() >= int32(requiredLoopsForReady),
 	}
+}
+
+// ValidationStatus returns the latest validation check results for the sync-status API.
+func (a *Aggregator) ValidationStatus() map[string]any {
+	a.validationMu.RLock()
+	defer a.validationMu.RUnlock()
+
+	nodeHealth := map[string]any{
+		"referenceHeight": a.referenceHeight,
+		"peerCount":       a.peerCount,
+		"lastBlockAgeSec": int64(a.lastBlockAge.Seconds()),
+		"nodeBehind":      a.nodeBehind,
+		"nodeGap":         a.referenceHeight - a.localNodeHeight,
+	}
+
+	validation := map[string]any{
+		"lastCheckAt":        a.lastValidation.UTC().Format(time.RFC3339),
+		"hashMismatch":       a.hashMismatchHeight >= 0,
+		"hashMismatchHeight": a.hashMismatchHeight,
+		"missingBlocks":      a.missingBlockCount,
+		"negativeBalances":   a.negativeBalances,
+		"chainStatsAccurate": a.chainStatsAccurate,
+	}
+
+	return map[string]any{
+		"nodeHealth": nodeHealth,
+		"validation": validation,
+	}
+}
+
+// NodeBehind returns whether the local node is behind the reference network height.
+func (a *Aggregator) NodeBehind() bool {
+	a.validationMu.RLock()
+	defer a.validationMu.RUnlock()
+	return a.nodeBehind
+}
+
+// ReferenceHeight returns the latest known network height from reference RPCs.
+func (a *Aggregator) ReferenceHeight() int64 {
+	a.validationMu.RLock()
+	defer a.validationMu.RUnlock()
+	return a.referenceHeight
+}
+
+// ---------------------------------------------------------------------------
+// Validation: cross-checks local node against reference RPCs and DB integrity
+// ---------------------------------------------------------------------------
+
+func (a *Aggregator) runValidation(ctx context.Context) error {
+	start := time.Now()
+
+	refHeight := a.checkReferenceHeight(ctx)
+	peerCount := a.checkPeerCount(ctx)
+	localHeight, lastBlockAge := a.checkLocalNode(ctx)
+	hashMismatch := a.checkBlockHashes(ctx)
+	missingCount := a.checkMissingBlocks(ctx)
+	negBal, statsOK := a.checkDBIntegrity(ctx)
+
+	nodeBehind := refHeight > 0 && localHeight > 0 && (refHeight-localHeight) > 10
+
+	a.validationMu.Lock()
+	a.referenceHeight = refHeight
+	a.localNodeHeight = localHeight
+	a.nodeBehind = nodeBehind
+	a.peerCount = peerCount
+	a.lastBlockAge = lastBlockAge
+	a.hashMismatchHeight = hashMismatch
+	a.missingBlockCount = missingCount
+	a.negativeBalances = negBal
+	a.chainStatsAccurate = statsOK
+	a.lastValidation = start
+	a.validationMu.Unlock()
+
+	if nodeBehind {
+		slog.Warn("validation: local node behind reference",
+			"local", localHeight, "reference", refHeight, "gap", refHeight-localHeight)
+	}
+	if hashMismatch >= 0 {
+		slog.Warn("validation: block hash mismatch detected", "height", hashMismatch)
+	}
+	if missingCount > 0 {
+		slog.Warn("validation: missing blocks in DB", "count", missingCount)
+	}
+	if negBal > 0 {
+		slog.Warn("validation: negative balances found", "count", negBal)
+	}
+	if !statsOK {
+		slog.Warn("validation: chain_stats inconsistent with actual counts")
+	}
+
+	slog.Info("validation complete",
+		"duration_ms", time.Since(start).Milliseconds(),
+		"ref_height", refHeight,
+		"local_height", localHeight,
+		"node_behind", nodeBehind,
+		"peers", peerCount,
+		"block_age_sec", int64(lastBlockAge.Seconds()),
+	)
+	return nil
+}
+
+// checkReferenceHeight queries all reference RPCs and returns the highest block count.
+func (a *Aggregator) checkReferenceHeight(ctx context.Context) int64 {
+	if len(a.referenceClients) == 0 {
+		return 0
+	}
+
+	type result struct {
+		height int64
+		err    error
+	}
+
+	ch := make(chan result, len(a.referenceClients))
+	for _, rc := range a.referenceClients {
+		rc := rc
+		go func() {
+			refCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			h, err := rc.GetBlockCount(refCtx)
+			ch <- result{h, err}
+		}()
+	}
+
+	var maxHeight int64
+	for range a.referenceClients {
+		r := <-ch
+		if r.err != nil {
+			slog.Debug("reference RPC failed", "error", r.err)
+			continue
+		}
+		if r.height > maxHeight {
+			maxHeight = r.height
+		}
+	}
+	return maxHeight
+}
+
+func (a *Aggregator) checkPeerCount(ctx context.Context) int {
+	peerCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	count, err := a.node.GetConnectionCount(peerCtx)
+	if err != nil {
+		slog.Debug("validation: peer count check failed", "error", err)
+		return -1
+	}
+	return count
+}
+
+func (a *Aggregator) checkLocalNode(ctx context.Context) (int64, time.Duration) {
+	nodeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	height, err := a.node.GetBlockCount(nodeCtx)
+	if err != nil {
+		slog.Debug("validation: local node height check failed", "error", err)
+		return 0, 0
+	}
+
+	var lastBlockTime int64
+	err = a.db.API.QueryRow(ctx,
+		"SELECT COALESCE(EXTRACT(EPOCH FROM NOW())::bigint - time, 0) FROM blocks ORDER BY height DESC LIMIT 1",
+	).Scan(&lastBlockTime)
+	if err != nil {
+		slog.Debug("validation: last block age query failed", "error", err)
+		return height, 0
+	}
+
+	return height, time.Duration(lastBlockTime) * time.Second
+}
+
+// checkBlockHashes compares the last 20 indexed block hashes against the local node.
+// Returns the first mismatching height, or -1 if all match.
+func (a *Aggregator) checkBlockHashes(ctx context.Context) int64 {
+	var maxHeight int64
+	if err := a.db.API.QueryRow(ctx, "SELECT COALESCE(MAX(height),0) FROM blocks").Scan(&maxHeight); err != nil || maxHeight == 0 {
+		return -1
+	}
+
+	startHeight := maxHeight - 19
+	if startHeight < 0 {
+		startHeight = 0
+	}
+
+	rows, err := a.db.API.Query(ctx,
+		"SELECT height, hash FROM blocks WHERE height >= $1 ORDER BY height", startHeight)
+	if err != nil {
+		slog.Debug("validation: block hash query failed", "error", err)
+		return -1
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var h int64
+		var dbHash string
+		if err := rows.Scan(&h, &dbHash); err != nil {
+			continue
+		}
+
+		hashCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		nodeHash, err := a.node.GetBlockHash(hashCtx, h)
+		cancel()
+		if err != nil {
+			continue
+		}
+
+		if dbHash != nodeHash {
+			slog.Warn("validation: hash mismatch",
+				"height", h, "db_hash", dbHash, "node_hash", nodeHash)
+			return h
+		}
+	}
+	return -1
+}
+
+// checkMissingBlocks looks for holes in the last 100 indexed blocks.
+func (a *Aggregator) checkMissingBlocks(ctx context.Context) int {
+	var maxHeight int64
+	if err := a.db.API.QueryRow(ctx, "SELECT COALESCE(MAX(height),0) FROM blocks").Scan(&maxHeight); err != nil || maxHeight == 0 {
+		return 0
+	}
+
+	startHeight := maxHeight - 100
+	if startHeight < 0 {
+		startHeight = 0
+	}
+
+	var missingCount int
+	err := a.db.API.QueryRow(ctx, `
+		SELECT COUNT(*) FROM generate_series($1::bigint, $2::bigint) g(h)
+		LEFT JOIN blocks b ON b.height = g.h
+		WHERE b.height IS NULL`, startHeight, maxHeight).Scan(&missingCount)
+	if err != nil {
+		slog.Debug("validation: missing blocks query failed", "error", err)
+		return 0
+	}
+	return missingCount
+}
+
+// checkDBIntegrity runs lightweight balance and chain_stats consistency checks.
+func (a *Aggregator) checkDBIntegrity(ctx context.Context) (negativeBalances int, statsAccurate bool) {
+	statsAccurate = true
+
+	err := a.db.API.QueryRow(ctx,
+		"SELECT COUNT(*) FROM address_balances WHERE balance_sela < 0").Scan(&negativeBalances)
+	if err != nil {
+		slog.Debug("validation: negative balance check failed", "error", err)
+		return 0, true
+	}
+
+	var csBlocks, actualBlocks, csTxs, actualTxs int64
+	err = a.db.API.QueryRow(ctx, `
+		SELECT
+			cs.total_blocks,
+			(SELECT COALESCE(MAX(height)+1, 0) FROM blocks),
+			cs.total_txs,
+			(SELECT COUNT(*) FROM transactions)
+		FROM chain_stats cs WHERE cs.id = 1`).Scan(&csBlocks, &actualBlocks, &csTxs, &actualTxs)
+	if err != nil {
+		slog.Debug("validation: chain_stats check failed", "error", err)
+		return negativeBalances, true
+	}
+
+	if csBlocks != actualBlocks || csTxs != actualTxs {
+		slog.Warn("validation: chain_stats drift",
+			"cs_blocks", csBlocks, "actual_blocks", actualBlocks,
+			"cs_txs", csTxs, "actual_txs", actualTxs)
+		statsAccurate = false
+	}
+
+	return negativeBalances, statsAccurate
 }
 
 func (a *Aggregator) refreshProducers(ctx context.Context) error {

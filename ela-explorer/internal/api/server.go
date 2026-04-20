@@ -392,14 +392,22 @@ func (s *Server) getSyncStatus(w http.ResponseWriter, r *http.Request) {
 
 	blocksCaughtUp := chainTip > 0 && (chainTip-lastSynced) < 10
 
+	// Check if the local node itself is behind the network
+	nodeBehind := false
+	if s.aggregator != nil {
+		nodeBehind = s.aggregator.NodeBehind()
+	}
+
 	phase := "syncing"
-	if isLive && allDone {
+	if isLive && allDone && !nodeBehind {
 		phase = "ready"
+	} else if isLive && allDone && nodeBehind {
+		phase = "node-syncing"
 	} else if isLive || blocksCaughtUp {
 		phase = "backfilling"
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"phase": phase,
 		"blockSync": map[string]any{
 			"currentHeight": lastSynced,
@@ -408,7 +416,15 @@ func (s *Server) getSyncStatus(w http.ResponseWriter, r *http.Request) {
 			"isLive":        isLive,
 		},
 		"backfills": backfills,
-	})
+	}
+
+	if s.aggregator != nil {
+		vs := s.aggregator.ValidationStatus()
+		resp["nodeHealth"] = vs["nodeHealth"]
+		resp["validation"] = vs["validation"]
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func isHex64(s string) bool {

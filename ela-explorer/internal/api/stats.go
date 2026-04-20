@@ -720,6 +720,15 @@ func (s *Server) healthDetailed(w http.ResponseWriter, r *http.Request) {
 		result["node"] = "ok"
 	}
 
+	if s.aggregator != nil {
+		vs := s.aggregator.ValidationStatus()
+		result["nodeHealth"] = vs["nodeHealth"]
+		result["validation"] = vs["validation"]
+		if s.aggregator.NodeBehind() {
+			result["status"] = "degraded"
+		}
+	}
+
 	writeJSON(w, 200, result)
 }
 

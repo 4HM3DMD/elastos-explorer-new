@@ -12,7 +12,8 @@ import AddressAvatar from '../components/AddressAvatar';
 import QRCodeModal from '../components/QRCodeModal';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
-import { fmtTime, formatEla } from '../utils/format';
+import RelativeTime from '../components/RelativeTime';
+import { formatEla } from '../utils/format';
 import { getTypeLabel, getTypeInfo, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
 import { cn } from '../lib/cn';
@@ -268,7 +269,7 @@ function OverviewTab({ info, page, totalPages, fmtELA, fetchAddress }: OverviewT
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[9px] sm:text-[10px] md:text-[11px] text-muted tracking-[0.48px]">First Seen</p>
-              <p className="text-[11px] sm:text-xs md:text-sm font-medium text-secondary truncate">{fmtTime(info.firstSeen)}</p>
+              <RelativeTime ts={info.firstSeen} className="block text-[11px] sm:text-xs md:text-sm font-medium text-secondary truncate" />
             </div>
           </div>
         )}
@@ -279,7 +280,7 @@ function OverviewTab({ info, page, totalPages, fmtELA, fetchAddress }: OverviewT
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[9px] sm:text-[10px] md:text-[11px] text-muted tracking-[0.48px]">Last Seen</p>
-              <p className="text-[11px] sm:text-xs md:text-sm font-medium text-secondary truncate">{fmtTime(info.lastSeen)}</p>
+              <RelativeTime ts={info.lastSeen} className="block text-[11px] sm:text-xs md:text-sm font-medium text-secondary truncate" />
             </div>
           </div>
         )}
@@ -328,7 +329,7 @@ function OverviewTab({ info, page, totalPages, fmtELA, fetchAddress }: OverviewT
               {info.utxos.map((u) => (
                 <div key={`${u.txid}-${u.n}`} className="flex items-center justify-between px-4 py-2.5 hover:bg-hover transition-colors">
                   <div className="min-w-0">
-                    <Link to={`/tx/${u.txid}`} className="link-blue text-xs font-mono truncate block">
+                    <Link to={`/tx/${u.txid}`} className="link-orange text-xs font-mono truncate block">
                       {u.txid.slice(0, 16)}…:{u.n}
                     </Link>
                     {u.outputLock > 0 && (
@@ -385,7 +386,7 @@ function TxRow({ tx }: { tx: AddressTransaction }) {
           <DirIcon size={16} className={dirColor} />
         </div>
         <div className="min-w-0">
-          <Link to={`/tx/${tx.txid}`} className="link-blue text-sm font-mono truncate block">
+          <Link to={`/tx/${tx.txid}`} className="link-orange text-sm font-mono truncate block">
             {tx.txid.slice(0, 16)}…{tx.txid.slice(-6)}
           </Link>
           <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted">
@@ -419,7 +420,10 @@ function TxRow({ tx }: { tx: AddressTransaction }) {
           {tx.blockHeight !== undefined && (
             <Link to={`/block/${tx.blockHeight}`} className="text-[11px] text-secondary hover:text-brand">#{tx.blockHeight.toLocaleString()}</Link>
           )}
-          <span className="text-[11px] text-muted"><Clock size={9} className="inline mr-0.5" />{fmtTime(tx.timestamp)}</span>
+          <span className="text-[11px] text-muted inline-flex items-center gap-0.5">
+            <Clock size={9} aria-hidden />
+            <RelativeTime ts={tx.timestamp} />
+          </span>
         </div>
       </div>
     </div>

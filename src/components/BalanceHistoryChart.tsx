@@ -5,7 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell, ReferenceLine,
 } from 'recharts';
-import { TrendingUp, TrendingDown, Minus, Calendar, X } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Calendar, X, GitCommitHorizontal } from 'lucide-react';
 import { cn } from '../lib/cn';
 
 const BRAND_COLOR = '#ff9e18';
@@ -60,9 +60,22 @@ function pctStr(pct: number): string {
   return `${sign}${pct.toFixed(2)}%`;
 }
 
+interface ChartPoint {
+  date: string;
+  fullDate: string;
+  rawDate: string;
+  value: number;
+  delta: number;
+  rawBalance: string;
+  txid?: string;
+  direction?: string;
+}
+
 interface Props {
   address: string;
 }
+
+const MAX_TX_FETCH = 500;
 
 const BalanceHistoryChart = ({ address }: Props) => {
   const [data, setData] = useState<BalanceHistoryPoint[]>([]);
@@ -76,6 +89,12 @@ const BalanceHistoryChart = ({ address }: Props) => {
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
   const lastFetchRef = useRef<number>(0);
   const datePickerRef = useRef<HTMLDivElement>(null);
+
+  // Per-transaction mode
+  const [txMode, setTxMode] = useState(false);
+  const [txChartData, setTxChartData] = useState<ChartPoint[]>([]);
+  const [txLoading, setTxLoading] = useState(false);
+  const [txTruncated, setTxTruncated] = useState(false);
 
   useEffect(() => {
     if (!showDatePicker) return;
@@ -110,6 +129,58 @@ const BalanceHistoryChart = ({ address }: Props) => {
   }, [address, days]);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  // Fetch all transactions and compute running balance per-tx
+  const fetchTxHistory = useCallback(async () => {
+    setTxLoading(true);
+    try {
+      const first = await blockchainApi.getAddress(address, 1, 100);
+      if (!first) return;
+      const currentBal = parseFloat(first.balance) || 0;
+      const total = first.txCount || 0;
+      let txs = [...(first.transactions || [])];
+      const pages = Math.ceil(Math.min(total, MAX_TX_FETCH) / 100);
+      for (let p = 2; p <= pages; p++) {
+        const more = await blockchainApi.getAddress(address, p, 100);
+        txs = txs.concat(more?.transactions || []);
+      }
+      setTxTruncated(total > MAX_TX_FETCH);
+      txs.sort((a, b) => a.blockHeight - b.blockHeight || a.timestamp - b.timestamp);
+
+      // Walk backwards from current balance to compute balance at each tx
+      let bal = currentBal;
+      const withBal: { balance: number; tx: typeof txs[0] }[] = new Array(txs.length);
+      for (let i = txs.length - 1; i >= 0; i--) {
+        const v = parseFloat(txs[i].value) || 0;
+        withBal[i] = { balance: bal, tx: txs[i] };
+        bal = txs[i].direction === 'received' ? bal - v : bal + v;
+      }
+
+      const points: ChartPoint[] = withBal.map(({ balance, tx }, i) => {
+        const prevBal = i === 0 ? Math.max(0, bal) : withBal[i - 1].balance;
+        const date = new Date(tx.timestamp * 1000);
+        return {
+          date: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' }),
+          fullDate: date.toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+          rawDate: date.toISOString().slice(0, 10),
+          value: balance,
+          delta: balance - prevBal,
+          rawBalance: balance.toFixed(8),
+          txid: tx.txid,
+          direction: tx.direction,
+        };
+      });
+      setTxChartData(points);
+    } catch {
+      // silently fail — daily mode still works
+    } finally {
+      setTxLoading(false);
+    }
+  }, [address]);
+
+  useEffect(() => {
+    if (txMode && txChartData.length === 0) fetchTxHistory();
+  }, [txMode, txChartData.length, fetchTxHistory]);
 
   const handlePresetDays = useCallback((d: number) => {
     setCustomRangeLabel(null);
@@ -146,9 +217,11 @@ const BalanceHistoryChart = ({ address }: Props) => {
     };
   }), [data, days]);
 
+  const activeChartData = txMode ? txChartData : chartData;
+
   const stats = useMemo(() => {
-    if (chartData.length < 1) return null;
-    const values = chartData.map(d => d.value);
+    if (activeChartData.length < 1) return null;
+    const values = activeChartData.map(d => d.value);
     const first = values[0];
     const last = values[values.length - 1];
     const delta = last - first;
@@ -156,12 +229,12 @@ const BalanceHistoryChart = ({ address }: Props) => {
     const min = Math.min(...values);
     const max = Math.max(...values);
     const isFlat = min === max;
-    return { first, last, delta, pctChange, min, max, isFlat, dataPoints: chartData.length };
-  }, [chartData]);
+    return { first, last, delta, pctChange, min, max, isFlat, dataPoints: activeChartData.length };
+  }, [activeChartData]);
 
   const dailyChanges = useMemo(() => {
-    if (chartData.length < 2) return [];
-    const reversed = [...chartData].reverse();
+    if (activeChartData.length < 2) return [];
+    const reversed = [...activeChartData].reverse();
     const maxAbsDelta = Math.max(...reversed.map(d => Math.abs(d.delta)), 1);
     return reversed.slice(0, 60).map(d => ({
       ...d,
@@ -174,21 +247,25 @@ const BalanceHistoryChart = ({ address }: Props) => {
     if (!active || !payload?.[0]) return null;
     const d = payload[0].payload;
     return (
-      <div className="bg-[var(--color-surface-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2.5 shadow-lg">
+      <div className="bg-[var(--color-surface-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2.5 shadow-lg max-w-[220px]">
         <p className="text-[11px] text-muted mb-1">{d.fullDate}</p>
-        <p className="text-sm font-semibold text-primary" style={{ fontVariantNumeric: 'tabular-nums', color: BRAND_COLOR }}>
+        <p className="text-sm font-semibold" style={{ fontVariantNumeric: 'tabular-nums', color: BRAND_COLOR }}>
           {fmtBalFull(d.value)} ELA
         </p>
         {d.delta !== 0 && (
           <p className={cn('text-[11px] mt-0.5', d.delta > 0 ? 'text-emerald-400' : 'text-red-400')} style={{ fontVariantNumeric: 'tabular-nums' }}>
             {d.delta > 0 ? '+' : ''}{fmtBal(d.delta)} ELA
+            {d.direction && <span className="text-muted ml-1">({d.direction})</span>}
           </p>
+        )}
+        {d.txid && (
+          <p className="text-[10px] text-muted mt-1 font-mono truncate">{d.txid.slice(0, 16)}…</p>
         )}
       </div>
     );
   };
 
-  if (loading) {
+  if (loading || (txMode && txLoading && txChartData.length === 0)) {
     return (
       <div className="card p-5 space-y-4">
         <div className="flex items-center justify-between">
@@ -217,18 +294,33 @@ const BalanceHistoryChart = ({ address }: Props) => {
     <div className="space-y-4">
       {/* Main chart card */}
       <div className="card p-5">
-        {/* Header: title + range selector */}
-        <div className="flex items-center justify-between mb-5">
-          <div>
+        {/* Header: title + range selector — stacks vertically on mobile */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3 mb-4 sm:mb-5">
+          <div className="min-w-0">
             <span className="text-sm font-medium text-primary">Balance Over Time</span>
             {stats && (
               <span className="text-[11px] text-muted ml-2">
-                {stats.dataPoints} data point{stats.dataPoints !== 1 ? 's' : ''}
+                {stats.dataPoints} {txMode ? 'transaction' : 'data point'}{stats.dataPoints !== 1 ? 's' : ''}
+                {txTruncated && txMode && <span className="text-amber-400 ml-1">(showing last {MAX_TX_FETCH})</span>}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex gap-0.5 bg-[var(--color-surface-secondary)] rounded-lg p-0.5">
+          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+            {/* Per-transaction toggle */}
+            <button
+              onClick={() => setTxMode(v => !v)}
+              title={txMode ? 'Switch to daily view' : 'Show every transaction as a data point'}
+              className={cn(
+                'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150',
+                txMode
+                  ? 'bg-brand/15 text-brand border-brand/30'
+                  : 'text-muted hover:text-secondary border-transparent hover:border-[var(--color-border)]',
+              )}
+            >
+              <GitCommitHorizontal size={12} />
+              Per Tx
+            </button>
+            {!txMode && <div className="flex gap-0.5 bg-[var(--color-surface-secondary)] rounded-lg p-0.5">
               {RANGE_OPTIONS.map((r) => (
                 <button
                   key={r.days}
@@ -243,9 +335,9 @@ const BalanceHistoryChart = ({ address }: Props) => {
                   {r.label}
                 </button>
               ))}
-            </div>
+            </div>}
 
-            <div className="relative" ref={datePickerRef}>
+            {!txMode && <div className="relative" ref={datePickerRef}>
               <button
                 onClick={() => setShowDatePicker(v => !v)}
                 className={cn(
@@ -315,7 +407,7 @@ const BalanceHistoryChart = ({ address }: Props) => {
                   </button>
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         </div>
 
@@ -370,15 +462,15 @@ const BalanceHistoryChart = ({ address }: Props) => {
         )}
 
         {/* Chart area */}
-        {chartData.length < 2 ? (
+        {activeChartData.length < 2 ? (
           <div className="flex flex-col items-center justify-center h-48 text-center">
             <Calendar size={24} className="text-muted/50 mb-2" />
             <p className="text-sm text-muted">
-              {chartData.length === 1
+              {activeChartData.length === 1
                 ? 'Only one data point — try a wider range'
-                : 'No balance data for this period'}
+                : txMode ? 'No transactions found' : 'No balance data for this period'}
             </p>
-            {chartData.length === 0 && days < 3650 && (
+            {!txMode && activeChartData.length === 0 && days < 3650 && (
               <button onClick={() => setDays(3650)} className="text-xs text-brand hover:text-brand-200 mt-2">
                 Try "All Time"
               </button>
@@ -386,7 +478,7 @@ const BalanceHistoryChart = ({ address }: Props) => {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <AreaChart data={activeChartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="balGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={BRAND_COLOR} stopOpacity={0.25} />
@@ -424,7 +516,7 @@ const BalanceHistoryChart = ({ address }: Props) => {
         )}
 
         {/* Daily change mini-chart (bar chart of deltas) */}
-        {dailyChanges.length > 1 && dailyChanges.some(d => d.delta !== 0) && (
+        {!txMode && dailyChanges.length > 1 && dailyChanges.some(d => d.delta !== 0) && (
           <div className="mt-4 pt-4 border-t border-[var(--color-border)]/50">
             <p className="text-[10px] text-muted uppercase tracking-wider mb-2">Daily Changes</p>
             <ResponsiveContainer width="100%" height={80}>
@@ -456,7 +548,7 @@ const BalanceHistoryChart = ({ address }: Props) => {
       </div>
 
       {/* Expandable data table */}
-      {data.length > 0 && (
+      {!txMode && data.length > 0 && (
         <div className="card overflow-hidden">
           <button
             onClick={() => setShowTable(v => !v)}

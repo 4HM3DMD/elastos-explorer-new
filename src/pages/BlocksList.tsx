@@ -8,7 +8,8 @@ import Pagination from '../components/Pagination';
 import StatusBadge from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import { cn } from '../lib/cn';
-import { fmtTime, truncHash } from '../utils/format';
+import RelativeTime from '../components/RelativeTime';
+import { truncHash } from '../utils/format';
 import SEO from '../components/SEO';
 /** Returns a clean miner display name: pool name if available, else truncated address */
 function displayMiner(minerInfo?: string, minerAddress?: string): string | null {
@@ -195,7 +196,7 @@ const BlocksList = () => {
                     </td>
                     <td>
                       <span className="text-xs text-muted flex items-center gap-1 whitespace-nowrap">
-                        <Clock size={11} className="shrink-0" /> {fmtTime(b.timestamp)}
+                        <Clock size={11} className="shrink-0" /> <RelativeTime ts={b.timestamp} />
                       </span>
                     </td>
                   </tr>

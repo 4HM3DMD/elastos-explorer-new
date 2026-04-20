@@ -6,14 +6,19 @@ services:
     container_name: ela-explorer
     restart: unless-stopped
     network_mode: host
+    # Secrets and RPC creds: use the same names the Go binary reads (see .env.example).
+    # No ${RPC_USER:?...} here — that breaks when .env only has ELA_NODE_RPC_*.
+    env_file:
+      - .env
     # Hard ceiling so a memory leak in the indexer/aggregator can't push the
-    # host into swap-death. Tune to your box — 8G is conservative for a
-    # 32-core/128GB server. Override via MEM_LIMIT in .env.
-    mem_limit: ${MEM_LIMIT:-8g}
-    memswap_limit: ${MEM_LIMIT:-8g}
+    # host into swap-death. Override via MEM_LIMIT in .env. mem_limit is
+    # top-level so it takes effect under `docker compose up` standalone
+    # (unlike deploy.resources which is swarm-only by default).
+    mem_limit: ${MEM_LIMIT:-4g}
+    memswap_limit: ${MEM_LIMIT:-4g}
     # Docker-native liveness probe. /health is the cheap endpoint (no DB
     # roundtrip on the hot path) so this is safe to hit every 30s. On
-    # failure, `restart: unless-stopped` will restart the container.
+    # failure, `restart: unless-stopped` restarts the container.
     healthcheck:
       test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:8339/health"]
       interval: 30s
@@ -24,22 +29,19 @@ services:
       - ela-data:/app/data
       - ${FRONTEND_HTML:-/opt/ela-explorer/dist/index.html}:/usr/share/nginx/html/index.html:ro
     environment:
-      # PostgreSQL (syncer read-write)
+      # PostgreSQL (non-secrets only; DB_PASSWORD / DB_API_PASSWORD from .env)
       DB_HOST: "127.0.0.1"
       DB_PORT: "5432"
       DB_NAME: "ela_explorer"
       DB_USER: "ela_indexer"
-      DB_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"
       DB_SSLMODE: "disable"
-
-      # PostgreSQL (API read-only)
       DB_API_USER: "ela_api"
-      DB_API_PASSWORD: "${DB_API_PASSWORD:?Set DB_API_PASSWORD in .env}"
 
-      # ELA Node RPC
+      # ELA Node RPC URL only; ELA_NODE_RPC_USER / ELA_NODE_RPC_PASS from .env
       ELA_NODE_RPC_URL: "http://127.0.0.1:20336"
-      ELA_NODE_RPC_USER: "${RPC_USER:?Set RPC_USER in .env}"
-      ELA_NODE_RPC_PASS: "${RPC_PASS:?Set RPC_PASS in .env}"
+
+      # Reference RPCs for cross-checking chain height / block hashes
+      REFERENCE_RPC_URLS: "https://rpc.elastos.info/ela,https://api.elastos.io/ela"
 
       # Server
       LISTEN_ADDR: ":8339"
@@ -53,6 +55,16 @@ services:
       LRU_CACHE_SIZE: "50000"
       CACHE_TTL_SECS: "30"
       POLL_INTERVAL_MS: "500"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "4"
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
 
 volumes:
   ela-data:

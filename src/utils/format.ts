@@ -48,6 +48,53 @@ export function formatVotes(value: string): string {
  *   fmtEla("1234567.12345678")   → "1,234,567.1235"  (default 4 max decimals)
  *   fmtEla("1234567.12345678", { precise: true }) → "1,234,567.12345678"
  */
+/**
+ * Parses a proposal/budget amount string from the Elastos node or DB into ELA.
+ * Handles three historical wire formats:
+ * - ELA decimals: `"3367.53000000"`
+ * - Integer sela: `"336753000000"` (≥ 1e8 treated as sela)
+ * - Legacy whole-ELA integers: `"2933"` (magnitude &lt; 1e8, no decimal point)
+ */
+export function parseEla(raw: string | number | null | undefined): number {
+  if (raw == null || raw === '') return 0;
+  const s = String(raw).trim();
+  if (!s) return 0;
+  if (/[.eE]/.test(s)) {
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const n = Number.parseInt(s, 10);
+  if (!Number.isFinite(n) || n === 0) return 0;
+  return Math.abs(n) >= 1e8 ? n / SELA_PER_ELA : n;
+}
+
+export function fmtElaSmart(
+  raw: string | number | null | undefined,
+  opts?: { compact?: boolean; precise?: boolean; minDecimals?: number; sela?: boolean },
+): string {
+  return fmtEla(parseEla(raw), opts);
+}
+
+/** Sum of per-stage budget amounts after normalizing each string to ELA. */
+export function sumBudgetAmountsEla(amounts: (string | undefined | null)[]): number {
+  let total = 0;
+  for (const a of amounts) total += parseEla(a);
+  return total;
+}
+
+/**
+ * Best-effort total budget in ELA: prefer summing stage lines (matches chain intent);
+ * if stages are empty or sum to zero, fall back to `budget_total` from DB (stored as sela by the indexer).
+ */
+export function resolveProposalBudgetEla(
+  budgetTotal: string | null | undefined,
+  budgets: { amount?: string }[] | null | undefined,
+): number {
+  const stageSum = budgets?.length ? sumBudgetAmountsEla(budgets.map(b => b.amount)) : 0;
+  if (stageSum > 0) return stageSum;
+  return parseEla(budgetTotal);
+}
+
 export function fmtEla(
   v: string | number | null | undefined,
   opts?: { compact?: boolean; precise?: boolean; minDecimals?: number; sela?: boolean },

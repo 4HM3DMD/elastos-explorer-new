@@ -205,10 +205,13 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 		       p.register_height, p.vote_count, p.reject_count, p.abstain_count, p.title,
 		       p.budget_total, p.tracking_count, p.current_stage, p.terminated_height,
 		       COALESCE(cm.nickname, '') AS cr_member_name,
+		       COALESCE(NULLIF(TRIM(pr.nickname), ''), NULLIF(TRIM(cm_o.nickname), ''), '') AS owner_name,
 		       p.abstract,
 		       ` + proposalNumberSubquery + ` AS proposal_number
 		FROM cr_proposals p
-		LEFT JOIN cr_members cm ON cm.did = p.cr_member_did`
+		LEFT JOIN cr_members cm ON cm.did = p.cr_member_did
+		LEFT JOIN producers pr ON (pr.owner_pubkey = p.owner_pubkey OR (pr.node_pubkey != '' AND pr.node_pubkey = p.owner_pubkey))
+		LEFT JOIN cr_members cm_o ON cm_o.dpos_pubkey = p.owner_pubkey AND p.owner_pubkey != ''`
 
 	if status != "" {
 		if err := s.db.API.QueryRow(r.Context(),
@@ -236,7 +239,7 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var proposalHash, txHash, categoryData, ownerPubkey, draftHash, recipient, budgetsJSON, crMemberDID string
 		var proposalType int
-		var pStatus, title, budgetTotal, crMemberName, abstract string
+		var pStatus, title, budgetTotal, crMemberName, ownerName, abstract string
 		var registerHeight, terminatedHeight int64
 		var voteCount, rejectCount, abstainCount, trackingCount, currentStage int
 		var proposalNumber int64
@@ -245,7 +248,7 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 			&ownerPubkey, &draftHash, &recipient, &budgetsJSON, &crMemberDID,
 			&registerHeight, &voteCount, &rejectCount, &abstainCount, &title,
 			&budgetTotal, &trackingCount, &currentStage, &terminatedHeight,
-			&crMemberName, &abstract, &proposalNumber); err != nil {
+			&crMemberName, &ownerName, &abstract, &proposalNumber); err != nil {
 			slog.Warn("getCRProposals: scan failed", "error", err)
 			continue
 		}
@@ -279,6 +282,9 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 		if crMemberName != "" {
 			p["crMemberName"] = crMemberName
 		}
+		if ownerName != "" {
+			p["ownerName"] = ownerName
+		}
 		proposals = append(proposals, p)
 	}
 
@@ -297,7 +303,7 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 	var proposalType int
 	var registerHeight, terminatedHeight int64
 	var voteCount, rejectCount, abstainCount, trackingCount, currentStage int
-	var title, budgetTotal, crMemberName string
+	var title, budgetTotal, crMemberName, ownerName string
 	var abstract, motivation, goal, planStatement, implementationTeam string
 	var budgetStatement, milestone, relevance, availableAmount string
 
@@ -309,6 +315,7 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		       p.budget_total, p.cr_votes_json, p.voter_reject, p.tracking_count,
 		       p.current_stage, p.terminated_height,
 		       COALESCE(cm.nickname, '') AS cr_member_name,
+		       COALESCE(NULLIF(TRIM(pr.nickname), ''), NULLIF(TRIM(cm_o.nickname), ''), '') AS owner_name,
 		       p.abstract, p.motivation, p.goal, p.plan_statement,
 		       p.implementation_team, p.budget_statement, p.milestone,
 		       p.relevance, p.available_amount,
@@ -317,12 +324,14 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		           OR (cp2.register_height = p.register_height AND cp2.proposal_hash < p.proposal_hash)) + 1 AS proposal_number
 		FROM cr_proposals p
 		LEFT JOIN cr_members cm ON cm.did = p.cr_member_did
+		LEFT JOIN producers pr ON (pr.owner_pubkey = p.owner_pubkey OR (pr.node_pubkey != '' AND pr.node_pubkey = p.owner_pubkey))
+		LEFT JOIN cr_members cm_o ON cm_o.dpos_pubkey = p.owner_pubkey AND p.owner_pubkey != ''
 		WHERE p.proposal_hash = $1`, hash,
 	).Scan(&proposalHash, &txHash, &proposalType, &pStatus, &categoryData,
 		&ownerPubkey, &draftHash, &recipient, &budgetsJSON, &crMemberDID,
 		&registerHeight, &voteCount, &rejectCount, &abstainCount, &title,
 		&budgetTotal, &crVotesJSON, &voterReject, &trackingCount,
-		&currentStage, &terminatedHeight, &crMemberName,
+		&currentStage, &terminatedHeight, &crMemberName, &ownerName,
 		&abstract, &motivation, &goal, &planStatement,
 		&implementationTeam, &budgetStatement, &milestone,
 		&relevance, &availableAmount, &proposalNumber)
@@ -420,6 +429,9 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if crMemberName != "" {
 		result["crMemberName"] = crMemberName
+	}
+	if ownerName != "" {
+		result["ownerName"] = ownerName
 	}
 
 	writeJSON(w, 200, APIResponse{Data: result})

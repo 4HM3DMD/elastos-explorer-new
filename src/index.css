@@ -275,6 +275,15 @@
   .link-blue:hover {
     color: #60A5FA;
   }
+
+  .link-orange {
+    @apply transition-colors duration-150;
+    color: var(--color-brand);
+  }
+
+  .link-orange:hover {
+    color: var(--color-brand-light);
+  }
 }
 
 /* ── Markdown Content ── */
@@ -282,6 +291,9 @@
   color: var(--color-text-secondary);
   line-height: 1.75;
   font-size: 0.9375rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .markdown-content h1,
@@ -319,6 +331,8 @@
   color: var(--color-brand);
   text-decoration: underline;
   text-underline-offset: 2px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .markdown-content a:hover {

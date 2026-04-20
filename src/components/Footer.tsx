@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { ArrowUpRight } from 'lucide-react';
 
 const exploreLinks = [
   { to: '/blocks', label: 'Blocks' },
@@ -52,11 +53,7 @@ const socialLinks = [
   {
     href: 'https://elastos.net/',
     label: 'Elastos.net',
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-        <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm0 1.5c1.47 0 2.87.37 4.1 1.02L4.52 15.1A8.5 8.5 0 0 1 3.5 12c0-4.694 3.806-8.5 8.5-8.5zm0 17a8.464 8.464 0 0 1-4.1-1.02l11.58-10.58A8.5 8.5 0 0 1 20.5 12c0 4.694-3.806 8.5-8.5 8.5z" />
-      </svg>
-    ),
+    icon: <img src="/logo.svg" alt="" className="w-[14px] h-[14px] opacity-90" />,
   },
 ];
 
@@ -126,7 +123,15 @@ const Footer = () => {
                   </li>
                 ) : (
                   <li key={label}>
-                    <a href={(rest as { href: string }).href} target="_blank" rel="noopener noreferrer" className="text-xs text-secondary hover:text-primary transition-colors">{label}</a>
+                    <a
+                      href={(rest as { href: string }).href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-secondary hover:text-primary transition-colors group"
+                    >
+                      {label}
+                      <ArrowUpRight size={11} className="text-muted group-hover:text-primary transition-colors" />
+                    </a>
                   </li>
                 )
               )}
@@ -136,7 +141,7 @@ const Footer = () => {
 
         <div className="mt-8 pt-6 border-t border-[var(--color-border)] flex flex-col sm:flex-row justify-between items-center gap-3">
           <p className="text-[11px] text-muted">
-            Built by <a href="https://elacitylabs.com/" target="_blank" rel="noopener noreferrer" className="text-secondary hover:text-primary transition-colors">ElacityLabs</a> &middot; Powered by Elastos
+            Built by <a href="https://elacitylabs.com/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-secondary hover:text-primary transition-colors">ElacityLabs<ArrowUpRight size={10} /></a> &middot; Powered by Elastos
           </p>
           <p className="text-[11px] text-muted">
             Secured by Bitcoin &middot; &copy; {new Date().getFullYear()}

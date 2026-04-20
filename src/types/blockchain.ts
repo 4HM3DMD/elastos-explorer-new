@@ -413,6 +413,8 @@ export interface CRProposal {
   currentStage?: number;
   terminatedHeight?: number;
   crMemberName?: string;
+  /** Resolved from producers / council dpos_pubkey when the drafter is known */
+  ownerName?: string;
   proposalNumber?: number;
 }
 
@@ -721,7 +723,7 @@ export const TX_TYPE_MAP: Record<string, TxTypeInfo> = {
   'CR Proposal Vote':          { label: 'DAO Proposal Vote',    description: 'Voted on an Elastos DAO proposal',                               category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'Stamp' },
   'Delegate Vote':             { label: 'Delegate Vote',         description: 'Voted for a legacy DPoS delegate',                               category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'CheckSquareOffset' },
   'Multi Vote':                { label: 'Multi Vote',            description: 'Transaction containing multiple vote types',                     category: 'governance', color: 'text-violet-500 dark:text-violet-400', icon: 'CheckSquareOffset' },
-  'Return Votes':              { label: 'Unstake',               description: 'Removed a staking vote',                                        category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'ArrowBendUpLeft' },
+  'Return Votes':              { label: 'Withdraw Vote',         description: 'Ended a staking vote — ELA begins unlocking',                   category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'ArrowBendUpLeft' },
   'Votes Real Withdraw':       { label: 'Stake Withdrawal',      description: 'Withdrew previously unstaked ELA',                              category: 'staking',    color: 'text-sky-500 dark:text-sky-400',    icon: 'Wallet' },
   'Record Sponsor':            { label: 'Sponsorship Record',    description: 'Recorded a network sponsor entry',                              category: 'network',    color: 'text-zinc-500 dark:text-zinc-400',  icon: 'BookmarkSimple' },
   'Create NFT':                { label: 'NFT Creation',          description: 'Created a new NFT',                                             category: 'nft',        color: 'text-rose-500 dark:text-rose-400',  icon: 'Sparkle' },

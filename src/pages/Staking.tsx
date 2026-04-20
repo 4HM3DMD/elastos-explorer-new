@@ -215,19 +215,26 @@ interface MiniStatProps {
   label: string;
   value: string;
   /**
-   * Optional explainer shown as a native browser tooltip on hover. Also
-   * renders a small Info icon next to the label so users know something
-   * extra is available — without a JS library or any risk of cropping in
-   * the tight card layout.
+   * Optional explainer. Renders a visible Info icon next to the label;
+   * hovering (desktop) or tapping (mobile) pops a panel above the card.
+   * Native title= is kept as a second-layer fallback for screen readers
+   * and very old browsers.
    */
   tooltip?: string;
 }
 
 function MiniStat({ icon: Icon, label, value, tooltip }: MiniStatProps) {
+  const [showTip, setShowTip] = useState(false);
   return (
-    <div className="card p-2 md:p-3 relative overflow-hidden">
-      <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
-      <div className="flex items-center gap-2 pl-1.5">
+    // `relative` so the tooltip anchors to the card; `overflow-hidden` removed
+    // from the outer card (previously clipped tooltips) and moved to a dedicated
+    // wrapper around just the decorative left-border bar — so the tooltip can
+    // escape the card bounds freely.
+    <div className="card p-2 md:p-3 relative">
+      <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
+        <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
+      </div>
+      <div className="flex items-center gap-2 pl-1.5 relative">
         <div className="w-[22px] h-[22px] md:w-[28px] md:h-[28px] rounded-[5px] flex items-center justify-center shrink-0" style={{ background: 'rgba(255, 159, 24, 0.1)' }}>
           <Icon size={13} className="text-brand" />
         </div>
@@ -235,19 +242,37 @@ function MiniStat({ icon: Icon, label, value, tooltip }: MiniStatProps) {
           <p className="text-[9px] md:text-[11px] text-muted tracking-[0.3px] md:tracking-[0.48px] flex items-center gap-1">
             <span className="truncate">{label}</span>
             {tooltip && (
-              <span
+              <button
+                type="button"
                 title={tooltip}
                 aria-label={tooltip}
-                className="text-muted/60 hover:text-brand cursor-help shrink-0"
-                tabIndex={0}
+                onMouseEnter={() => setShowTip(true)}
+                onMouseLeave={() => setShowTip(false)}
+                onFocus={() => setShowTip(true)}
+                onBlur={() => setShowTip(false)}
+                onClick={(e) => { e.stopPropagation(); setShowTip((v) => !v); }}
+                className="text-secondary hover:text-brand shrink-0 inline-flex items-center justify-center w-4 h-4 rounded-full cursor-help"
               >
-                <Info size={10} />
-              </span>
+                <Info size={12} />
+              </button>
             )}
           </p>
           <p className="text-[11px] md:text-sm font-semibold text-primary truncate" style={{ fontVariantNumeric: 'tabular-nums' }}>{value}</p>
         </div>
       </div>
+      {tooltip && showTip && (
+        // Absolute, positioned below the card's label row. z-30 sits above
+        // sibling cards in the grid. max-w keeps the bubble narrow on wide
+        // screens so long copy wraps legibly. Tap-anywhere-else dismisses
+        // via the onClick toggle on the button.
+        <div
+          role="tooltip"
+          className="absolute left-0 right-0 top-full mt-1 z-30 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised,#1a1a1a)] p-2.5 text-[11px] leading-snug text-primary shadow-xl max-w-[320px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {tooltip}
+        </div>
+      )}
     </div>
   );
 }

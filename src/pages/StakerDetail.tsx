@@ -320,13 +320,41 @@ const StakerDetail = () => {
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats — the "Staked ELA" card prefers the voter_rights-derived
+          totalStaked (includes idle) and falls back to the legacy totalLocked
+          (pledged only) when the backend doesn't emit voter_rights data. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3">
-        <MiniStat icon={Lock} label="Locked ELA" value={`${fmtEla(data.totalLocked, { compact: true })} ELA`} />
+        <MiniStat
+          icon={Lock}
+          label={data.totalStaked ? 'Staked ELA' : 'Locked ELA'}
+          value={`${fmtEla(data.totalStaked || data.totalLocked, { compact: true })} ELA`}
+        />
         <MiniStat icon={Shield} label="Voting Rights" value={fmtEla(data.totalStakingRights, { compact: true })} />
         <MiniStat icon={Vote} label="Active Stakes" value={fmtNumber(data.activeVotes)} />
         <MiniStat icon={Gift} label="Claimable" value={claimable > 0 ? `${fmtEla(data.claimable ?? '0', { compact: true })} ELA` : '\u2014'} />
       </div>
+
+      {/* Pledged / Idle breakdown — only when voter_rights has data for this
+          address. Absent = backend feature off or address not yet covered. */}
+      {data.totalIdle && (
+        <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs rounded-lg">
+          <span className="text-muted">Breakdown</span>
+          <span className="text-muted opacity-40">&bull;</span>
+          <span className="text-secondary">Pledged</span>
+          <span className="text-primary font-semibold font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {fmtEla(data.totalPledged || data.totalLocked, { compact: true })} ELA
+          </span>
+          <span className="text-muted opacity-40">&bull;</span>
+          <span className="text-secondary">Idle</span>
+          <span
+            className="text-accent-blue font-semibold font-mono"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+            title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
+          >
+            {fmtEla(data.totalIdle, { compact: true })} ELA
+          </span>
+        </div>
+      )}
 
       {/* Earnings */}
       {totalEarned > 0 && (

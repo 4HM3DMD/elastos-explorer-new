@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { TopStaker, StakingSummary, BlockchainStats } from '../types/blockchain';
-import { Lock, Shield, Users, Gift, Wallet, Coins } from 'lucide-react';
+import { Lock, Shield, Users, Gift, Wallet, Coins, Info } from 'lucide-react';
 import { fmtEla, fmtNumber } from '../utils/format';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -88,14 +88,21 @@ const Staking = () => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
           <MiniStat icon={Coins} label="Total Staked" value={`${fmtEla(chainStats.totalStaked, { compact: true })} ELA`} />
           <MiniStat icon={Shield} label="Pledged to Validators" value={`${fmtEla(chainStats.totalLocked, { compact: true })} ELA`} />
-          <MiniStat icon={Wallet} label="Idle Stake" value={`${fmtEla(chainStats.idleStake, { compact: true })} ELA`} />
+          <MiniStat
+            icon={Wallet}
+            label="Idle Stake"
+            value={`${fmtEla(chainStats.idleStake, { compact: true })} ELA`}
+            tooltip="ELA deposited into the stake pool but not currently pledged to any validator. Earns no rewards until pledged (via a BPoS vote). The owner can withdraw it anytime."
+          />
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3">
+      {/* Stats — "Total Locked" removed because it's identical to
+          "Pledged to Validators" above (both = SUM(bpos_stakes.raw_amount)).
+          The three remaining cards each show data the chain-wide row
+          doesn't: distinct stakers, voting rights, unclaimed rewards. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
         <MiniStat icon={Users} label="Total Stakers" value={fmtNumber(total)} />
-        <MiniStat icon={Lock} label="Total Locked" value={summary ? `${fmtEla(summary.totalLocked, { compact: true })} ELA` : '\u2014'} />
         <MiniStat icon={Shield} label="Voting Rights" value={summary ? fmtEla(summary.totalVotingRights, { compact: true }) : '\u2014'} />
         <MiniStat icon={Gift} label="Unclaimed Rewards" value={summary ? `${fmtEla(summary.totalUnclaimed, { compact: true })} ELA` : '\u2014'} />
       </div>
@@ -198,7 +205,20 @@ const Staking = () => {
   );
 };
 
-function MiniStat({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) {
+interface MiniStatProps {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  /**
+   * Optional explainer shown as a native browser tooltip on hover. Also
+   * renders a small Info icon next to the label so users know something
+   * extra is available — without a JS library or any risk of cropping in
+   * the tight card layout.
+   */
+  tooltip?: string;
+}
+
+function MiniStat({ icon: Icon, label, value, tooltip }: MiniStatProps) {
   return (
     <div className="card p-2 md:p-3 relative overflow-hidden">
       <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
@@ -207,7 +227,19 @@ function MiniStat({ icon: Icon, label, value }: { icon: React.ElementType; label
           <Icon size={13} className="text-brand" />
         </div>
         <div className="min-w-0">
-          <p className="text-[9px] md:text-[11px] text-muted tracking-[0.3px] md:tracking-[0.48px]">{label}</p>
+          <p className="text-[9px] md:text-[11px] text-muted tracking-[0.3px] md:tracking-[0.48px] flex items-center gap-1">
+            <span className="truncate">{label}</span>
+            {tooltip && (
+              <span
+                title={tooltip}
+                aria-label={tooltip}
+                className="text-muted/60 hover:text-brand cursor-help shrink-0"
+                tabIndex={0}
+              >
+                <Info size={10} />
+              </span>
+            )}
+          </p>
           <p className="text-[11px] md:text-sm font-semibold text-primary truncate" style={{ fontVariantNumeric: 'tabular-nums' }}>{value}</p>
         </div>
       </div>

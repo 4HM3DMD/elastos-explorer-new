@@ -193,16 +193,16 @@ const VoteHistoryTimeline = ({ address }: Props) => {
               const term = v.voteType === 1
                 ? getElectionTargetTerm(v.stakeHeight)
                 : isGovernance ? getTermFromHeight(v.stakeHeight) : 0;
-              // Three BPoS vote states on the UI:
-              //   active   — UTXO unspent AND lockTime still in the future → counts for validator
-              //   expired  — UTXO unspent BUT lockTime has passed         → no longer counting, withdrawable
-              //   ended    — UTXO spent by a later tx (renewal or return) → vote is historically done
-              // The backend's v.isActive tracks UTXO spent state only; combining it with chainTip vs
-              // lockTime gives the three-way split the user actually cares about.
-              const lockExpired = chainTip > 0 && v.lockTime > 0 && chainTip >= v.lockTime;
-              const showActiveBadge  = isStaking && v.isActive && !lockExpired;
-              const showExpiredBadge = isStaking && v.isActive && lockExpired;
-              const showEndedBadge   = isStaking && !v.isActive;
+              // Two BPoS vote states on the UI (per operator rule):
+              //   active — UTXO unspent AND lockTime still in the future
+              //   ended  — everything else (UTXO spent OR lockTime has passed)
+              // Rationale: once lockTime is reached the vote no longer counts
+              // for the validator, so it's effectively done regardless of
+              // whether the user has withdrawn the UTXO yet. Collapsing the
+              // two "not active" reasons into one badge keeps the UI simple.
+              const lockReached = chainTip > 0 && v.lockTime > 0 && chainTip >= v.lockTime;
+              const showActiveBadge = isStaking && v.isActive && !lockReached;
+              const showEndedBadge  = isStaking && (!v.isActive || lockReached);
 
               return (
                 <div key={`${v.txid}-${v.candidate}-${i}`} className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-3 hover:bg-hover transition-colors gap-2">
@@ -210,13 +210,10 @@ const VoteHistoryTimeline = ({ address }: Props) => {
                     <div className={cn(
                       'w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
                       showActiveBadge ? 'bg-emerald-500/10'
-                        : showExpiredBadge ? 'bg-amber-500/10'
                         : isGovernance ? 'bg-violet-500/10' : 'bg-zinc-500/10',
                     )}>
                       {showActiveBadge ? (
                         <CheckCircle size={16} className="text-accent-green" />
-                      ) : showExpiredBadge ? (
-                        <Lock size={14} className="text-amber-400" />
                       ) : showEndedBadge ? (
                         <XCircle size={16} className="text-muted" />
                       ) : (
@@ -239,14 +236,6 @@ const VoteHistoryTimeline = ({ address }: Props) => {
                         {showActiveBadge && (
                           <span className="text-[10px] text-accent-green font-medium inline-flex items-center gap-0.5">
                             <CheckCircle size={10} /> Active
-                          </span>
-                        )}
-                        {showExpiredBadge && (
-                          <span
-                            className="text-[10px] text-amber-400 font-medium inline-flex items-center gap-0.5"
-                            title={`Lock expired at block #${v.lockTime.toLocaleString()} — UTXO still unspent, withdrawable`}
-                          >
-                            <Lock size={10} /> Expired
                           </span>
                         )}
                         {showEndedBadge && (

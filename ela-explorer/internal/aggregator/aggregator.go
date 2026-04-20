@@ -1647,6 +1647,26 @@ func isValidStakeAddress(s string) bool {
 // total/pledged/idle ELA. The aggregate pool-wide idle stake is already shown
 // chain-wide; this loop persists the per-address breakdown that makes it
 // possible to render "Pledged / Idle" for an individual staker.
+//
+// Known v1 limitation — "pure-idle" addresses
+// --------------------------------------------------------------------------
+// This function enumerates stake addresses from bpos_stakes, which means an
+// address that has deposited into the stake pool but has not yet voted for
+// any producer will NOT be covered until their first vote lands. They're
+// still fully accounted for in the chain-wide idleStake total (stats.go:
+// totalStaked - totalLocked), just not individually addressable via
+// /api/v1/address/<addr>/staking.
+//
+// v2 approach (when demand appears):
+//   1. Enumerate additionally from tx_vouts with output_type = OTStake
+//      (see internal/sync/tx_processor.go for how OTStake outputs are
+//      recognised). The `StakeAddress` is in the output payload.
+//   2. Merge with the bpos_stakes-derived list, dedupe, then run the same
+//      getvoterights batching.
+//   3. Consider a dedicated index on tx_vouts(output_type) to make the
+//      enumeration cheap — an LSM on a full table scan would be expensive
+//      at current chain size.
+// Until then, pure-idle addresses render the legacy totalLocked-only UI.
 func (a *Aggregator) refreshVoterRights(ctx context.Context) error {
 	if !a.stakeIdleEnabled {
 		return nil

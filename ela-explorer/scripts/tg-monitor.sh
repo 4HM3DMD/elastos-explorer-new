@@ -623,6 +623,90 @@ check_memory() {
     fi
 }
 
+# --- Check 10: SSL certificate expiry ---
+# Optional — skipped if PUBLIC_DOMAIN is not set in /etc/ela-monitor.conf.
+# Needs openssl installed (usually present). Warns 14 days out, critical 3 days.
+check_ssl_cert() {
+    local domain="${PUBLIC_DOMAIN:-}"
+    if [[ -z "$domain" ]]; then
+        return
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+        return
+    fi
+
+    local not_after expiry_epoch now_epoch days_left
+    not_after=$(echo | openssl s_client -servername "$domain" -connect "${domain}:443" 2>/dev/null \
+        | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+    if [[ -z "$not_after" ]]; then
+        return
+    fi
+    expiry_epoch=$(date -d "$not_after" +%s 2>/dev/null || true)
+    now_epoch=$(date +%s)
+    if [[ -z "$expiry_epoch" ]]; then
+        return
+    fi
+    days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+
+    if [[ "$days_left" -lt 3 ]]; then
+        set_status "ssl" "critical"
+        local msg="CRITICAL SSL cert for ${domain} expires in ${days_left}d"
+        local msg_hash="ssl_crit_${days_left}"
+        if should_alert "ssl" "critical" "$msg_hash"; then
+            ISSUES+=("$msg")
+            record_alert "ssl" "$msg_hash"
+        fi
+    elif [[ "$days_left" -lt 14 ]]; then
+        set_status "ssl" "warning"
+        local msg="SSL cert for ${domain} expires in ${days_left}d"
+        local msg_hash="ssl_warn_${days_left}"
+        if should_alert "ssl" "warning" "$msg_hash"; then
+            ISSUES+=("$msg")
+            record_alert "ssl" "$msg_hash"
+        fi
+    else
+        if [[ "$(prev_status ssl)" != "ok" ]]; then
+            RECOVERIES+=("SSL cert renewed: ${domain} now valid for ${days_left}d")
+        fi
+        set_status "ssl" "ok"
+    fi
+}
+
+# --- Check 11: On-chain reorg / fork ---
+# Reads the new forkDetected field from /api/v1/sync-status (wired in the
+# backend at internal/aggregator/aggregator.go:checkReferenceHashes).
+# Catches the nastiest silent failure: local node on a minority fork.
+check_fork() {
+    local sync_json fork_detected fork_height
+    sync_json=$(curl -s --max-time 5 "http://127.0.0.1:8339/api/v1/sync-status" 2>/dev/null || true)
+    if [[ -z "$sync_json" ]]; then
+        return
+    fi
+    # Accept both true/false (Go json bool). jq optional — grep fallback.
+    if command -v jq >/dev/null 2>&1; then
+        fork_detected=$(echo "$sync_json" | jq -r '.data.validation.forkDetected // false' 2>/dev/null)
+        fork_height=$(echo "$sync_json" | jq -r '.data.validation.forkMismatchHeight // -1' 2>/dev/null)
+    else
+        fork_detected=$(echo "$sync_json" | grep -o '"forkDetected":[^,}]*' | cut -d: -f2 | tr -d ' ')
+        fork_height=$(echo "$sync_json" | grep -o '"forkMismatchHeight":[^,}]*' | cut -d: -f2 | tr -d ' ')
+    fi
+
+    if [[ "$fork_detected" == "true" ]]; then
+        set_status "fork" "critical"
+        local msg="CRITICAL node on minority fork (height ${fork_height})"
+        local msg_hash="fork_${fork_height}"
+        if should_alert "fork" "critical" "$msg_hash"; then
+            ISSUES+=("$msg")
+            record_alert "fork" "$msg_hash"
+        fi
+    else
+        if [[ "$(prev_status fork)" != "ok" ]]; then
+            RECOVERIES+=("Fork resolved: local node back on consensus chain")
+        fi
+        set_status "fork" "ok"
+    fi
+}
+
 # =========================================================================
 # Run all checks
 # =========================================================================
@@ -638,6 +722,8 @@ check_sync_stall
 check_node_gap
 check_disk
 check_memory
+check_ssl_cert
+check_fork
 
 # =========================================================================
 # Send combined alerts

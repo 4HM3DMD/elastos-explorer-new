@@ -1,0 +1,69 @@
+# Alertmanager config — routes Prometheus alert groups to Telegram.
+#
+# Reuses the same Telegram bot used by ela-explorer/scripts/tg-monitor.sh
+# (TG_TOKEN + TG_CHAT from /etc/ela-monitor.conf). Deduplicates, silences,
+# and gives you an HTTP UI on :9093 for inspecting active/silenced alerts.
+#
+# Deploy:
+#   docker run -d --name alertmanager --network host \
+#     -v $(pwd)/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro \
+#     -v alertmanager_data:/alertmanager \
+#     -e TG_TOKEN="<same as in /etc/ela-monitor.conf>" \
+#     -e TG_CHAT="<same chat id>" \
+#     prom/alertmanager:latest
+#
+# Then uncomment the alertmanager target in prometheus.yml.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: telegram
+
+  routes:
+    # Critical alerts get their own receiver with faster repeat.
+    - match:
+        severity: critical
+      receiver: telegram-critical
+      repeat_interval: 1h
+      group_wait: 10s
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/tg_token
+        chat_id: ${TG_CHAT}
+        parse_mode: HTML
+        message: |
+          <b>⚠️ {{ .Status | toUpper }}</b>
+          {{ range .Alerts -}}
+          <b>{{ .Labels.alertname }}</b>
+          {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+
+  - name: telegram-critical
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/tg_token
+        chat_id: ${TG_CHAT}
+        parse_mode: HTML
+        message: |
+          <b>🔴 CRITICAL — {{ .Status | toUpper }}</b>
+          {{ range .Alerts -}}
+          <b>{{ .Labels.alertname }}</b>
+          {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+
+inhibit_rules:
+  # If ExplorerDown fires, suppress the dependent sync/http/runtime alerts —
+  # they'd all be noise until the main process is back up.
+  - source_match:
+      alertname: ExplorerDown
+    target_match_re:
+      alertname: (SyncFallingBehind|SyncStalled|ExplorerHTTPErrorRateHigh|GoroutineLeak|WebSocketConnectionsPlateau)
+    equal: ['deployment']

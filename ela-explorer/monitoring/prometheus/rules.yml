@@ -1,0 +1,112 @@
+# Alert rules for ela-explorer — fire via Alertmanager.
+#
+# Rationale: these cover the failure modes that tg-monitor.sh's 5-minute
+# cron polling cadence is too slow or too coarse-grained to catch well.
+# tg-monitor.sh remains the primary alert path; Prometheus + Alertmanager
+# is complementary and gives you history, graphs, and silencing.
+#
+# Metrics reference (from internal/metrics/metrics.go):
+#   ela_explorer_uptime_seconds          gauge
+#   ela_explorer_http_requests_total     counter
+#   ela_explorer_http_errors_total       counter
+#   ela_explorer_ws_connections_total    counter
+#   ela_explorer_synced_height           gauge
+#   ela_explorer_chain_tip               gauge
+#   ela_explorer_sync_gap                gauge
+#   go_memstats_alloc_bytes              gauge
+#   go_memstats_sys_bytes                gauge
+#   go_goroutines                        gauge
+
+groups:
+  - name: ela-explorer-availability
+    interval: 30s
+    rules:
+      - alert: ExplorerDown
+        expr: up{job="ela-explorer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ela-explorer is not responding to scrapes"
+          description: "Prometheus has been unable to scrape /metrics for 2 minutes. Check container, nginx, and the METRICS_AUTH_TOKEN."
+
+      - alert: ExplorerHTTPErrorRateHigh
+        # ≥5% of responses are errors over a 5-minute window, for ≥5 minutes.
+        expr: |
+          rate(ela_explorer_http_errors_total[5m])
+            / ignoring(status_class) rate(ela_explorer_http_requests_total[5m])
+            > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated HTTP error rate ({{ $value | humanizePercentage }})"
+          description: "More than 5% of API responses in the last 5 minutes returned 5xx. Something is probably wrong with the DB or the node RPC."
+
+  - name: ela-explorer-sync
+    interval: 30s
+    rules:
+      - alert: SyncFallingBehind
+        # Gap growing — indexer can't keep up. For a 2-min block time chain,
+        # >10 blocks behind persistently means real trouble.
+        expr: ela_explorer_sync_gap > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sync gap: {{ $value }} blocks"
+          description: "Indexer is >10 blocks behind chain tip for 10+ min. Check node RPC health and syncer logs."
+
+      - alert: SyncStalled
+        # Synced height hasn't moved at all for 15 min. Chain produces a block
+        # ~every 2 min, so flat synced_height = real stall (not just slow).
+        expr: |
+          (ela_explorer_synced_height offset 15m) == ela_explorer_synced_height
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sync stalled at height {{ $value }}"
+          description: "Indexer has not advanced for 15 minutes. Either the local node is stuck or the syncer goroutine is hung."
+
+  - name: ela-explorer-runtime
+    interval: 30s
+    rules:
+      - alert: GoroutineLeak
+        # Normal steady-state is a few hundred goroutines. 5k sustained
+        # suggests a connection/WS leak or a stuck work item.
+        expr: go_goroutines > 5000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Goroutine count {{ $value }} (leak suspected)"
+          description: "Goroutine count has been above 5000 for 15 minutes. Likely a WebSocket or HTTP handler leak."
+
+      - alert: MemoryGrowthUnbounded
+        # Heap doubled compared to 1h ago AND is now >3GB. Catches slow leaks.
+        expr: |
+          go_memstats_alloc_bytes > 3 * 1024 * 1024 * 1024
+          and
+          go_memstats_alloc_bytes > 2 * (go_memstats_alloc_bytes offset 1h)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Heap grew {{ $value | humanize1024 }}B — 2× in 1h"
+          description: "Look for leaking caches or unbounded slice growth. mem_limit in docker-compose is currently 4g."
+
+  - name: ela-explorer-websocket
+    interval: 30s
+    rules:
+      - alert: WebSocketConnectionsPlateau
+        # A healthy hub churns. Flat connection count for an hour suggests
+        # clients can't reconnect (WS endpoint broken) or are all stuck.
+        expr: |
+          changes(ela_explorer_ws_connections_total[1h]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No new WebSocket connections in 1 hour"
+          description: "Either no clients are connecting (nginx broken?) or the counter is stuck. Check browser DevTools → WS."

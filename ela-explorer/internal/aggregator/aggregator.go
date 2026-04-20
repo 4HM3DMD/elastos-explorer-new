@@ -55,11 +55,22 @@ type Aggregator struct {
 	peerCount          int
 	lastBlockAge       time.Duration
 	hashMismatchHeight int64
+	// forkMismatchHeight is the height at which the local node disagrees
+	// with the majority of reference RPCs on the block hash. -1 means no
+	// disagreement (or no reference clients configured). This catches the
+	// "we're on a minority fork" case that height-only cross-check misses.
+	forkMismatchHeight int64
 	missingBlockCount  int
 	negativeBalances   int
 	chainStatsAccurate bool
 	lastValidation     time.Time
 }
+
+// forkProbeDepth is how many blocks back from current tip we cross-check
+// the hash against reference RPCs. 6 is deep enough that any transient
+// short fork at the tip has resolved by now, but shallow enough that the
+// reference RPCs reliably still have the block.
+const forkProbeDepth = 6
 
 func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub, referenceClients []*node.Client) *Aggregator {
 	return &Aggregator{
@@ -68,6 +79,7 @@ func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub, referenceClients
 		hub:                hub,
 		referenceClients:   referenceClients,
 		hashMismatchHeight: -1,
+		forkMismatchHeight: -1,
 		chainStatsAccurate: true,
 		stakeIdleEnabled:   true,
 	}
@@ -151,6 +163,8 @@ func (a *Aggregator) ValidationStatus() map[string]any {
 		"lastCheckAt":        a.lastValidation.UTC().Format(time.RFC3339),
 		"hashMismatch":       a.hashMismatchHeight >= 0,
 		"hashMismatchHeight": a.hashMismatchHeight,
+		"forkDetected":       a.forkMismatchHeight >= 0,
+		"forkMismatchHeight": a.forkMismatchHeight,
 		"missingBlocks":      a.missingBlockCount,
 		"negativeBalances":   a.negativeBalances,
 		"chainStatsAccurate": a.chainStatsAccurate,
@@ -187,6 +201,7 @@ func (a *Aggregator) runValidation(ctx context.Context) error {
 	peerCount := a.checkPeerCount(ctx)
 	localHeight, lastBlockAge := a.checkLocalNode(ctx)
 	hashMismatch := a.checkBlockHashes(ctx)
+	forkMismatch := a.checkReferenceHashes(ctx, localHeight)
 	missingCount := a.checkMissingBlocks(ctx)
 	negBal, statsOK := a.checkDBIntegrity(ctx)
 
@@ -199,6 +214,7 @@ func (a *Aggregator) runValidation(ctx context.Context) error {
 	a.peerCount = peerCount
 	a.lastBlockAge = lastBlockAge
 	a.hashMismatchHeight = hashMismatch
+	a.forkMismatchHeight = forkMismatch
 	a.missingBlockCount = missingCount
 	a.negativeBalances = negBal
 	a.chainStatsAccurate = statsOK
@@ -211,6 +227,13 @@ func (a *Aggregator) runValidation(ctx context.Context) error {
 	}
 	if hashMismatch >= 0 {
 		slog.Warn("validation: block hash mismatch detected", "height", hashMismatch)
+	}
+	if forkMismatch >= 0 {
+		// Loud, greppable — this is the scariest case for a block explorer.
+		// Monitoring should page on this.
+		slog.Error("validation: REORG/FORK DETECTED — local node disagrees with reference RPCs",
+			"height", forkMismatch,
+			"action", "stop trusting local node until resolved")
 	}
 	if missingCount > 0 {
 		slog.Warn("validation: missing blocks in DB", "count", missingCount)
@@ -267,6 +290,72 @@ func (a *Aggregator) checkReferenceHeight(ctx context.Context) int64 {
 		}
 	}
 	return maxHeight
+}
+
+// checkReferenceHashes probes the local node's block hash at
+// `localHeight - forkProbeDepth` and compares it to the majority of
+// reference RPCs at the same height. Returns the mismatched height on
+// disagreement, or -1 if all match (or there's nothing to compare against).
+//
+// This catches the scariest block-explorer failure mode: the local node
+// is on a minority fork, still producing blocks at a sensible tip, but
+// serving a different chain than the rest of the network. checkBlockHashes
+// can't catch this (it compares DB→local-node, which agree), and
+// checkReferenceHeight can't catch it (heights can match on forks).
+func (a *Aggregator) checkReferenceHashes(ctx context.Context, localHeight int64) int64 {
+	if len(a.referenceClients) == 0 || localHeight <= forkProbeDepth {
+		return -1
+	}
+
+	probeHeight := localHeight - forkProbeDepth
+
+	localCtx, localCancel := context.WithTimeout(ctx, 5*time.Second)
+	localHash, err := a.node.GetBlockHash(localCtx, probeHeight)
+	localCancel()
+	if err != nil || localHash == "" {
+		// Can't probe — treat as indeterminate, not a fork.
+		slog.Debug("validation: local hash probe failed",
+			"height", probeHeight, "error", err)
+		return -1
+	}
+
+	type result struct {
+		hash string
+		err  error
+	}
+	ch := make(chan result, len(a.referenceClients))
+	for _, rc := range a.referenceClients {
+		rc := rc
+		go func() {
+			refCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			h, err := rc.GetBlockHash(refCtx, probeHeight)
+			ch <- result{h, err}
+		}()
+	}
+
+	// Majority vote across reference RPCs. A single-ref disagreement isn't
+	// enough — we require MORE references to disagree than to agree before
+	// flagging a fork. Protects against one public RPC being temporarily flaky.
+	agree, disagree := 0, 0
+	for range a.referenceClients {
+		r := <-ch
+		if r.err != nil || r.hash == "" {
+			continue
+		}
+		if r.hash == localHash {
+			agree++
+		} else {
+			disagree++
+			slog.Debug("validation: reference RPC hash differs",
+				"height", probeHeight, "local", localHash, "ref", r.hash)
+		}
+	}
+
+	if disagree > agree && disagree > 0 {
+		return probeHeight
+	}
+	return -1
 }
 
 func (a *Aggregator) checkPeerCount(ctx context.Context) int {

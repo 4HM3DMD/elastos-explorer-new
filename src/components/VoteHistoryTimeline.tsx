@@ -72,11 +72,38 @@ const VoteHistoryTimeline = ({ address }: Props) => {
       {isStakeAddress && !loading && staking && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard icon={Coins} label="Total Staked" value={`${fmtELA(staking.totalLocked)} ELA`} color="blue" />
+            <StatCard
+              icon={Coins}
+              label="Total Staked"
+              value={`${fmtELA(staking.totalStaked || staking.totalLocked)} ELA`}
+              color="blue"
+            />
             <StatCard icon={Shield} label="Voting Rights" value={`${fmtELA(staking.totalStakingRights)} ELA`} color="green" />
             <StatCard icon={Coins} label="Claimable" value={`${fmtELA(staking.claimable)} ELA`} color="orange" />
             <StatCard icon={Coins} label="Total Rewards" value={`${fmtELA(staking.totalRewards)} ELA`} color="purple" />
           </div>
+
+          {/* Pledged / Idle breakdown — matches the row in StakerDetail.
+              Absent when voter_rights has no data for this address. */}
+          {staking.totalIdle && (
+            <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs rounded-lg">
+              <span className="text-muted">Breakdown</span>
+              <span className="text-muted opacity-40">&bull;</span>
+              <span className="text-secondary">Pledged</span>
+              <span className="text-primary font-semibold font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {fmtELA(staking.totalPledged || staking.totalLocked)} ELA
+              </span>
+              <span className="text-muted opacity-40">&bull;</span>
+              <span className="text-secondary">Idle</span>
+              <span
+                className="text-accent-blue font-semibold font-mono"
+                style={{ fontVariantNumeric: 'tabular-nums' }}
+                title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
+              >
+                {fmtELA(staking.totalIdle)} ELA
+              </span>
+            </div>
+          )}
 
           {staking.stakes && staking.stakes.length > 0 && (
             <div className="card overflow-hidden">

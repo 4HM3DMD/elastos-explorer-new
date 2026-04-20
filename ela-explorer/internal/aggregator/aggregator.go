@@ -1530,6 +1530,13 @@ func (a *Aggregator) refreshBPoSStakes(ctx context.Context) error {
 	if _, err := a.db.Syncer.Exec(ctx, "CREATE INDEX IF NOT EXISTS idx_bpos_stakes_address ON bpos_stakes(stake_address)"); err != nil {
 		slog.Debug("bpos_stakes: address index", "error", err)
 	}
+	// Composite (transaction_hash, producer_key) supports the
+	// getAddressVoteHistory JOIN that maps individual vote rows (keyed by
+	// txid + candidate) to their current on-chain stake — the query that
+	// drives the Active/Ended badge in the UI.
+	if _, err := a.db.Syncer.Exec(ctx, "CREATE INDEX IF NOT EXISTS idx_bpos_stakes_txid_producer ON bpos_stakes(transaction_hash, producer_key)"); err != nil {
+		slog.Debug("bpos_stakes: txid+producer index", "error", err)
+	}
 
 	votes, err := a.node.GetAllDetailedDPoSV2Votes(ctx, 0, 100000)
 	if err != nil {

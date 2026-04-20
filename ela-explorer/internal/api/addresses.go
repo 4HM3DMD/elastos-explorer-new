@@ -673,17 +673,20 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		queryArgs = append(queryArgs, typeFilter)
 	}
 
-	// LEFT JOIN bpos_stakes bs ON v.txid = bs.transaction_hash AND v.vote_type = 4
-	//   — surfaces whether the stake identity (the creation tx) is STILL
-	//   represented in the node's authoritative active-stakes set. This
-	//   is the key to rendering "Active" vs "Ended" correctly after a
-	//   renewal: when user renews, the original vote row's UTXO is
-	//   consumed (v.is_active=FALSE) but the node keeps reporting the
-	//   stake under the ORIGINAL transactionhash with an updated locktime
-	//   — we want the UI to call that Active, not Ended.
+	// LEFT JOIN bpos_stakes bs ON (bs.transaction_hash = v.txid
+	//                              AND bs.producer_key = v.candidate
+	//                              AND v.vote_type = 4)
+	//   — surfaces whether this SPECIFIC vote's stake identity
+	//   (creation tx + candidate) is STILL represented in the node's
+	//   authoritative active-stakes set. Key for rendering "Active"
+	//   correctly after a renewal: the node keeps the original
+	//   transactionhash but may only preserve ONE candidate (if the
+	//   creation tx had multiple votes and the user renewed only one).
+	//   Joining on candidate too means siblings in the same tx don't
+	//   inherit each other's current locktime — only the specific vote
+	//   that's still alive gets a non-null current_lock_time.
 	//   bs.lock_time reflects the CURRENT on-chain locktime (post any
-	//   renewals); the UI uses it instead of v.lock_time for display when
-	//   present.
+	//   renewals); the UI uses it instead of v.lock_time for display.
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT v.txid, v.vote_type, v.candidate, v.producer_pubkey, v.amount_sela,
 		       v.lock_time, v.stake_height, v.is_active, v.spent_txid,
@@ -696,7 +699,9 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN producers p ON v.producer_pubkey = p.owner_pubkey AND v.producer_pubkey != ''
 		LEFT JOIN cr_members cr ON (v.candidate = cr.cid OR v.candidate = cr.did) AND v.vote_type IN (1,2,3,4)
 		LEFT JOIN transactions t ON v.txid = t.txid
-		LEFT JOIN bpos_stakes bs ON bs.transaction_hash = v.txid AND v.vote_type = 4
+		LEFT JOIN bpos_stakes bs ON bs.transaction_hash = v.txid
+		                        AND bs.producer_key = v.candidate
+		                        AND v.vote_type = 4
 		`+whereClause+`
 		ORDER BY v.stake_height DESC
 		LIMIT $2 OFFSET $3`, queryArgs...)

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
-import type { TopStaker, StakingSummary } from '../types/blockchain';
-import { Lock, Shield, Users, Gift } from 'lucide-react';
+import type { TopStaker, StakingSummary, BlockchainStats } from '../types/blockchain';
+import { Lock, Shield, Users, Gift, Wallet, Coins } from 'lucide-react';
 import { fmtEla, fmtNumber } from '../utils/format';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -16,6 +16,7 @@ const Staking = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<StakingSummary | null>(null);
+  const [chainStats, setChainStats] = useState<BlockchainStats | null>(null);
   const currentPage = Math.max(1, Math.floor(Number(searchParams.get('page')) || 1));
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -44,6 +45,16 @@ const Staking = () => {
     fetchStakers(currentPage);
   }, [currentPage, fetchStakers]);
 
+  // Fetch chain-wide stats once on mount — independent of pagination.
+  // Failure is non-fatal: the chain-wide strip just won't render.
+  useEffect(() => {
+    let cancelled = false;
+    blockchainApi.getStats()
+      .then((s) => { if (!cancelled) setChainStats(s); })
+      .catch(() => { /* leave chainStats null */ });
+    return () => { cancelled = true; };
+  }, []);
+
   if (loading && stakers.length === 0) return <PageSkeleton />;
 
   if (error) {
@@ -70,6 +81,16 @@ const Staking = () => {
           </div>
         </div>
       </div>
+
+      {/* Chain-wide stake breakdown — only rendered when backend exposes
+          idleStake (STAKE_IDLE_ENABLED=true). Falls back gracefully. */}
+      {chainStats?.idleStake && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
+          <MiniStat icon={Coins} label="Total Staked" value={`${fmtEla(chainStats.totalStaked, { compact: true })} ELA`} />
+          <MiniStat icon={Shield} label="Pledged to Validators" value={`${fmtEla(chainStats.totalLocked, { compact: true })} ELA`} />
+          <MiniStat icon={Wallet} label="Idle Stake" value={`${fmtEla(chainStats.idleStake, { compact: true })} ELA`} />
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3">
@@ -133,9 +154,24 @@ const Staking = () => {
                         </div>
                       </td>
                       <td>
-                        <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {fmtEla(s.totalLocked, { compact: true })}
-                        </span>
+                        {s.totalIdle && s.totalStaked ? (
+                          <div className="min-w-0">
+                            <div className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {fmtEla(s.totalStaked, { compact: true })}
+                            </div>
+                            <div
+                              className="text-[10px] text-muted font-mono mt-0.5 whitespace-nowrap"
+                              style={{ fontVariantNumeric: 'tabular-nums' }}
+                              title={`Pledged ${fmtEla(s.totalPledged || s.totalLocked, { compact: true })} ELA · Idle ${fmtEla(s.totalIdle, { compact: true })} ELA`}
+                            >
+                              P: {fmtEla(s.totalPledged || s.totalLocked, { compact: true })} &middot; I: {fmtEla(s.totalIdle, { compact: true })}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtEla(s.totalLocked, { compact: true })}
+                          </span>
+                        )}
                       </td>
                       <td>
                         <span className="font-mono text-xs text-accent-blue whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>

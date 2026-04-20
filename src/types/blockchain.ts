@@ -250,6 +250,13 @@ export interface AddressStaking {
   claiming?: string;
   claimed?: string;
   totalRewards?: string;
+  // Per-address voter_rights breakdown (backend: getAddressStaking).
+  // Populated only when voter_rights has data for this address — UI must
+  // fall back to legacy totalLocked rendering when these are absent.
+  totalStaked?: string;
+  totalPledged?: string;
+  totalIdle?: string;
+  voterRightsUpdated?: number;
 }
 
 export interface StakeEntry {
@@ -278,6 +285,11 @@ export interface TopStaker {
   claimable?: string;
   claimed?: string;
   totalRewards?: string;
+  // Per-address voter_rights breakdown (backend: getTopStakers).
+  // Optional — absent when voter_rights has no data for this row.
+  totalStaked?: string;
+  totalPledged?: string;
+  totalIdle?: string;
 }
 
 export interface StakingSummary {
@@ -465,6 +477,10 @@ export interface BlockchainStats {
   totalIndexedSupply: string;
   totalStaked: string;
   totalLocked: string;
+  // Chain-wide idle stake = totalStaked - totalLocked (sum of stake deposits
+  // that are not currently pledged to a validator). Optional — backend only
+  // emits when STAKE_IDLE_ENABLED is on.
+  idleStake?: string;
   totalVoters: number;
   avgBlockTime: number;
   syncStatus: SyncStatus;
@@ -509,6 +525,8 @@ export interface SupplyData {
   circulatingSupply: string;
   totalStaked: string;
   totalLocked: string;
+  // Chain-wide idle stake (see ChainStats.idleStake). Optional.
+  idleStake?: string;
   totalBurned: string;
   daoTreasury: string;
   stakingRewardsPool: string;

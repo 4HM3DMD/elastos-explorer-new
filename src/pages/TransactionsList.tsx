@@ -10,6 +10,7 @@ import { cn } from '../lib/cn';
 import RelativeTime from '../components/RelativeTime';
 import { truncHash, fmtEla } from '../utils/format';
 import { toSela } from '../utils/sela';
+import { txDisplayValue } from '../utils/txSummary';
 import { getTypeLabel, getTypeInfo, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
 import SEO from '../components/SEO';
@@ -25,16 +26,6 @@ const CATEGORY_ACCENT: Record<string, string> = {
   governance: '#8b5cf6',
   nft:        '#f43f5e',
 };
-
-function txDisplayValue(tx: TransactionSummary): string | null {
-  if (tx.netTransferValue) {
-    const net = parseFloat(tx.netTransferValue);
-    if (net > 0) return `${fmtEla(tx.netTransferValue, { compact: true })} ELA`;
-    if (net <= 0) return null;
-  }
-  if (tx.totalOutputValue) return `${fmtEla(tx.totalOutputValue, { compact: true })} ELA`;
-  return null;
-}
 
 type ViewMode = 'user' | 'system' | 'all';
 

@@ -10,6 +10,21 @@ services:
     # No ${RPC_USER:?...} here — that breaks when .env only has ELA_NODE_RPC_*.
     env_file:
       - .env
+    # Hard ceiling so a memory leak in the indexer/aggregator can't push the
+    # host into swap-death. Override via MEM_LIMIT in .env. mem_limit is
+    # top-level so it takes effect under `docker compose up` standalone
+    # (unlike deploy.resources which is swarm-only by default).
+    mem_limit: ${MEM_LIMIT:-4g}
+    memswap_limit: ${MEM_LIMIT:-4g}
+    # Docker-native liveness probe. /health is the cheap endpoint (no DB
+    # roundtrip on the hot path) so this is safe to hit every 30s. On
+    # failure, `restart: unless-stopped` restarts the container.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:8339/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     volumes:
       - ela-data:/app/data
       - ${FRONTEND_HTML:-/opt/ela-explorer/dist/index.html}:/usr/share/nginx/html/index.html:ro

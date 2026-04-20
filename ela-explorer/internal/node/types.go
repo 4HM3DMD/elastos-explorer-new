@@ -336,7 +336,19 @@ type UsedVoteRightDetailInfo struct {
 	UsedCRVotes             []VoteLockTimeInfo `json:"usedcrvotes"`
 	UsedCRCProposalVotes    []VoteLockTimeInfo `json:"usedcrcproposalvotes"`
 	UsedCRImpeachmentVotes  []VoteLockTimeInfo `json:"usdedcrimpeachmentvotes"` // typo is intentional
-	UsedDPoSV2Votes         []VoteLockTimeInfo `json:"useddposv2votes"`
+	UsedDPoSV2Votes         []DPoSV2VoteEntry  `json:"useddposv2votes"`
+}
+
+// DPoSV2VoteEntry matches the nested wire format of `useddposv2votes[]` items
+// in the `getvoterights` response: each entry wraps a per-tx vote record with
+// a nested `Info` array of candidate/votes/locktime tuples.
+type DPoSV2VoteEntry struct {
+	StakeAddress    string             `json:"StakeAddress"`
+	TransactionHash string             `json:"TransactionHash"`
+	BlockHeight     int64              `json:"BlockHeight"`
+	PayloadVersion  int                `json:"PayloadVersion"`
+	VoteType        int                `json:"VoteType"`
+	Info            []VoteLockTimeInfo `json:"Info"`
 }
 
 // --- getmininginfo response ---

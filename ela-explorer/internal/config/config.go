@@ -53,6 +53,9 @@ type Config struct {
 
 	// Reference RPC nodes for cross-checking chain height
 	ReferenceRPCURLs []string
+
+	// Feature flags
+	StakeIdleEnabled bool
 }
 
 func Load() (*Config, error) {
@@ -91,6 +94,8 @@ func Load() (*Config, error) {
 		MetricsAuthToken: envOr("METRICS_AUTH_TOKEN", ""),
 
 		ReferenceRPCURLs: envStringSlice("REFERENCE_RPC_URLS", nil),
+
+		StakeIdleEnabled: envBoolOr("STAKE_IDLE_ENABLED", true),
 	}
 
 	if err := c.validate(); err != nil {
@@ -142,6 +147,18 @@ func envIntOr(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+func envBoolOr(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
 		}
 	}
 	return fallback

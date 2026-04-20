@@ -244,6 +244,15 @@ CREATE TABLE IF NOT EXISTS bpos_rewards (
     last_updated      BIGINT NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS voter_rights (
+    stake_address     TEXT PRIMARY KEY,
+    total_sela        BIGINT NOT NULL DEFAULT 0,
+    pledged_sela      BIGINT NOT NULL DEFAULT 0,
+    idle_sela         BIGINT NOT NULL DEFAULT 0,
+    last_updated      BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_voter_rights_updated ON voter_rights(last_updated);
+
 CREATE TABLE IF NOT EXISTS nfts (
     nft_id          VARCHAR(66) PRIMARY KEY,
     refer_key       CHAR(64)    NOT NULL DEFAULT '',

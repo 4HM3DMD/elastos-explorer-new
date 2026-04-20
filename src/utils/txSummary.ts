@@ -1,5 +1,22 @@
-import type { Transaction } from '../types/blockchain';
+import type { Transaction, TransactionSummary } from '../types/blockchain';
+import { fmtEla } from './format';
 import { toSela } from './sela';
+
+/**
+ * Display value for a lightweight TransactionSummary row (homepage / list).
+ * Prefers netTransferValue (actual transfer to non-sender addresses) over
+ * totalOutputValue (which includes change returned to the sender and would
+ * otherwise make a 100 ELA payment with 1832 ELA change look like ~1832 ELA).
+ */
+export function txDisplayValue(tx: TransactionSummary): string | null {
+  if (tx.netTransferValue) {
+    const net = parseFloat(tx.netTransferValue);
+    if (net > 0) return `${fmtEla(tx.netTransferValue, { compact: true })} ELA`;
+    if (net <= 0) return null;
+  }
+  if (tx.totalOutputValue) return `${fmtEla(tx.totalOutputValue, { compact: true })} ELA`;
+  return null;
+}
 
 export interface AddressAmount {
   address: string;

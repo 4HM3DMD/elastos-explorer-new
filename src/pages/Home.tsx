@@ -11,7 +11,8 @@ import {
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import InlineSearch from '../components/InlineSearch';
 import RelativeTime from '../components/RelativeTime';
-import { truncHash, fmtEla } from '../utils/format';
+import { truncHash } from '../utils/format';
+import { txDisplayValue } from '../utils/txSummary';
 import { getTypeLabel, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
 import NetworkStatsGrid from '../components/NetworkStatsGrid';
@@ -253,9 +254,9 @@ const Home = () => {
                 </div>
                 <div className="text-right shrink-0">
                   {(() => {
-                    const val = tx.totalOutputValue ? fmtEla(tx.totalOutputValue, { compact: true }) : null;
+                    const val = txDisplayValue(tx);
                     return val ? (
-                      <span className="text-[14px] text-white font-normal tracking-[0.56px]">{val} ELA</span>
+                      <span className="text-[14px] text-white font-normal tracking-[0.56px]">{val}</span>
                     ) : null;
                   })()}
                   <p className="text-[10px] text-white/50 mt-0.5 flex items-center justify-end gap-1 tracking-[0.4px]">

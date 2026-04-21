@@ -354,6 +354,47 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 			"address", safeTruncate(address, 16), "error", vrErr)
 	}
 
+	// Inverse-direction lookup: if the queried address is a WALLET
+	// (not itself a stake address), find which S-prefix stake addresses
+	// it has funded on-chain. Used by the Address > Staking tab to
+	// surface a "View your stake portfolio" link to /staking/{S-addr}.
+	// Limited to non-S-prefix addresses for safety (tx_vins.address is
+	// always a wallet-format address for stake-creation txs, so an
+	// S-prefix query would return nothing anyway; scoping here prevents
+	// unnecessary work and makes the intent explicit).
+	//
+	// Hardened against abuse: address is already regex-validated by
+	// isAddress(); the query is parameterized; the ::character(64) cast
+	// ensures the planner uses tx_vins_pkey instead of a seq scan (same
+	// fix as getTopStakers' origin lookup in defbe77 and getAddressStaking's
+	// own origin lookup above).
+	if len(address) > 0 && address[0] != 'S' {
+		stakeRows, err := s.db.API.Query(r.Context(), `
+			SELECT DISTINCT b.stake_address
+			FROM bpos_stakes b
+			JOIN tx_vins v
+			  ON v.txid = b.transaction_hash::character(64)
+			 AND v.n = 0
+			WHERE v.address = $1
+			ORDER BY b.stake_address`, address)
+		if err != nil {
+			slog.Warn("getAddressStaking: stake-addresses lookup failed",
+				"address", safeTruncate(address, 16), "error", err)
+		} else {
+			defer stakeRows.Close()
+			var stakeAddrs []string
+			for stakeRows.Next() {
+				var sa string
+				if err := stakeRows.Scan(&sa); err == nil && sa != "" {
+					stakeAddrs = append(stakeAddrs, sa)
+				}
+			}
+			if len(stakeAddrs) > 0 {
+				result["stakeAddresses"] = stakeAddrs
+			}
+		}
+	}
+
 	writeJSON(w, 200, APIResponse{Data: result})
 }
 

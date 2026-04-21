@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { VoteHistoryEntry, AddressStaking } from '../types/blockchain';
 import { VOTE_TYPE_NAMES } from '../types/blockchain';
-import { Shield, Coins, CheckCircle, XCircle, ArrowRight, Lock } from 'lucide-react';
+import { Shield, Coins, CheckCircle, XCircle, ArrowRight, Lock, ExternalLink } from 'lucide-react';
 import Pagination from './Pagination';
 import StakeBar from './StakeBar';
 import StatCard from './StatCard';
@@ -87,8 +87,55 @@ const VoteHistoryTimeline = ({ address }: Props) => {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const fmtELA = (v: string | undefined) => formatEla(v ?? '0');
 
+  // Truncate a stake address for inline display. Matches the
+  // truncHash style used elsewhere on the page (first 10 chars …
+  // last 6) so the branding feels uniform.
+  const truncStake = (a: string) => `${a.slice(0, 10)}…${a.slice(-6)}`;
+
   return (
     <div className="space-y-6">
+      {/* Stake-address callout — shown only on WALLET address pages
+          (not on S-prefix pages, which ARE the staker) and only when
+          the backend has derived at least one stake address from
+          tx_vins for this wallet. One clickable row per address so a
+          wallet with multiple stake identities renders cleanly.
+          Mirrors the StakerDetail identity card's Wallet Address
+          block, inverted: orange Lock tint + S-address, link routes
+          to /staking/{S-addr}. Minimal on-brand, no duplicated data. */}
+      {!isStakeAddress && !loading && staking?.stakeAddresses?.length ? (
+        <div className="card p-3 sm:p-4 md:p-5 space-y-3">
+          {staking.stakeAddresses.map((sa) => (
+            <Link
+              key={sa}
+              to={`/staking/${encodeURIComponent(sa)}`}
+              className="flex items-center gap-3 group"
+            >
+              <div
+                className="w-[28px] h-[28px] md:w-[32px] md:h-[32px] rounded-[6px] flex items-center justify-center shrink-0"
+                style={{ background: 'rgba(255, 159, 24, 0.12)' }}
+              >
+                <Lock size={14} className="text-brand" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] uppercase tracking-wider text-muted block">
+                  Stake Address
+                </span>
+                <span className="text-brand group-hover:text-brand-200 text-sm font-mono truncate block transition-colors">
+                  {truncStake(sa)}
+                </span>
+              </div>
+              <span
+                className="text-[11px] text-muted group-hover:text-brand inline-flex items-center gap-1 shrink-0 transition-colors"
+                aria-label={`View staker portfolio for ${sa}`}
+              >
+                <span className="hidden sm:inline">View portfolio</span>
+                <ExternalLink size={12} />
+              </span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
       {isStakeAddress && !loading && staking && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

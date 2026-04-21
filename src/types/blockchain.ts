@@ -257,6 +257,14 @@ export interface AddressStaking {
   totalPledged?: string;
   totalIdle?: string;
   voterRightsUpdated?: number;
+  // Stake addresses (S-prefix) this wallet has funded on-chain. Only
+  // populated by the backend when the queried address is a wallet (not
+  // itself a stake address). Used by the Address > Staking tab to surface
+  // a link to /staking/{S-addr} so users can reach their staker portfolio.
+  // Absent when the queried address has no derivable stake addresses OR
+  // is itself a stake address (in that case /staking/{addr} is already
+  // the current page's subject).
+  stakeAddresses?: string[];
 }
 
 export interface StakeEntry {

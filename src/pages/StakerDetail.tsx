@@ -308,9 +308,10 @@ const StakerDetail = () => {
       />
 
       {/* Identity card — reordered to appear after the hero so the
-          portfolio is the page's top anchor. Layout of the card itself
-          is unchanged per Phase D audit (it already reads cleanly). */}
-      <div className="card p-3 md:p-5 space-y-4">
+          portfolio is the page's top anchor. Mobile: slimmer padding
+          and space-y-3 so the card doesn't dominate the viewport on a
+          phone; desktop layout unchanged. */}
+      <div className="card p-3 sm:p-4 md:p-5 space-y-3 md:space-y-4">
         {data.originAddress && (
           <div className="flex items-center gap-3">
             <div className="w-[28px] h-[28px] md:w-[32px] md:h-[32px] rounded-[6px] flex items-center justify-center shrink-0" style={{ background: 'rgba(59,130,246,0.12)' }}>
@@ -428,22 +429,29 @@ function StakerPortfolioHero({
   const headlineValue = totalStaked || totalLocked;
 
   return (
-    <div className="card-accent relative overflow-hidden p-5 md:p-6">
+    // Responsive padding + headline scaling per Phase D mobile pass —
+    // p-4 on small phones so we don't eat 11% of viewport width to
+    // padding alone, and the headline scales across 3 breakpoints so
+    // it reads confidently on phones and expansively on desktops.
+    <div className="card-accent relative overflow-hidden p-4 sm:p-5 md:p-6">
       {/* 3px left-accent bar — same rhythm as the Staking hero, signals
           "this is the top of the page, not a minor card". */}
       <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
         <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
       </div>
 
-      <div className="relative pl-2 space-y-5">
-        {/* Top row: headline + distribution bar */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center">
+      <div className="relative pl-2 space-y-4 md:space-y-5">
+        {/* Top row: headline + distribution bar.
+            items-start on mobile (stacked) so the headline aligns
+            flush-left with the bar below it; items-center only at md+
+            where the two columns sit side-by-side. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center">
           <div className="min-w-0">
-            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2">
+            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2">
               Staker Portfolio
             </p>
             <p
-              className="text-gradient-brand text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em] truncate"
+              className="text-gradient-brand text-[22px] sm:text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em] truncate"
               style={{ fontVariantNumeric: 'tabular-nums' }}
               title={`${headlineValue} ELA`}
             >
@@ -466,13 +474,16 @@ function StakerPortfolioHero({
 
         {/* Rewards sub-row — only when there's anything to show. Thin
             top divider visually groups it as a continuation of the hero
-            rather than a separate block. */}
+            rather than a separate block.
+            Mobile layout: everything stacks vertically (no ml-auto
+            fighting with flex-wrap). Desktop layout: Claimable / Claimed
+            on the left, Total earned pushed to the right. */}
         {hasRewards && (
-          <div className="border-t border-[var(--color-border)] pt-4">
-            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2.5">
+          <div className="border-t border-[var(--color-border)] pt-3 md:pt-4">
+            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2 md:mb-2.5">
               Rewards
             </p>
-            <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2 text-[13px]">
+            <div className="flex flex-col md:flex-row md:flex-wrap md:items-baseline gap-2 md:gap-x-5 md:gap-y-2 text-[13px]">
               {claimableEla > 0 && (
                 <RewardItem
                   dotClass="bg-accent-green"
@@ -489,7 +500,11 @@ function StakerPortfolioHero({
                   valueClass="text-secondary"
                 />
               )}
-              <div className="ml-auto flex items-baseline gap-2">
+              {/* Total earned: pushed right on desktop via md:ml-auto
+                  (ml-auto on mobile would push within a single flex-col
+                  item which does nothing useful and looks broken when
+                  other items wrap — so it's desktop-only here). */}
+              <div className="flex items-baseline gap-2 md:ml-auto">
                 <span className="text-[11px] text-muted uppercase tracking-wider">
                   Total earned
                 </span>

@@ -121,21 +121,29 @@ function LegendRow({
   pct: string;
   ela: string;
 }) {
+  // justify-between puts the left group (dot + label) against the
+  // right group (% + ELA amount) without any ml-auto gymnastics that
+  // break when the line wraps on narrow mobile widths. The right
+  // group stays as a single unit so % and ELA always wrap together.
   return (
-    <div className="flex items-baseline gap-2 text-[11px]">
-      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />
-      <span className="text-muted tracking-[0.3px]">{label}</span>
-      <span
-        className="text-primary font-semibold ml-auto"
-        style={{ fontVariantNumeric: 'tabular-nums' }}
-      >
-        {pct}%
+    <div className="flex items-baseline justify-between gap-2 text-[11px]">
+      <span className="flex items-baseline gap-2 min-w-0">
+        <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />
+        <span className="text-muted tracking-[0.3px]">{label}</span>
       </span>
-      <span
-        className="text-secondary font-mono"
-        style={{ fontVariantNumeric: 'tabular-nums' }}
-      >
-        {ela} ELA
+      <span className="flex items-baseline gap-2 shrink-0">
+        <span
+          className="text-primary font-semibold"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {pct}%
+        </span>
+        <span
+          className="text-secondary font-mono"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {ela} ELA
+        </span>
       </span>
     </div>
   );

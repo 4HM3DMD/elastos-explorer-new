@@ -112,24 +112,30 @@ const Staking = () => {
       </div>
 
       {/* Table card */}
+      {/* Leaderboard: the Voting Rights column is hidden on <sm viewports —
+          4 columns with long monospace values otherwise force horizontal
+          scrolling on phones, which is the single worst mobile UX issue
+          on this page. The column's information still lives on each
+          staker's detail page (/staking/{addr}). */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="table-clean w-full">
             <thead>
               <tr>
-                <th className="w-12 sm:w-16">#</th>
+                <th className="w-10 sm:w-16">#</th>
                 <th>Address</th>
                 <th>Locked ELA</th>
-                <th>Voting Rights</th>
+                <th className="hidden sm:table-cell">Voting Rights</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 Array.from({ length: 20 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 4 }).map((_, j) => (
+                    {Array.from({ length: 3 }).map((_, j) => (
                       <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>
                     ))}
+                    <td className="hidden sm:table-cell"><div className="h-3 w-20 animate-shimmer rounded" /></td>
                   </tr>
                 ))
               ) : stakers.length === 0 ? (
@@ -145,15 +151,17 @@ const Staking = () => {
                         {rank <= 3 ? (
                           // Top-3 rank pill — subtle brand-tint circle using the
                           // same color-mix pattern as .badge-* in index.css.
+                          // Slightly smaller on mobile so it doesn't crowd the
+                          // address column.
                           <span
-                            className="inline-flex items-center justify-center w-6 h-6 rounded-full font-bold text-[11px] bg-brand/15 text-brand"
+                            className="inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full font-bold text-[10px] sm:text-[11px] bg-brand/15 text-brand"
                             style={{ fontVariantNumeric: 'tabular-nums' }}
                           >
                             {rank}
                           </span>
                         ) : (
                           <span
-                            className="font-bold text-xs text-secondary"
+                            className="font-bold text-[11px] sm:text-xs text-secondary"
                             style={{ fontVariantNumeric: 'tabular-nums' }}
                           >
                             {rank}
@@ -195,11 +203,11 @@ const Staking = () => {
                             size="row"
                             pledged={s.totalPledged || s.totalLocked}
                             idle={s.totalIdle || '0'}
-                            className="mt-1.5 w-24"
+                            className="mt-1.5 w-14 sm:w-24"
                           />
                         </div>
                       </td>
-                      <td>
+                      <td className="hidden sm:table-cell">
                         <span className="font-mono text-xs text-accent-blue whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
                           {fmtEla(s.votingRights, { compact: true })}
                         </span>
@@ -237,21 +245,28 @@ function StakeDistributionHero({ totalStaked, pledged, idle }: StakeDistribution
   const hasBreakdown = Boolean(idle);
 
   return (
-    <div className="card-accent relative overflow-hidden p-5 md:p-6">
+    // Mobile-friendly padding (p-4 on narrow phones) so content doesn't
+    // eat ~11% of viewport width to card padding alone.
+    <div className="card-accent relative overflow-hidden p-4 sm:p-5 md:p-6">
       {/* Larger left-accent bar — same vocabulary as MiniStat but 3px wide
           to signal "this is the hero, not a minor card". */}
       <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
         <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
       </div>
 
-      <div className="relative grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center pl-2">
-        {/* Left: big total */}
+      {/* items-start on mobile so the stacked headline and bar align to
+          the left edge of the card; items-center only once they sit
+          side-by-side on md+ where centre-alignment reads better. */}
+      <div className="relative grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center pl-2">
+        {/* Left: big total — headline scales across three breakpoints
+            (22px / 28px / 36px) so small phones don't blow up and
+            desktops still feel expansive. */}
         <div className="min-w-0">
-          <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2">
+          <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2">
             Stake Distribution
           </p>
           <p
-            className="text-gradient-brand text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em] truncate"
+            className="text-gradient-brand text-[22px] sm:text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em] truncate"
             style={{ fontVariantNumeric: 'tabular-nums' }}
             title={`${totalStaked} ELA`}
           >

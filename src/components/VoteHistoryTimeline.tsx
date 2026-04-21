@@ -5,6 +5,7 @@ import type { VoteHistoryEntry, AddressStaking } from '../types/blockchain';
 import { VOTE_TYPE_NAMES } from '../types/blockchain';
 import { Shield, Coins, CheckCircle, XCircle, ArrowRight, Lock } from 'lucide-react';
 import Pagination from './Pagination';
+import StakeBar from './StakeBar';
 import StatCard from './StatCard';
 import RelativeTime from './RelativeTime';
 import { formatEla } from '../utils/format';
@@ -103,24 +104,37 @@ const VoteHistoryTimeline = ({ address }: Props) => {
           </div>
 
           {/* Pledged / Idle breakdown — matches the row in StakerDetail.
-              Absent when voter_rights has no data for this address. */}
+              Absent when voter_rights has no data for this address.
+              Adds the shared StakeBar visual underneath the label row so
+              the three places that show this data (Staking leaderboard,
+              StakerDetail, here) all read the same. */}
           {staking.totalIdle && (
-            <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs rounded-lg">
-              <span className="text-muted">Breakdown</span>
-              <span className="text-muted opacity-40">&bull;</span>
-              <span className="text-secondary">Pledged</span>
-              <span className="text-primary font-semibold font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {fmtELA(staking.totalPledged || staking.totalLocked)} ELA
-              </span>
-              <span className="text-muted opacity-40">&bull;</span>
-              <span className="text-secondary">Idle</span>
-              <span
-                className="text-accent-blue font-semibold font-mono"
-                style={{ fontVariantNumeric: 'tabular-nums' }}
-                title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
-              >
-                {fmtELA(staking.totalIdle)} ELA
-              </span>
+            <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 rounded-lg space-y-2">
+              <div className="flex items-center gap-x-3 gap-y-1 text-xs flex-wrap">
+                <span className="text-muted">Breakdown</span>
+                <span className="text-muted opacity-40">&bull;</span>
+                <span className="text-secondary">Pledged</span>
+                <span
+                  className="text-primary font-semibold font-mono"
+                  style={{ fontVariantNumeric: 'tabular-nums' }}
+                >
+                  {fmtELA(staking.totalPledged || staking.totalLocked)} ELA
+                </span>
+                <span className="text-muted opacity-40">&bull;</span>
+                <span className="text-secondary">Idle</span>
+                <span
+                  className="text-accent-blue font-semibold font-mono"
+                  style={{ fontVariantNumeric: 'tabular-nums' }}
+                  title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
+                >
+                  {fmtELA(staking.totalIdle)} ELA
+                </span>
+              </div>
+              <StakeBar
+                size="inline"
+                pledged={staking.totalPledged || staking.totalLocked}
+                idle={staking.totalIdle}
+              />
             </div>
           )}
 

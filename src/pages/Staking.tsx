@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { TopStaker, StakingSummary, BlockchainStats } from '../types/blockchain';
-import { Lock, Shield, Users, Gift, Wallet, Coins, Info } from 'lucide-react';
+import { Lock, Shield, Users, Gift, Info } from 'lucide-react';
 import { fmtEla, fmtNumber } from '../utils/format';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
+import StakeBar from '../components/StakeBar';
 import SEO from '../components/SEO';
 
 const PAGE_SIZE = 50;
@@ -82,19 +83,17 @@ const Staking = () => {
         </div>
       </div>
 
-      {/* Chain-wide stake breakdown — only rendered when backend exposes
-          idleStake (STAKE_IDLE_ENABLED=true). Falls back gracefully. */}
-      {chainStats?.idleStake && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
-          <MiniStat icon={Coins} label="Total Staked" value={`${fmtEla(chainStats.totalStaked, { compact: true })} ELA`} />
-          <MiniStat icon={Shield} label="Pledged to Validators" value={`${fmtEla(chainStats.totalLocked, { compact: true })} ELA`} />
-          <MiniStat
-            icon={Wallet}
-            label="Idle Stake"
-            value={`${fmtEla(chainStats.idleStake, { compact: true })} ELA`}
-            tooltip="ELA deposited into the stake pool but not currently pledged to any validator. Earns no rewards until pledged (via a BPoS vote). The owner can withdraw it anytime."
-          />
-        </div>
+      {/* Hero: Stake Distribution — replaces the three thin chain-wide
+          stat cards. Single prominent card with a gradient-brand total on
+          the left and a stacked pledged/idle ratio bar + legend on the
+          right. Collapses to headline-only when backend's idleStake is
+          absent (STAKE_IDLE_ENABLED=false), so the layout is resilient. */}
+      {chainStats && (
+        <StakeDistributionHero
+          totalStaked={chainStats.totalStaked}
+          pledged={chainStats.totalLocked}
+          idle={chainStats.idleStake}
+        />
       )}
 
       {/* Stats — "Total Locked" removed because it's identical to
@@ -143,9 +142,23 @@ const Staking = () => {
                   return (
                     <tr key={s.address}>
                       <td>
-                        <span className={`font-bold text-xs ${rank <= 3 ? 'text-brand' : 'text-secondary'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {rank}
-                        </span>
+                        {rank <= 3 ? (
+                          // Top-3 rank pill — subtle brand-tint circle using the
+                          // same color-mix pattern as .badge-* in index.css.
+                          <span
+                            className="inline-flex items-center justify-center w-6 h-6 rounded-full font-bold text-[11px] bg-brand/15 text-brand"
+                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                          >
+                            {rank}
+                          </span>
+                        ) : (
+                          <span
+                            className="font-bold text-xs text-secondary"
+                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                          >
+                            {rank}
+                          </span>
+                        )}
                       </td>
                       <td>
                         <div className="min-w-0">
@@ -166,24 +179,25 @@ const Staking = () => {
                         </div>
                       </td>
                       <td>
-                        {s.totalIdle && s.totalStaked ? (
-                          <div className="min-w-0">
-                            <div className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {fmtEla(s.totalStaked, { compact: true })}
-                            </div>
-                            <div
-                              className="text-[10px] text-muted font-mono mt-0.5 whitespace-nowrap"
-                              style={{ fontVariantNumeric: 'tabular-nums' }}
-                              title={`Pledged ${fmtEla(s.totalPledged || s.totalLocked, { compact: true })} ELA · Idle ${fmtEla(s.totalIdle, { compact: true })} ELA`}
-                            >
-                              P: {fmtEla(s.totalPledged || s.totalLocked, { compact: true })} &middot; I: {fmtEla(s.totalIdle, { compact: true })}
-                            </div>
+                        <div className="min-w-0">
+                          <div
+                            className="font-mono text-xs font-semibold text-primary whitespace-nowrap"
+                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                          >
+                            {fmtEla(s.totalStaked || s.totalLocked, { compact: true })}
                           </div>
-                        ) : (
-                          <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                            {fmtEla(s.totalLocked, { compact: true })}
-                          </span>
-                        )}
+                          {/* Inline StakeBar — replaces the old "P: X · I: Y"
+                              text. Rows without voter_rights data render a
+                              solid brand bar (idle='0') so column height
+                              stays consistent. Hover title= reveals exact
+                              breakdown via the bar's own accessibility hook. */}
+                          <StakeBar
+                            size="row"
+                            pledged={s.totalPledged || s.totalLocked}
+                            idle={s.totalIdle || '0'}
+                            className="mt-1.5 w-24"
+                          />
+                        </div>
                       </td>
                       <td>
                         <span className="font-mono text-xs text-accent-blue whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -209,6 +223,54 @@ const Staking = () => {
     </div>
   );
 };
+
+/* ─── Hero: Stake Distribution ────────────────────────────────────────── */
+
+interface StakeDistributionHeroProps {
+  totalStaked: string;
+  pledged: string;
+  /** Optional — when STAKE_IDLE_ENABLED=false the card collapses to headline-only. */
+  idle?: string;
+}
+
+function StakeDistributionHero({ totalStaked, pledged, idle }: StakeDistributionHeroProps) {
+  const hasBreakdown = Boolean(idle);
+
+  return (
+    <div className="card-accent relative overflow-hidden p-5 md:p-6">
+      {/* Larger left-accent bar — same vocabulary as MiniStat but 3px wide
+          to signal "this is the hero, not a minor card". */}
+      <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
+        <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
+      </div>
+
+      <div className="relative grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center pl-2">
+        {/* Left: big total */}
+        <div className="min-w-0">
+          <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2">
+            Stake Distribution
+          </p>
+          <p
+            className="text-gradient-brand text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em] truncate"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+            title={`${totalStaked} ELA`}
+          >
+            {fmtEla(totalStaked, { compact: true })}
+          </p>
+          <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
+            Total Staked · ELA
+          </p>
+        </div>
+
+        {/* Right: stacked bar + legend (hidden gracefully when backend
+            omits idle — headline-only layout still looks intentional). */}
+        {hasBreakdown && (
+          <StakeBar size="hero" pledged={pledged} idle={idle} showLegend />
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface MiniStatProps {
   icon: React.ElementType;

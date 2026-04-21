@@ -10,6 +10,7 @@ import type { ExpiryStatus } from '../utils/format';
 import HashDisplay from '../components/HashDisplay';
 import NodeAvatar from '../components/NodeAvatar';
 import { PageSkeleton } from '../components/LoadingSkeleton';
+import StakeBar from '../components/StakeBar';
 import SEO from '../components/SEO';
 import { truncateHash } from '../utils/seo';
 
@@ -335,24 +336,37 @@ const StakerDetail = () => {
       </div>
 
       {/* Pledged / Idle breakdown — only when voter_rights has data for this
-          address. Absent = backend feature off or address not yet covered. */}
+          address. Absent = backend feature off or address not yet covered.
+          StakeBar (size="inline") replaces the old inline label soup with a
+          visual ratio plus a compact label row underneath, matching the
+          leaderboard row style on /staking. */}
       {data.totalIdle && (
-        <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs rounded-lg">
-          <span className="text-muted">Breakdown</span>
-          <span className="text-muted opacity-40">&bull;</span>
-          <span className="text-secondary">Pledged</span>
-          <span className="text-primary font-semibold font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
-            {fmtEla(data.totalPledged || data.totalLocked, { compact: true })} ELA
-          </span>
-          <span className="text-muted opacity-40">&bull;</span>
-          <span className="text-secondary">Idle</span>
-          <span
-            className="text-accent-blue font-semibold font-mono"
-            style={{ fontVariantNumeric: 'tabular-nums' }}
-            title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
-          >
-            {fmtEla(data.totalIdle, { compact: true })} ELA
-          </span>
+        <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 rounded-lg space-y-2">
+          <div className="flex items-center gap-x-3 gap-y-1 text-xs flex-wrap">
+            <span className="text-muted">Breakdown</span>
+            <span className="text-muted opacity-40">&bull;</span>
+            <span className="text-secondary">Pledged</span>
+            <span
+              className="text-primary font-semibold font-mono"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
+              {fmtEla(data.totalPledged || data.totalLocked, { compact: true })} ELA
+            </span>
+            <span className="text-muted opacity-40">&bull;</span>
+            <span className="text-secondary">Idle</span>
+            <span
+              className="text-accent-blue font-semibold font-mono"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+              title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
+            >
+              {fmtEla(data.totalIdle, { compact: true })} ELA
+            </span>
+          </div>
+          <StakeBar
+            size="inline"
+            pledged={data.totalPledged || data.totalLocked}
+            idle={data.totalIdle}
+          />
         </div>
       )}
 

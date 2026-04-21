@@ -759,9 +759,17 @@ export const VOTE_TYPE_NAMES: Record<number, string> = {
 };
 
 /** Maps raw on-chain status codes to user-friendly display labels. */
+// CRAgreed and Notification are the same phase from a user's perspective:
+// the council has approved the proposal and it's now in the community's
+// veto window. The node returns CRAgreed briefly after the council vote
+// closes before transitioning to Notification, but both states allow
+// vetoes — so we label/colour them identically so users understand
+// what's happening regardless of which transient state the node reports.
+// "Council Passed" was misleading because it sounded terminal; it's
+// actually still actionable (vetoes still count).
 export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
   Registered:    'Under Review',
-  CRAgreed:      'Council Passed',
+  CRAgreed:      'Community Veto Period',
   VoterAgreed:   'Passed',
   Notification:  'Community Veto Period',
   Approved:      'Passed',
@@ -774,7 +782,7 @@ export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
 
 export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   Registered: 'bg-blue-500/20 text-blue-400',
-  CRAgreed: 'bg-cyan-500/20 text-cyan-400',
+  CRAgreed: 'bg-purple-500/20 text-purple-400',
   VoterAgreed: 'bg-green-500/20 text-green-400',
   Notification: 'bg-purple-500/20 text-purple-400',
   Approved: 'bg-green-500/20 text-green-400',

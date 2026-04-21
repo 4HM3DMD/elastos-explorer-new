@@ -543,7 +543,11 @@ const ProposalDetail = () => {
       if (blocksLeft <= 0) return { label: 'Council Vote', time: '', blocks: 0, overdue: true, phase: 'review' as const };
       return { label: 'Council Vote', time: fmt(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' as const };
     }
-    if (proposal.status === 'Notification') {
+    // CRAgreed and Notification are the same phase (community veto
+    // window) — show the veto countdown for both instead of going
+    // silent during the transient CRAgreed state that the node
+    // reports briefly after council vote closes.
+    if (proposal.status === 'Notification' || proposal.status === 'CRAgreed') {
       const vetoStart = proposal.registerHeight + CR_VOTING_PERIOD_BLOCKS;
       const blocksLeft = (vetoStart + VETO_PERIOD_BLOCKS) - currentHeight;
       if (blocksLeft <= 0) return { label: 'Veto Period', time: '', blocks: 0, overdue: true, phase: 'veto' as const };

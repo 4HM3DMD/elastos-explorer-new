@@ -42,7 +42,10 @@ const NAV_TABS = [
 
 const STATUS_BORDER_COLORS: Record<string, string> = {
   Registered:    'border-l-blue-500',
-  CRAgreed:      'border-l-cyan-500',
+  // CRAgreed + Notification = same phase (community veto period) —
+  // same purple border so the card's visual state matches the unified
+  // label in PROPOSAL_STATUS_LABELS.
+  CRAgreed:      'border-l-purple-500',
   VoterAgreed:   'border-l-green-500',
   Notification:  'border-l-purple-500',
   Approved:      'border-l-green-500',
@@ -59,6 +62,13 @@ const STATUS_CARD_STYLES: Record<string, { base: CSSProperties; hover: CSSProper
     hover: { boxShadow: '0 0 16px rgba(59,130,246,0.15), inset 0 1px 0 rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.4)' },
   },
   Notification: {
+    base:  { boxShadow: '0 0 12px rgba(168,85,247,0.08), inset 0 1px 0 rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.25)' },
+    hover: { boxShadow: '0 0 16px rgba(168,85,247,0.15), inset 0 1px 0 rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.4)' },
+  },
+  // Same purple glow as Notification — CRAgreed proposals ARE in the
+  // veto phase, they just happen to be reported with a different status
+  // string by the node in that brief transition window.
+  CRAgreed: {
     base:  { boxShadow: '0 0 12px rgba(168,85,247,0.08), inset 0 1px 0 rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.25)' },
     hover: { boxShadow: '0 0 16px rgba(168,85,247,0.15), inset 0 1px 0 rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.4)' },
   },
@@ -130,7 +140,11 @@ function getCountdown(status: string, registerHeight: number, currentHeight: num
     return { label: 'Council Vote', time: formatBlocksRemaining(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' };
   }
 
-  if (status === 'Notification') {
+  // CRAgreed and Notification both mean "council approved, veto window
+  // is open" — bucket them together so proposals in the transient
+  // CRAgreed state also show the veto countdown instead of dropping to
+  // a silent "Council Passed" with no time indicator.
+  if (status === 'Notification' || status === 'CRAgreed') {
     const vetoStart = registerHeight + CR_VOTING_PERIOD_BLOCKS;
     const blocksLeft = (vetoStart + VETO_PERIOD_BLOCKS) - currentHeight;
     if (blocksLeft <= 0) return { label: 'Veto Period', time: '', blocks: 0, overdue: true, phase: 'veto' };

@@ -214,12 +214,34 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN cr_members cm_o ON cm_o.dpos_pubkey = p.owner_pubkey AND p.owner_pubkey != ''`
 
 	if status != "" {
-		if err := s.db.API.QueryRow(r.Context(),
-			"SELECT COUNT(*) FROM cr_proposals WHERE status=$1", status).Scan(&total); err != nil {
+		// CRAgreed and Notification are the same user-facing phase: the
+		// council approved the proposal and the community-veto window
+		// is open. The node briefly reports CRAgreed right after the
+		// council vote closes before transitioning to Notification. The
+		// "Veto Period" filter (status=Notification from the UI) must
+		// include both, otherwise recent proposals in the transient
+		// CRAgreed state disappear from the expected list.
+		var statusCond string
+		var statusArgs []any
+		if status == "Notification" {
+			statusCond = "status IN ('Notification','CRAgreed')"
+			statusArgs = nil
+		} else {
+			statusCond = "status=$1"
+			statusArgs = []any{status}
+		}
+
+		countSQL := "SELECT COUNT(*) FROM cr_proposals WHERE " + statusCond
+		if err := s.db.API.QueryRow(r.Context(), countSQL, statusArgs...).Scan(&total); err != nil {
 			slog.Warn("getCRProposals: count query failed", "status", status, "error", err)
 		}
-		query = selectCols + ` WHERE p.status=$1 ORDER BY p.register_height DESC LIMIT $2 OFFSET $3`
-		args = []any{status, pageSize, offset}
+		if status == "Notification" {
+			query = selectCols + ` WHERE p.status IN ('Notification','CRAgreed') ORDER BY p.register_height DESC LIMIT $1 OFFSET $2`
+			args = []any{pageSize, offset}
+		} else {
+			query = selectCols + ` WHERE p.status=$1 ORDER BY p.register_height DESC LIMIT $2 OFFSET $3`
+			args = []any{status, pageSize, offset}
+		}
 	} else {
 		if err := s.db.API.QueryRow(r.Context(), "SELECT COUNT(*) FROM cr_proposals").Scan(&total); err != nil {
 			slog.Warn("getCRProposals: total count query failed", "error", err)

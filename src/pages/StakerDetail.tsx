@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { AddressStaking, StakeEntry } from '../types/blockchain';
 import {
-  Lock, Vote, Shield, ArrowLeft, Gift, Wallet, ExternalLink,
+  Lock, Vote, Shield, ArrowLeft, Wallet, ExternalLink,
 } from 'lucide-react';
 import { fmtEla, fmtNumber, truncHash, estimateBlockTime, estimateBlockDate, getExpiryStatus } from '../utils/format';
 import type { ExpiryStatus } from '../utils/format';
@@ -292,7 +292,24 @@ const StakerDetail = () => {
         </div>
       </div>
 
-      {/* Identity card */}
+      {/* Staker Portfolio hero — single anchor answering "how much do I
+          have working vs idle vs earned" in one card. Replaces the
+          previous 4-card stats grid, the Pledged/Idle breakdown row,
+          and the inline earnings row, removing the Claimable-shown-twice
+          redundancy. Mirrors the Phase C StakeDistributionHero vocabulary
+          (gradient headline + StakeBar + Rewards sub-row). */}
+      <StakerPortfolioHero
+        totalLocked={data.totalLocked}
+        totalStaked={data.totalStaked}
+        totalPledged={data.totalPledged}
+        totalIdle={data.totalIdle}
+        claimableEla={claimable}
+        claimedEla={claimed}
+      />
+
+      {/* Identity card — reordered to appear after the hero so the
+          portfolio is the page's top anchor. Layout of the card itself
+          is unchanged per Phase D audit (it already reads cleanly). */}
       <div className="card p-3 md:p-5 space-y-4">
         {data.originAddress && (
           <div className="flex items-center gap-3">
@@ -321,69 +338,15 @@ const StakerDetail = () => {
         </div>
       </div>
 
-      {/* Stats — the "Staked ELA" card prefers the voter_rights-derived
-          totalStaked (includes idle) and falls back to the legacy totalLocked
-          (pledged only) when the backend doesn't emit voter_rights data. */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3">
-        <MiniStat
-          icon={Lock}
-          label={data.totalStaked ? 'Staked ELA' : 'Locked ELA'}
-          value={`${fmtEla(data.totalStaked || data.totalLocked, { compact: true })} ELA`}
-        />
+      {/* Supporting stats — 2 cards only (down from 4 in the old grid).
+          Locked ELA is now the hero headline; Claimable is now in the
+          hero Rewards sub-row. What remains here is the context a
+          staker wants in addition to their portfolio total: how much
+          vote weight they carry, and how many active positions. */}
+      <div className="grid grid-cols-2 gap-2 md:gap-3">
         <MiniStat icon={Shield} label="Voting Rights" value={fmtEla(data.totalStakingRights, { compact: true })} />
         <MiniStat icon={Vote} label="Active Stakes" value={fmtNumber(data.activeVotes)} />
-        <MiniStat icon={Gift} label="Claimable" value={claimable > 0 ? `${fmtEla(data.claimable ?? '0', { compact: true })} ELA` : '\u2014'} />
       </div>
-
-      {/* Pledged / Idle breakdown — only when voter_rights has data for this
-          address. Absent = backend feature off or address not yet covered.
-          StakeBar (size="inline") replaces the old inline label soup with a
-          visual ratio plus a compact label row underneath, matching the
-          leaderboard row style on /staking. */}
-      {data.totalIdle && (
-        <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 rounded-lg space-y-2">
-          <div className="flex items-center gap-x-3 gap-y-1 text-xs flex-wrap">
-            <span className="text-muted">Breakdown</span>
-            <span className="text-muted opacity-40">&bull;</span>
-            <span className="text-secondary">Pledged</span>
-            <span
-              className="text-primary font-semibold font-mono"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              {fmtEla(data.totalPledged || data.totalLocked, { compact: true })} ELA
-            </span>
-            <span className="text-muted opacity-40">&bull;</span>
-            <span className="text-secondary">Idle</span>
-            <span
-              className="text-accent-blue font-semibold font-mono"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-              title="Stake deposited but not currently pledged to a validator. Earns no rewards until voted."
-            >
-              {fmtEla(data.totalIdle, { compact: true })} ELA
-            </span>
-          </div>
-          <StakeBar
-            size="inline"
-            pledged={data.totalPledged || data.totalLocked}
-            idle={data.totalIdle}
-          />
-        </div>
-      )}
-
-      {/* Earnings */}
-      {totalEarned > 0 && (
-        <div className="surface-inset px-3 py-2.5 sm:px-4 sm:py-3 flex items-center gap-2 text-xs rounded-lg">
-          <Gift size={13} className="text-accent-green shrink-0" />
-          <span className="text-muted">Total earned</span>
-          <span className="text-accent-green font-semibold">{fmtEla(String(totalEarned), { compact: true })} ELA</span>
-          {claimed > 0 && (
-            <><span className="text-muted opacity-40">&bull;</span><span className="text-secondary">{fmtEla(String(claimed), { compact: true })} claimed</span></>
-          )}
-          {claimable > 0 && (
-            <><span className="text-muted opacity-40">&bull;</span><span className="text-accent-green">{fmtEla(String(claimable), { compact: true })} claimable</span></>
-          )}
-        </div>
-      )}
 
       {/* Validator groups */}
       {candidateGroups.length > 0 ? (
@@ -430,6 +393,143 @@ function MiniStat({ icon: Icon, label, value }: { icon: React.ElementType; label
         </div>
       </div>
     </div>
+  );
+}
+
+/* ─── Staker Portfolio hero ────────────────────────────────────────────
+   Mirrors StakeDistributionHero on /staking (Phase C): gradient-brand
+   headline on the left, StakeBar(size=hero) on the right with a legend,
+   and a thin divider introducing a Rewards sub-row when there's any
+   claimable or claimed ELA to show. Graceful degradation: when
+   voter_rights data is absent (STAKE_IDLE_ENABLED=false, or pure-idle
+   addresses), the right column disappears and the headline takes the
+   full card width — the page still reads intentionally. */
+
+interface StakerPortfolioHeroProps {
+  totalLocked: string;
+  totalStaked?: string;
+  totalPledged?: string;
+  totalIdle?: string;
+  claimableEla: number;
+  claimedEla: number;
+}
+
+function StakerPortfolioHero({
+  totalLocked,
+  totalStaked,
+  totalPledged,
+  totalIdle,
+  claimableEla,
+  claimedEla,
+}: StakerPortfolioHeroProps) {
+  const hasBreakdown = Boolean(totalIdle);
+  const hasRewards = claimableEla > 0 || claimedEla > 0;
+  const totalEarnedEla = claimableEla + claimedEla;
+  const headlineValue = totalStaked || totalLocked;
+
+  return (
+    <div className="card-accent relative overflow-hidden p-5 md:p-6">
+      {/* 3px left-accent bar — same rhythm as the Staking hero, signals
+          "this is the top of the page, not a minor card". */}
+      <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
+        <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
+      </div>
+
+      <div className="relative pl-2 space-y-5">
+        {/* Top row: headline + distribution bar */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center">
+          <div className="min-w-0">
+            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2">
+              Staker Portfolio
+            </p>
+            <p
+              className="text-gradient-brand text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em] truncate"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+              title={`${headlineValue} ELA`}
+            >
+              {fmtEla(headlineValue, { compact: true })}
+            </p>
+            <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
+              {totalStaked ? 'Total Staked' : 'Total Locked'} &middot; ELA
+            </p>
+          </div>
+
+          {hasBreakdown && (
+            <StakeBar
+              size="hero"
+              pledged={totalPledged || totalLocked}
+              idle={totalIdle}
+              showLegend
+            />
+          )}
+        </div>
+
+        {/* Rewards sub-row — only when there's anything to show. Thin
+            top divider visually groups it as a continuation of the hero
+            rather than a separate block. */}
+        {hasRewards && (
+          <div className="border-t border-[var(--color-border)] pt-4">
+            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-2.5">
+              Rewards
+            </p>
+            <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2 text-[13px]">
+              {claimableEla > 0 && (
+                <RewardItem
+                  dotClass="bg-accent-green"
+                  label="Claimable"
+                  value={`${fmtEla(String(claimableEla), { compact: true })} ELA`}
+                  valueClass="text-accent-green"
+                />
+              )}
+              {claimedEla > 0 && (
+                <RewardItem
+                  dotClass="bg-white/[0.18]"
+                  label="Claimed"
+                  value={`${fmtEla(String(claimedEla), { compact: true })} ELA`}
+                  valueClass="text-secondary"
+                />
+              )}
+              <div className="ml-auto flex items-baseline gap-2">
+                <span className="text-[11px] text-muted uppercase tracking-wider">
+                  Total earned
+                </span>
+                <span
+                  className="text-primary font-semibold"
+                  style={{ fontVariantNumeric: 'tabular-nums' }}
+                >
+                  {fmtEla(String(totalEarnedEla), { compact: true })} ELA
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RewardItem({
+  dotClass,
+  label,
+  value,
+  valueClass,
+}: {
+  dotClass: string;
+  label: string;
+  value: string;
+  valueClass: string;
+}) {
+  return (
+    <span className="inline-flex items-baseline gap-2">
+      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />
+      <span className="text-muted tracking-[0.3px]">{label}</span>
+      <span
+        className={`font-semibold ${valueClass}`}
+        style={{ fontVariantNumeric: 'tabular-nums' }}
+      >
+        {value}
+      </span>
+    </span>
   );
 }
 

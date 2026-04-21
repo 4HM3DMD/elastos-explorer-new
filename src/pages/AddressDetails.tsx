@@ -58,15 +58,34 @@ const AddressDetails = () => {
   const pageSize = 20;
 
   const rawTab = searchParams.get('tab') as TabId | null;
+  // Network aggregates — pools and reward-distribution accounts. These
+  // are system identities, not user wallets, so they can't stake or
+  // vote and their Staking / Governance tabs should disappear entirely
+  // (not render empty-zero panels that confuse people into thinking
+  // the pool itself is a staker).
   const SYSTEM_S_ADDRESSES = new Set([
     'STAKEPooLXXXXXXXXXXXXXXXXXXXpP1PQ2',
     'STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU',
     'STAKEREWARDXXXXXXXXXXXXXXXXXTw4VB4',
   ]);
-  const isStakeAddress = (address?.startsWith('S') && !SYSTEM_S_ADDRESSES.has(address)) ?? false;
+  const isSystemAddress = address != null && SYSTEM_S_ADDRESSES.has(address);
+  const isStakeAddress = (address?.startsWith('S') && !isSystemAddress) ?? false;
+
+  const visibleTabs = TABS.filter(t => {
+    // Individual stakers don't need the balance-history chart; the
+    // staker detail page already covers their stake lifecycle.
+    if (t.id === 'balance' && isStakeAddress) return false;
+    // System aggregates can't stake or vote — hide both tabs so users
+    // aren't offered views that don't apply.
+    if (isSystemAddress && (t.id === 'staking' || t.id === 'governance')) return false;
+    return true;
+  });
 
   const activeTab: TabId = (() => {
-    if (rawTab && TABS.some(t => t.id === rawTab)) return rawTab;
+    // If someone explicitly requests a tab that's hidden for this
+    // address class (e.g. ?tab=staking on the STAKEPooL page), ignore
+    // the query param and fall back to the default landing tab.
+    if (rawTab && visibleTabs.some(t => t.id === rawTab)) return rawTab;
     if (isStakeAddress) return 'staking';
     return 'overview';
   })();
@@ -74,11 +93,6 @@ const AddressDetails = () => {
   const setActiveTab = useCallback((tab: TabId) => {
     setSearchParams(tab === 'overview' ? {} : { tab }, { replace: true });
   }, [setSearchParams]);
-
-  const visibleTabs = TABS.filter(t => {
-    if (t.id === 'balance' && isStakeAddress) return false;
-    return true;
-  });
 
   const fetchAddress = useCallback(async (p: number) => {
     if (!address) { setLoading(false); setError('Invalid address'); return; }

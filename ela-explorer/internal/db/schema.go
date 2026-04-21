@@ -111,5 +111,35 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 			"note", "set is_active=FALSE + real spent_txid from tx_vins")
 	}
 
+	// Heal #3 (2026-04 voter_rights permission bug) — voter_rights is
+	// created lazily by refreshVoterRights (aggregator startup), NOT by
+	// schema.sql, so on first deployment the "GRANT SELECT ON ALL TABLES
+	// TO ela_api" at the bottom of schema.sql runs BEFORE the table
+	// exists and misses it. Result: the API pool (ela_api, read-only)
+	// gets pgx ErrNoRows when querying voter_rights, the Scan fails
+	// silently, and totalStaked/totalPledged/totalIdle are absent from
+	// the /address/{addr}/staking response.
+	//
+	// Fix is re-running the grant on every startup. Idempotent (DO block
+	// skips if the role or table doesn't exist yet; PostgreSQL's GRANT
+	// is also idempotent — re-granting what's already granted is a no-op).
+	// Scoped only to voter_rights for minimal surface; the bulk
+	// GRANT ... ON ALL TABLES in schema.sql covers everything else.
+	_, err = pool.Exec(ctx, `
+		DO $$
+		BEGIN
+			IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ela_api')
+			   AND EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'voter_rights')
+			THEN
+				EXECUTE 'GRANT SELECT ON voter_rights TO ela_api';
+			END IF;
+		END $$`)
+	if err != nil {
+		// Non-fatal: if the role doesn't exist, the DO block's IF guards
+		// already skipped the GRANT. This only fires on real DB errors.
+		return fmt.Errorf("heal #3 (voter_rights grant): %w", err)
+	}
+	slog.Debug("data-heal: voter_rights SELECT grant ensured for ela_api")
+
 	return nil
 }

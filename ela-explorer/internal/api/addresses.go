@@ -312,15 +312,27 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 	// Per-address stake breakdown (total / pledged / idle) sourced from the
 	// voter_rights snapshot. Only populated for addresses that have appeared
 	// as a BPoS staker; NULL rows leave these fields absent for back-compat.
+	// ErrNoRows is expected (pure-idle v1 limitation); any OTHER error
+	// (permission denied, connection loss, etc.) needs a WARN so it can't
+	// silently hide a data/permissions regression like it did in 2026-04
+	// when ela_api lacked SELECT on this table after lazy creation.
 	var vrTotal, vrPledged, vrIdle, vrUpdated int64
-	if err := s.db.API.QueryRow(r.Context(),
+	vrErr := s.db.API.QueryRow(r.Context(),
 		`SELECT total_sela, pledged_sela, idle_sela, last_updated
 		 FROM voter_rights WHERE stake_address = $1`, address,
-	).Scan(&vrTotal, &vrPledged, &vrIdle, &vrUpdated); err == nil {
+	).Scan(&vrTotal, &vrPledged, &vrIdle, &vrUpdated)
+	switch {
+	case vrErr == nil:
 		result["totalStaked"] = selaToELA(vrTotal)
 		result["totalPledged"] = selaToELA(vrPledged)
 		result["totalIdle"] = selaToELA(vrIdle)
 		result["voterRightsUpdated"] = vrUpdated
+	case errors.Is(vrErr, pgx.ErrNoRows):
+		// Expected: address not in voter_rights (pure-idle v1 limitation
+		// or stake that never pledged). Stay silent.
+	default:
+		slog.Warn("getAddressStaking: voter_rights query failed",
+			"address", safeTruncate(address, 16), "error", vrErr)
 	}
 
 	writeJSON(w, 200, APIResponse{Data: result})

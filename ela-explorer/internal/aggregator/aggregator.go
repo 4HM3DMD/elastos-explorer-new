@@ -1693,6 +1693,22 @@ func (a *Aggregator) refreshVoterRights(ctx context.Context) error {
 		"CREATE INDEX IF NOT EXISTS idx_voter_rights_updated ON voter_rights(last_updated)"); err != nil {
 		slog.Debug("voter_rights: updated index", "error", err)
 	}
+	// Ensure ela_api (API read-only pool) can SELECT from voter_rights.
+	// schema.sql's bulk GRANT runs BEFORE this table is lazily created
+	// here on first aggregator cycle, so we must explicitly grant on
+	// the table itself. Idempotent — re-granting is a no-op, and the
+	// DO block skips safely if the ela_api role doesn't exist in local
+	// dev setups. See schema.go runDataHeals "Heal #3" for the startup
+	// catch-up that covers already-deployed instances.
+	if _, err := a.db.Syncer.Exec(ctx, `
+		DO $$
+		BEGIN
+			IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ela_api') THEN
+				EXECUTE 'GRANT SELECT ON voter_rights TO ela_api';
+			END IF;
+		END $$`); err != nil {
+		slog.Debug("voter_rights: grant select", "error", err)
+	}
 
 	rows, err := a.db.Syncer.Query(ctx, `SELECT DISTINCT stake_address FROM bpos_stakes`)
 	if err != nil {

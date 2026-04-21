@@ -53,11 +53,15 @@ const VoteHistoryTimeline = ({ address }: Props) => {
   }, []);
 
   useEffect(() => {
-    if (!isStakeAddress) {
-      setStaking(null);
-      setLoading(false);
-      return;
-    }
+    // Always fetch getAddressStaking — even for wallet (non-S) addresses.
+    // For S-prefix addresses the response drives the stats grid / breakdown
+    // / active-stakes list. For wallet addresses it drives the new
+    // stake-address callout (via staking.stakeAddresses), which resolves
+    // an E-wallet to its derived S-prefix stake identity so users can
+    // reach /staking/{S-addr} from their wallet page. The existing
+    // conditional guards below (`isStakeAddress && !loading && staking`)
+    // still scope the stats sections to S-prefix pages, so nothing
+    // irrelevant leaks into the wallet view.
     setLoading(true);
     blockchainApi.getAddressStaking(address)
       .then(setStaking)

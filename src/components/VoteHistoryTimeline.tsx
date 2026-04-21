@@ -86,7 +86,17 @@ const VoteHistoryTimeline = ({ address }: Props) => {
     }
   }, [voteAddress]);
 
-  useEffect(() => { if (!loading) fetchVotes(1); }, [fetchVotes, loading]);
+  // Fire votes fetch as soon as voteAddress is resolved, instead of
+  // waiting for the staking fetch to complete. For wallet (E-prefix)
+  // pages voteAddress === address from the first render, so votes
+  // fetch IN PARALLEL with staking — two concurrent round-trips
+  // instead of two sequential ones. For S-prefix pages we still need
+  // staking.originAddress to resolve before we know which E-address
+  // owns the votes, so we gate on `staking` there.
+  useEffect(() => {
+    if (isStakeAddress && !staking) return;
+    fetchVotes(1);
+  }, [fetchVotes, isStakeAddress, staking]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const fmtELA = (v: string | undefined) => formatEla(v ?? '0');

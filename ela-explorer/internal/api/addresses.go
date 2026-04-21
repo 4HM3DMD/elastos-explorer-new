@@ -298,15 +298,34 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 		result["totalRewards"] = selaToELA(claimableSela + claimingSela + claimedSela)
 	}
 
-	// Resolve the origin wallet address that funded this stake address
+	// Resolve the origin wallet address that funded this stake address.
+	// Cast b.transaction_hash to character(64) so the planner can use
+	// tx_vins_pkey(txid, n) — mirrors the same fix we applied to
+	// getTopStakers in commit defbe77. Without the cast this query still
+	// produces correct results but does a ~13M-row parallel seq scan of
+	// tx_vins per lookup, which at best is slow and at worst swallows
+	// the join silently under timeout — either way the UI loses the
+	// "Wallet Address" identity card on the staker page.
 	var originAddress string
-	_ = s.db.API.QueryRow(r.Context(),
-		`SELECT v.address FROM tx_vins v
-		 JOIN bpos_stakes b ON v.txid = b.transaction_hash
-		 WHERE b.stake_address = $1 AND v.n = 0 LIMIT 1`, address,
+	origErr := s.db.API.QueryRow(r.Context(),
+		`SELECT v.address
+		 FROM tx_vins v
+		 JOIN bpos_stakes b
+		   ON v.txid = b.transaction_hash::character(64)
+		  AND v.n = 0
+		 WHERE b.stake_address = $1
+		 LIMIT 1`, address,
 	).Scan(&originAddress)
-	if originAddress != "" {
-		result["originAddress"] = originAddress
+	switch {
+	case origErr == nil:
+		if originAddress != "" {
+			result["originAddress"] = originAddress
+		}
+	case errors.Is(origErr, pgx.ErrNoRows):
+		// Expected for addresses that don't exist in bpos_stakes.
+	default:
+		slog.Warn("getAddressStaking: origin address resolution failed",
+			"address", safeTruncate(address, 16), "error", origErr)
 	}
 
 	// Per-address stake breakdown (total / pledged / idle) sourced from the

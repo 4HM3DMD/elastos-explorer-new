@@ -1,112 +1,60 @@
+// BalanceHistoryChart — thin top-level controller.
+//
+// This component owns:
+//   - The two data sources (daily series from /address/:addr/history and
+//     a synthetic per-tx series we compute from the address's tx pages).
+//   - Debounced fetch / loading / error state.
+//   - Derived stats (first, last, delta, min, max, pct change).
+//   - Layout + the stats-summary row.
+//
+// Rendering lives in three focused children under ./balance-history/:
+//   BalanceChart         — recharts AreaChart + tooltip + daily bar chart
+//   BalanceRangePicker   — preset buttons + custom date picker + Per-Tx toggle
+//   BalanceTxTable       — expandable daily-balance log
+//
+// Formatters, types, and constants live in ./balance-history/helpers.ts.
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import type { BalanceHistoryPoint } from '../types/blockchain';
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Cell, ReferenceLine,
-} from 'recharts';
-import { TrendingUp, TrendingDown, Minus, Calendar, X, GitCommitHorizontal } from 'lucide-react';
 import { cn } from '../lib/cn';
-
-const BRAND_COLOR = '#ff9e18';
-const GREEN = '#22c55e';
-const RED = '#ef4444';
-
-const MIN_REQUEST_INTERVAL_MS = 3000;
-const MAX_CUSTOM_RANGE_DAYS = 1825;
-
-const RANGE_OPTIONS = [
-  { days: 7, label: '7d' },
-  { days: 30, label: '30d' },
-  { days: 90, label: '90d' },
-  { days: 365, label: '1y' },
-  { days: 3650, label: 'All' },
-] as const;
-
-function fmtBal(value: number | string): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(num)) return '0';
-  if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
-  if (Math.abs(num) >= 1e4) return `${(num / 1e3).toFixed(1)}K`;
-  if (Math.abs(num) >= 100) return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  if (Math.abs(num) >= 1) return num.toLocaleString(undefined, { maximumFractionDigits: 4 });
-  if (num === 0) return '0';
-  return num.toLocaleString(undefined, { maximumFractionDigits: 8 });
-}
-
-function fmtBalFull(value: number | string): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(num)) return '0';
-  return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 });
-}
-
-function fmtDate(dateStr: string, rangeDays: number): string {
-  const d = new Date(dateStr);
-  if (rangeDays <= 7) return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  if (rangeDays <= 90) return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
-}
-
-function fmtDateFull(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString(undefined, {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  });
-}
-
-function pctStr(pct: number): string {
-  if (!isFinite(pct)) return 'N/A';
-  const sign = pct >= 0 ? '+' : '';
-  if (Math.abs(pct) >= 1000) return `${sign}${(pct / 1000).toFixed(1)}K%`;
-  return `${sign}${pct.toFixed(2)}%`;
-}
-
-interface ChartPoint {
-  date: string;
-  fullDate: string;
-  rawDate: string;
-  value: number;
-  delta: number;
-  rawBalance: string;
-  txid?: string;
-  direction?: string;
-}
+import { BalanceChart } from './balance-history/BalanceChart';
+import { BalanceRangePicker } from './balance-history/BalanceRangePicker';
+import { BalanceTxTable } from './balance-history/BalanceTxTable';
+import {
+  MAX_TX_FETCH,
+  MIN_REQUEST_INTERVAL_MS,
+  RANGE_OPTIONS,
+  type ChartPoint,
+  fmtBal,
+  fmtDate,
+  fmtDateFull,
+  pctStr,
+} from './balance-history/helpers';
 
 interface Props {
   address: string;
 }
-
-const MAX_TX_FETCH = 500;
 
 const BalanceHistoryChart = ({ address }: Props) => {
   const [data, setData] = useState<BalanceHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState<number>(90);
-  const [showTable, setShowTable] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
   const [customRangeLabel, setCustomRangeLabel] = useState<string | null>(null);
   const lastFetchRef = useRef<number>(0);
-  const datePickerRef = useRef<HTMLDivElement>(null);
 
-  // Per-transaction mode
+  // Per-transaction mode — synthesises a running balance for every tx
+  // so the user can see exact in/out events instead of daily buckets.
   const [txMode, setTxMode] = useState(false);
   const [txChartData, setTxChartData] = useState<ChartPoint[]>([]);
   const [txLoading, setTxLoading] = useState(false);
   const [txTruncated, setTxTruncated] = useState(false);
 
-  useEffect(() => {
-    if (!showDatePicker) return;
-    const handler = (e: MouseEvent) => {
-      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
-        setShowDatePicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showDatePicker]);
-
+  // Debounced daily-history fetch. The interval guard catches rapid
+  // button mashing on the range selector, which would otherwise slam
+  // the backfill-heavy history endpoint.
   const fetchHistory = useCallback(async () => {
     const now = Date.now();
     const elapsed = now - lastFetchRef.current;
@@ -130,7 +78,10 @@ const BalanceHistoryChart = ({ address }: Props) => {
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
-  // Fetch all transactions and compute running balance per-tx
+  // Per-tx mode walks backwards from the current balance, subtracting
+  // receives and adding sends so each tx row lines up with the balance
+  // AT that tx. Truncates to MAX_TX_FETCH to keep the walk bounded on
+  // very active addresses.
   const fetchTxHistory = useCallback(async () => {
     setTxLoading(true);
     try {
@@ -172,7 +123,8 @@ const BalanceHistoryChart = ({ address }: Props) => {
       });
       setTxChartData(points);
     } catch {
-      // silently fail — daily mode still works
+      // Silently fail — daily mode still works, and we don't want a
+      // hidden chart failure to cascade into a user-facing error.
     } finally {
       setTxLoading(false);
     }
@@ -182,26 +134,19 @@ const BalanceHistoryChart = ({ address }: Props) => {
     if (txMode && txChartData.length === 0) fetchTxHistory();
   }, [txMode, txChartData.length, fetchTxHistory]);
 
-  const handlePresetDays = useCallback((d: number) => {
+  const handleSelectPreset = useCallback((d: number) => {
     setCustomRangeLabel(null);
     setDays(d);
   }, []);
 
-  const handleCustomRange = useCallback(() => {
-    if (!customFrom || !customTo) return;
-    const from = new Date(customFrom);
-    const to = new Date(customTo);
-    if (isNaN(from.getTime()) || isNaN(to.getTime())) return;
-    if (from >= to) return;
-
-    const diffDays = Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays < 1 || diffDays > MAX_CUSTOM_RANGE_DAYS) return;
-
+  const handleSelectCustom = useCallback((fromDate: string, toDate: string, diffDays: number) => {
     const fmtShort = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
-    setCustomRangeLabel(`${fmtShort(from)} – ${fmtShort(to)}`);
+    setCustomRangeLabel(`${fmtShort(new Date(fromDate))} – ${fmtShort(new Date(toDate))}`);
     setDays(diffDays);
-    setShowDatePicker(false);
-  }, [customFrom, customTo]);
+  }, []);
+
+  const handleSelectAllTime = useCallback(() => setDays(3650), []);
+  const handleToggleTxMode = useCallback(() => setTxMode(v => !v), []);
 
   const chartData = useMemo(() => data.map((d, i, arr) => {
     const bal = parseFloat(d.balance) || 0;
@@ -232,38 +177,19 @@ const BalanceHistoryChart = ({ address }: Props) => {
     return { first, last, delta, pctChange, min, max, isFlat, dataPoints: activeChartData.length };
   }, [activeChartData]);
 
+  // `dailyChanges` is computed from the *daily* chartData, not
+  // activeChartData, because the daily-bars chart below the main area
+  // chart and the daily-log table only make sense in daily mode.
+  // Per-tx mode hides both (see conditional rendering at the bottom).
   const dailyChanges = useMemo(() => {
-    if (activeChartData.length < 2) return [];
-    const reversed = [...activeChartData].reverse();
+    if (chartData.length < 2) return [];
+    const reversed = [...chartData].reverse();
     const maxAbsDelta = Math.max(...reversed.map(d => Math.abs(d.delta)), 1);
     return reversed.slice(0, 60).map(d => ({
       ...d,
       barWidth: Math.abs(d.delta) / maxAbsDelta,
     }));
   }, [chartData]);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (!active || !payload?.[0]) return null;
-    const d = payload[0].payload;
-    return (
-      <div className="bg-[var(--color-surface-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2.5 shadow-lg max-w-[220px]">
-        <p className="text-[11px] text-muted mb-1">{d.fullDate}</p>
-        <p className="text-sm font-semibold" style={{ fontVariantNumeric: 'tabular-nums', color: BRAND_COLOR }}>
-          {fmtBalFull(d.value)} ELA
-        </p>
-        {d.delta !== 0 && (
-          <p className={cn('text-[11px] mt-0.5', d.delta > 0 ? 'text-emerald-400' : 'text-red-400')} style={{ fontVariantNumeric: 'tabular-nums' }}>
-            {d.delta > 0 ? '+' : ''}{fmtBal(d.delta)} ELA
-            {d.direction && <span className="text-muted ml-1">({d.direction})</span>}
-          </p>
-        )}
-        {d.txid && (
-          <p className="text-[10px] text-muted mt-1 font-mono truncate">{d.txid.slice(0, 16)}…</p>
-        )}
-      </div>
-    );
-  };
 
   if (loading || (txMode && txLoading && txChartData.length === 0)) {
     return (
@@ -294,7 +220,6 @@ const BalanceHistoryChart = ({ address }: Props) => {
     <div className="space-y-4">
       {/* Main chart card */}
       <div className="card p-5">
-        {/* Header: title + range selector — stacks vertically on mobile */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3 mb-4 sm:mb-5">
           <div className="min-w-0">
             <span className="text-sm font-medium text-primary">Balance Over Time</span>
@@ -305,110 +230,14 @@ const BalanceHistoryChart = ({ address }: Props) => {
               </span>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
-            {/* Per-transaction toggle */}
-            <button
-              onClick={() => setTxMode(v => !v)}
-              title={txMode ? 'Switch to daily view' : 'Show every transaction as a data point'}
-              className={cn(
-                'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150',
-                txMode
-                  ? 'bg-brand/15 text-brand border-brand/30'
-                  : 'text-muted hover:text-secondary border-transparent hover:border-[var(--color-border)]',
-              )}
-            >
-              <GitCommitHorizontal size={12} />
-              Per Tx
-            </button>
-            {!txMode && <div className="flex gap-0.5 bg-[var(--color-surface-secondary)] rounded-lg p-0.5">
-              {RANGE_OPTIONS.map((r) => (
-                <button
-                  key={r.days}
-                  onClick={() => handlePresetDays(r.days)}
-                  className={cn(
-                    'px-2.5 py-1.5 rounded-md text-xs font-medium transition-all duration-150',
-                    days === r.days && !customRangeLabel
-                      ? 'bg-brand/15 text-brand shadow-sm'
-                      : 'text-muted hover:text-secondary',
-                  )}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>}
-
-            {!txMode && <div className="relative" ref={datePickerRef}>
-              <button
-                onClick={() => setShowDatePicker(v => !v)}
-                className={cn(
-                  'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 border',
-                  customRangeLabel
-                    ? 'bg-brand/15 text-brand border-brand/30'
-                    : 'text-muted hover:text-secondary border-transparent hover:border-[var(--color-border)]',
-                )}
-              >
-                <Calendar size={12} />
-                {customRangeLabel || 'Custom'}
-              </button>
-              {showDatePicker && (
-                <div
-                  className="absolute right-0 top-full mt-1.5 z-50 rounded-xl border border-[var(--color-border)] shadow-xl p-3.5 space-y-3 min-w-[240px]"
-                  style={{ background: 'var(--color-surface-secondary)' }}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-primary">Custom Range</span>
-                    <button onClick={() => setShowDatePicker(false)} className="p-0.5 rounded text-muted hover:text-primary">
-                      <X size={12} />
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    <div>
-                      <label className="text-[10px] text-muted uppercase tracking-wider block mb-1">From</label>
-                      <input
-                        type="date"
-                        value={customFrom}
-                        onChange={e => setCustomFrom(e.target.value)}
-                        max={customTo || new Date().toISOString().slice(0, 10)}
-                        className="w-full px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-primary outline-none focus:border-brand/50"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-muted uppercase tracking-wider block mb-1">To</label>
-                      <input
-                        type="date"
-                        value={customTo}
-                        onChange={e => setCustomTo(e.target.value)}
-                        min={customFrom}
-                        max={new Date().toISOString().slice(0, 10)}
-                        className="w-full px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-primary outline-none focus:border-brand/50"
-                      />
-                    </div>
-                  </div>
-                  {customFrom && customTo && new Date(customFrom) >= new Date(customTo) && (
-                    <p className="text-[10px] text-accent-red">"From" must be before "To"</p>
-                  )}
-                  {customFrom && customTo && (() => {
-                    const diff = Math.ceil((new Date(customTo).getTime() - new Date(customFrom).getTime()) / 86400000);
-                    return diff > MAX_CUSTOM_RANGE_DAYS ? (
-                      <p className="text-[10px] text-accent-red">Max range is {MAX_CUSTOM_RANGE_DAYS} days ({(MAX_CUSTOM_RANGE_DAYS / 365).toFixed(0)} years)</p>
-                    ) : null;
-                  })()}
-                  <button
-                    onClick={handleCustomRange}
-                    disabled={!customFrom || !customTo || new Date(customFrom) >= new Date(customTo)}
-                    className={cn(
-                      'w-full py-1.5 rounded-lg text-xs font-medium transition-colors',
-                      customFrom && customTo && new Date(customFrom) < new Date(customTo)
-                        ? 'bg-brand text-white hover:bg-brand/90'
-                        : 'bg-white/5 text-muted cursor-not-allowed',
-                    )}
-                  >
-                    Apply
-                  </button>
-                </div>
-              )}
-            </div>}
-          </div>
+          <BalanceRangePicker
+            days={days}
+            customRangeLabel={customRangeLabel}
+            txMode={txMode}
+            onSelectPreset={handleSelectPreset}
+            onSelectCustom={handleSelectCustom}
+            onToggleTxMode={handleToggleTxMode}
+          />
         </div>
 
         {/* Summary stats row */}
@@ -461,148 +290,20 @@ const BalanceHistoryChart = ({ address }: Props) => {
           </div>
         )}
 
-        {/* Chart area */}
-        {activeChartData.length < 2 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-center">
-            <Calendar size={24} className="text-muted/50 mb-2" />
-            <p className="text-sm text-muted">
-              {activeChartData.length === 1
-                ? 'Only one data point — try a wider range'
-                : txMode ? 'No transactions found' : 'No balance data for this period'}
-            </p>
-            {!txMode && activeChartData.length === 0 && days < 3650 && (
-              <button onClick={() => setDays(3650)} className="text-xs text-brand hover:text-brand-200 mt-2">
-                Try "All Time"
-              </button>
-            )}
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={activeChartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-              <defs>
-                <linearGradient id="balGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={BRAND_COLOR} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={BRAND_COLOR} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: 'var(--color-text-muted)' }}
-                axisLine={{ stroke: 'var(--color-border)' }}
-                tickLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: 'var(--color-text-muted)' }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={fmtBal}
-                width={65}
-                domain={stats?.isFlat ? [(v: number) => v * 0.95, (v: number) => v * 1.05] : ['auto', 'auto']}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke={BRAND_COLOR}
-                strokeWidth={2}
-                fill="url(#balGrad)"
-                dot={false}
-                activeDot={{ r: 4, fill: BRAND_COLOR, stroke: 'var(--color-surface)', strokeWidth: 2 }}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-
-        {/* Daily change mini-chart (bar chart of deltas) */}
-        {!txMode && dailyChanges.length > 1 && dailyChanges.some(d => d.delta !== 0) && (
-          <div className="mt-4 pt-4 border-t border-[var(--color-border)]/50">
-            <p className="text-[10px] text-muted uppercase tracking-wider mb-2">Daily Changes</p>
-            <ResponsiveContainer width="100%" height={80}>
-              <BarChart data={[...dailyChanges].reverse()} margin={{ top: 2, right: 4, bottom: 0, left: 0 }}>
-                <ReferenceLine y={0} stroke="var(--color-border)" />
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.[0]) return null;
-                    const d = payload[0].payload;
-                    return (
-                      <div className="bg-[var(--color-surface-secondary)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 shadow-lg text-xs">
-                        <p className="text-muted text-[10px]">{d.fullDate}</p>
-                        <p className={cn('font-semibold', d.delta > 0 ? 'text-emerald-400' : d.delta < 0 ? 'text-red-400' : 'text-muted')} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {d.delta > 0 ? '+' : ''}{fmtBal(d.delta)} ELA
-                        </p>
-                      </div>
-                    );
-                  }}
-                />
-                <Bar dataKey="delta" radius={[2, 2, 0, 0]} maxBarSize={8}>
-                  {[...dailyChanges].reverse().map((d, i) => (
-                    <Cell key={i} fill={d.delta >= 0 ? GREEN : RED} fillOpacity={0.6} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+        <BalanceChart
+          activeChartData={activeChartData}
+          dailyChanges={dailyChanges}
+          stats={stats}
+          txMode={txMode}
+          days={days}
+          onSelectAllTime={handleSelectAllTime}
+        />
       </div>
 
-      {/* Expandable data table */}
+      {/* Expandable data table — daily-mode only, and only when there's
+          real data to show. */}
       {!txMode && data.length > 0 && (
-        <div className="card overflow-hidden">
-          <button
-            onClick={() => setShowTable(v => !v)}
-            className="w-full flex items-center justify-between px-4 py-3 hover:bg-hover transition-colors"
-          >
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Daily Balance Log ({data.length} entries)
-            </span>
-            <span className="text-xs text-muted">{showTable ? 'Hide' : 'Show'}</span>
-          </button>
-          {showTable && (
-            <div className="border-t border-[var(--color-border)] overflow-x-auto max-h-80">
-              <table className="table-clean w-full">
-                <thead className="sticky top-0" style={{ background: 'var(--color-surface-secondary)' }}>
-                  <tr>
-                    <th className="text-left">Date</th>
-                    <th className="text-right">Balance (ELA)</th>
-                    <th className="text-right">Change</th>
-                    <th className="text-right w-24"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dailyChanges.map((point) => (
-                    <tr key={point.rawDate}>
-                      <td className="py-2 px-4 text-sm text-secondary whitespace-nowrap">{point.fullDate}</td>
-                      <td className="py-2 px-4 text-sm text-primary font-mono text-right whitespace-nowrap">
-                        {fmtBalFull(point.rawBalance)}
-                      </td>
-                      <td className={cn(
-                        'py-2 px-4 text-sm font-mono text-right whitespace-nowrap',
-                        point.delta > 0 ? 'text-emerald-400' : point.delta < 0 ? 'text-red-400' : 'text-muted',
-                      )}>
-                        {point.delta === 0 ? '—' : `${point.delta > 0 ? '+' : ''}${fmtBal(point.delta)}`}
-                      </td>
-                      <td className="py-2 px-4">
-                        {point.delta !== 0 && (
-                          <div className="flex items-center justify-end gap-1">
-                            <div
-                              className={cn(
-                                'h-1.5 rounded-full',
-                                point.delta > 0 ? 'bg-emerald-500/60' : 'bg-red-500/60',
-                              )}
-                              style={{ width: `${Math.max(point.barWidth * 60, 2)}px` }}
-                            />
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <BalanceTxTable entryCount={data.length} dailyChanges={dailyChanges} />
       )}
     </div>
   );

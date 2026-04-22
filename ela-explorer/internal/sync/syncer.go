@@ -666,8 +666,20 @@ func (s *Syncer) governanceBackfill(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		s.processor.txProc.processGovernanceTx(ctx, pgxTx, tx, m.blockHeight, m.timestamp)
-		s.processor.txProc.processOutputPayloads(ctx, pgxTx, tx, m.blockHeight)
+		// Backfill path: per-tx isolation (one tx per pgxTx). A handler error
+		// only rolls back that one tx — the backfill itself continues. This is
+		// intentional: the backfill is idempotent and a single malformed tx
+		// should not stop the whole pass.
+		if err := s.processor.txProc.processGovernanceTx(ctx, pgxTx, tx, m.blockHeight, m.timestamp); err != nil {
+			slog.Warn("governance backfill: processGovernanceTx failed", "txid", m.txid, "height", m.blockHeight, "error", err)
+			pgxTx.Rollback(ctx)
+			continue
+		}
+		if err := s.processor.txProc.processOutputPayloads(ctx, pgxTx, tx, m.blockHeight); err != nil {
+			slog.Warn("governance backfill: processOutputPayloads failed", "txid", m.txid, "height", m.blockHeight, "error", err)
+			pgxTx.Rollback(ctx)
+			continue
+		}
 		if err := pgxTx.Commit(ctx); err != nil {
 			pgxTx.Rollback(ctx)
 			continue

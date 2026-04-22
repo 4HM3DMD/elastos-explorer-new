@@ -11,6 +11,7 @@ import (
 
 	"ela-explorer/internal/cache"
 	"ela-explorer/internal/db"
+	"ela-explorer/internal/metrics"
 	"ela-explorer/internal/node"
 	"ela-explorer/internal/proposal"
 
@@ -411,9 +412,16 @@ func (tp *TxProcessor) ProcessTxLive(ctx context.Context, pgxTx pgx.Tx, tx *node
 		}
 	}
 
-	// 7. Governance and output payload processing
-	tp.processGovernanceTx(ctx, pgxTx, tx, blockHeight, blockTime)
-	tp.processOutputPayloads(ctx, pgxTx, tx, blockHeight)
+	// 7. Governance and output payload processing.
+	// Both dispatchers short-circuit on the first handler error and propagate
+	// it up so the whole block rolls back cleanly with ONE root-cause error
+	// rather than a cascade of "transaction is aborted" WARNs.
+	if err := tp.processGovernanceTx(ctx, pgxTx, tx, blockHeight, blockTime); err != nil {
+		return nil, err
+	}
+	if err := tp.processOutputPayloads(ctx, pgxTx, tx, blockHeight); err != nil {
+		return nil, err
+	}
 
 	return result, nil
 }
@@ -438,91 +446,114 @@ func (tp *TxProcessor) resolveVoterAddress(ctx context.Context, tx *node.Transac
 	return addr
 }
 
-func (tp *TxProcessor) processGovernanceTx(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) {
+func (tp *TxProcessor) processGovernanceTx(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) error {
 	switch tx.Type {
 	case TxRegisterProducer:
-		tp.handleRegisterProducer(ctx, pgxTx, tx, blockHeight)
+		return tp.handleRegisterProducer(ctx, pgxTx, tx, blockHeight)
 	case TxUpdateProducer:
-		tp.handleUpdateProducer(ctx, pgxTx, tx)
+		return tp.handleUpdateProducer(ctx, pgxTx, tx)
 	case TxCancelProducer:
-		tp.handleCancelProducer(ctx, pgxTx, tx, blockHeight)
+		return tp.handleCancelProducer(ctx, pgxTx, tx, blockHeight)
 	case TxActivateProducer:
-		tp.handleActivateProducer(ctx, pgxTx, tx)
+		return tp.handleActivateProducer(ctx, pgxTx, tx)
 	case TxReturnDepositCoin:
-		tp.handleReturnDeposit(ctx, pgxTx, tx)
+		return tp.handleReturnDeposit(ctx, pgxTx, tx)
 
 	case TxRegisterCR:
-		tp.handleRegisterCR(ctx, pgxTx, tx, blockHeight)
+		return tp.handleRegisterCR(ctx, pgxTx, tx, blockHeight)
 	case TxUpdateCR:
-		tp.handleUpdateCR(ctx, pgxTx, tx)
+		return tp.handleUpdateCR(ctx, pgxTx, tx)
 	case TxUnregisterCR:
-		tp.handleUnregisterCR(ctx, pgxTx, tx, blockHeight)
+		return tp.handleUnregisterCR(ctx, pgxTx, tx, blockHeight)
 
 	case TxCRCProposal:
-		tp.handleCRCProposal(ctx, pgxTx, tx, blockHeight)
+		return tp.handleCRCProposal(ctx, pgxTx, tx, blockHeight)
 	case TxCRCProposalReview:
-		tp.handleCRCProposalReview(ctx, pgxTx, tx, blockHeight, blockTime)
+		return tp.handleCRCProposalReview(ctx, pgxTx, tx, blockHeight, blockTime)
 	case TxCRCProposalTracking:
-		tp.handleCRCProposalTracking(ctx, pgxTx, tx, blockHeight)
+		return tp.handleCRCProposalTracking(ctx, pgxTx, tx, blockHeight)
 	case TxCRCouncilMemberClaimNode:
-		tp.handleCRClaimNode(ctx, pgxTx, tx)
+		return tp.handleCRClaimNode(ctx, pgxTx, tx)
 
 	case TxVoting:
-		tp.handleVoting(ctx, pgxTx, tx, blockHeight)
+		return tp.handleVoting(ctx, pgxTx, tx, blockHeight)
 	case TxReturnVotes:
-		tp.handleReturnVotes(ctx, pgxTx, tx, blockHeight)
+		return tp.handleReturnVotes(ctx, pgxTx, tx, blockHeight)
 
 	case TxCreateNFT:
-		tp.handleCreateNFT(ctx, pgxTx, tx, blockHeight)
+		return tp.handleCreateNFT(ctx, pgxTx, tx, blockHeight)
 	case TxNFTDestroyFromSideChain:
-		tp.handleNFTDestroy(ctx, pgxTx, tx, blockHeight)
+		return tp.handleNFTDestroy(ctx, pgxTx, tx, blockHeight)
 
 	case TxRevertToPOW:
-		tp.handleRevertToPOW(ctx, pgxTx, tx, blockHeight, blockTime)
+		return tp.handleRevertToPOW(ctx, pgxTx, tx, blockHeight, blockTime)
 	case TxRevertToDPOS:
-		tp.handleRevertToDPOS(ctx, pgxTx, tx, blockHeight, blockTime)
+		return tp.handleRevertToDPOS(ctx, pgxTx, tx, blockHeight, blockTime)
 	case TxNextTurnDPOSInfo:
-		tp.handleNextTurnDPOSInfo(ctx, pgxTx, tx, blockHeight, blockTime)
+		return tp.handleNextTurnDPOSInfo(ctx, pgxTx, tx, blockHeight, blockTime)
 
 	case TxInactiveArbitrators:
-		tp.handleInactiveArbiters(ctx, pgxTx, tx, blockHeight)
+		return tp.handleInactiveArbiters(ctx, pgxTx, tx, blockHeight)
 	case TxIllegalProposalEvidence, TxIllegalVoteEvidence, TxIllegalBlockEvidence, TxIllegalSidechainEvidence:
-		tp.handleSlashingEvent(ctx, pgxTx, tx, blockHeight)
+		return tp.handleSlashingEvent(ctx, pgxTx, tx, blockHeight)
 
 	case TxReturnCRDepositCoin:
-		tp.handleReturnCRDeposit(ctx, pgxTx, tx)
+		return tp.handleReturnCRDeposit(ctx, pgxTx, tx)
 
 	case TxExchangeVotes:
-		tp.handleExchangeVotes(ctx, pgxTx, tx, blockHeight)
+		return tp.handleExchangeVotes(ctx, pgxTx, tx, blockHeight)
 	case TxVotesRealWithdraw:
-		tp.handleVotesRealWithdraw(ctx, pgxTx, tx, blockHeight)
+		return tp.handleVotesRealWithdraw(ctx, pgxTx, tx, blockHeight)
 
 	case TxProposalResult:
-		tp.handleProposalResult(ctx, pgxTx, tx, blockHeight)
+		return tp.handleProposalResult(ctx, pgxTx, tx, blockHeight)
 
 	case TxWithdrawFromSideChain:
-		tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "from_sidechain")
+		return tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "from_sidechain")
 	case TxTransferCrossChainAsset:
-		tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "to_sidechain")
+		return tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "to_sidechain")
 	case TxSideChainPow:
-		tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "pow_proof")
+		return tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "pow_proof")
 	case TxReturnSideChainDepositCoin:
-		tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "from_sidechain")
+		return tp.handleCrossChain(ctx, pgxTx, tx, blockHeight, blockTime, "from_sidechain")
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleReturnCRDeposit(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) {
+// Handler return-error convention (as of Phase 2.1 of the audit remediation):
+//
+//   - DB errors → return fmt.Errorf("<handler>: <op>: %w", err) AND call
+//     metrics.IncGovHandlerError("<handler>"). These propagate to the outer
+//     ProcessTxLive, failing the whole block cleanly with ONE log line
+//     pointing at the root cause instead of a cascade of "transaction is
+//     aborted" WARNs from pgx's aborted-state semantics.
+//   - JSON parse errors → log at Warn and return nil. A single malformed tx
+//     should NOT kill a whole block; we skip the handler's work and let the
+//     block commit. Malformed payloads are extremely rare and bounded by the
+//     node's own tx validation.
+//   - "Expected" no-ops (e.g. missing payload fields, stake not found) →
+//     return nil silently. Not all txs of a given type need governance-side
+//     effects; absence-of-work isn't an error.
+
+func (tp *TxProcessor) handleReturnCRDeposit(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		CID string `json:"cid"`
 	}
-	if err := json.Unmarshal(tx.Payload, &payload); err == nil && payload.CID != "" {
-		if _, err := pgxTx.Exec(ctx, "UPDATE cr_members SET state='Returned' WHERE cid=$1", payload.CID); err != nil {
-			slog.Warn("handleReturnCRDeposit: update failed", "cid", payload.CID, "error", err)
-		}
+	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
+		slog.Warn("handleReturnCRDeposit: parse failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
+	if payload.CID == "" {
+		return nil
+	}
+	if _, err := pgxTx.Exec(ctx, "UPDATE cr_members SET state='Returned' WHERE cid=$1", payload.CID); err != nil {
+		metrics.IncGovHandlerError("handleReturnCRDeposit")
+		return fmt.Errorf("handleReturnCRDeposit: update cr_members: %w", err)
+	}
+	return nil
 }
 
-func (tp *TxProcessor) handleExchangeVotes(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleExchangeVotes(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	// Exchange votes consolidates/converts vote UTXOs into a single new stake.
 	// Multiple inputs may be consumed (vote consolidation) but produce ONE stake
 	// output. We inherit the candidate from the first consumed vote.
@@ -546,12 +577,13 @@ func (tp *TxProcessor) handleExchangeVotes(ctx context.Context, pgxTx pgx.Tx, tx
 		if _, err := pgxTx.Exec(ctx,
 			"UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3 WHERE txid=$1 AND vout_n=$4 AND is_active=TRUE",
 			vin.TxID, tx.TxID, blockHeight, vin.VOut); err != nil {
-			slog.Warn("handleExchangeVotes: deactivate failed", "error", err)
+			metrics.IncGovHandlerError("handleExchangeVotes")
+			return fmt.Errorf("handleExchangeVotes: deactivate vin vote: %w", err)
 		}
 	}
 
 	if !found {
-		return
+		return nil
 	}
 
 	// Use the OTStake output value as the new staked amount (consolidated total)
@@ -563,7 +595,7 @@ func (tp *TxProcessor) handleExchangeVotes(ctx context.Context, pgxTx pgx.Tx, tx
 		}
 	}
 	if newAmountSela <= 0 {
-		return
+		return nil
 	}
 
 	rights := computeStakingRights(VoteDposV2, newAmountSela, firstLockTime, blockHeight)
@@ -574,30 +606,35 @@ func (tp *TxProcessor) handleExchangeVotes(ctx context.Context, pgxTx pgx.Tx, tx
 		tx.TxID, firstAddr, firstCandidate, firstCandidate, VoteDposV2,
 		newAmountSela, firstLockTime, blockHeight, firstLockTime, rights,
 	); err != nil {
-		slog.Warn("handleExchangeVotes: insert new vote failed", "error", err)
+		metrics.IncGovHandlerError("handleExchangeVotes")
+		return fmt.Errorf("handleExchangeVotes: insert new vote: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleVotesRealWithdraw(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleVotesRealWithdraw(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	for _, vin := range tx.VIn {
-		if vin.TxID != "" {
-			if _, err := pgxTx.Exec(ctx,
-				"UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3 WHERE txid=$1 AND vout_n=$4 AND is_active=TRUE",
-				vin.TxID, tx.TxID, blockHeight, vin.VOut); err != nil {
-				slog.Warn("handleVotesRealWithdraw: update failed", "error", err)
-			}
+		if vin.TxID == "" {
+			continue
+		}
+		if _, err := pgxTx.Exec(ctx,
+			"UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3 WHERE txid=$1 AND vout_n=$4 AND is_active=TRUE",
+			vin.TxID, tx.TxID, blockHeight, vin.VOut); err != nil {
+			metrics.IncGovHandlerError("handleVotesRealWithdraw")
+			return fmt.Errorf("handleVotesRealWithdraw: deactivate vote: %w", err)
 		}
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleProposalResult(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleProposalResult(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		ProposalHash string `json:"proposalhash"`
 		Result       bool   `json:"result"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
 		slog.Warn("handleProposalResult: parse failed", "txid", tx.TxID, "error", err)
-		return
+		return nil
 	}
 	status := "Rejected"
 	if payload.Result {
@@ -606,26 +643,33 @@ func (tp *TxProcessor) handleProposalResult(ctx context.Context, pgxTx pgx.Tx, t
 	if _, err := pgxTx.Exec(ctx,
 		"UPDATE cr_proposals SET status=$1, last_updated=$3 WHERE proposal_hash=$2",
 		status, payload.ProposalHash, blockHeight); err != nil {
-		slog.Warn("handleProposalResult: update failed", "hash", payload.ProposalHash, "error", err)
+		metrics.IncGovHandlerError("handleProposalResult")
+		return fmt.Errorf("handleProposalResult: update cr_proposals: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) processOutputPayloads(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) processOutputPayloads(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	for _, vout := range tx.VOut {
 		switch vout.Type {
 		case OTVote, OTDposV2Vote:
 			if tx.Type != TxVoting {
-				tp.handleVoteOutput(ctx, pgxTx, tx.TxID, vout, blockHeight)
+				if err := tp.handleVoteOutput(ctx, pgxTx, tx.TxID, vout, blockHeight); err != nil {
+					return err
+				}
 			}
 		case OTStake:
-			tp.handleStakeOutput(ctx, pgxTx, tx.TxID, vout, blockHeight)
+			if err := tp.handleStakeOutput(ctx, pgxTx, tx.TxID, vout, blockHeight); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // --- Producer handlers ---
 
-func (tp *TxProcessor) handleRegisterProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleRegisterProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		OwnerPublicKey string `json:"ownerpublickey"`
 		NodePublicKey  string `json:"nodepublickey"`
@@ -637,7 +681,7 @@ func (tp *TxProcessor) handleRegisterProducer(ctx context.Context, pgxTx pgx.Tx,
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
 		slog.Warn("parse RegisterProducer payload failed", "txid", tx.TxID, "error", err)
-		return
+		return nil
 	}
 
 	if _, err := pgxTx.Exec(ctx, `
@@ -649,11 +693,13 @@ func (tp *TxProcessor) handleRegisterProducer(ctx context.Context, pgxTx pgx.Tx,
 		payload.OwnerPublicKey, payload.NodePublicKey, payload.NickName, payload.URL,
 		payload.Location, payload.NetAddress, blockHeight, payload.StakeUntil, tx.PayloadVersion,
 	); err != nil {
-		slog.Warn("handleRegisterProducer: exec failed", "txid", tx.TxID, "error", err)
+		metrics.IncGovHandlerError("handleRegisterProducer")
+		return fmt.Errorf("handleRegisterProducer: upsert producers: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleUpdateProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) {
+func (tp *TxProcessor) handleUpdateProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		OwnerPublicKey string `json:"ownerpublickey"`
 		NodePublicKey  string `json:"nodepublickey"`
@@ -664,7 +710,8 @@ func (tp *TxProcessor) handleUpdateProducer(ctx context.Context, pgxTx pgx.Tx, t
 		StakeUntil     uint32 `json:"stakeuntil"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse UpdateProducer payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, `
 		UPDATE producers SET node_pubkey=$2, nickname=$3, url=$4, location=$5, net_address=$6, stake_until=$7
@@ -672,65 +719,83 @@ func (tp *TxProcessor) handleUpdateProducer(ctx context.Context, pgxTx pgx.Tx, t
 		payload.OwnerPublicKey, payload.NodePublicKey, payload.NickName,
 		payload.URL, payload.Location, payload.NetAddress, payload.StakeUntil,
 	); err != nil {
-		slog.Warn("handleUpdateProducer: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleUpdateProducer")
+		return fmt.Errorf("handleUpdateProducer: update producers: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleCancelProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleCancelProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		OwnerPublicKey string `json:"ownerpublickey"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse CancelProducer payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE producers SET state='Canceled', cancel_height=$2 WHERE owner_pubkey=$1",
 		payload.OwnerPublicKey, blockHeight); err != nil {
-		slog.Warn("handleCancelProducer: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleCancelProducer")
+		return fmt.Errorf("handleCancelProducer: update producers: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleActivateProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) {
+func (tp *TxProcessor) handleActivateProducer(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		NodePublicKey string `json:"nodepublickey"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse ActivateProducer payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE producers SET state='Active', inactive_height=0 WHERE node_pubkey=$1",
 		payload.NodePublicKey); err != nil {
-		slog.Warn("handleActivateProducer: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleActivateProducer")
+		return fmt.Errorf("handleActivateProducer: update producers: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleReturnDeposit(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) {
+func (tp *TxProcessor) handleReturnDeposit(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		OwnerPublicKey string `json:"ownerpublickey"`
 	}
-	if err := json.Unmarshal(tx.Payload, &payload); err == nil && payload.OwnerPublicKey != "" {
-		if _, err := pgxTx.Exec(ctx, "UPDATE producers SET state='Returned' WHERE owner_pubkey=$1", payload.OwnerPublicKey); err != nil {
-			slog.Warn("handleReturnDeposit: exec failed", "error", err)
-		}
+	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
+		slog.Warn("parse ReturnDeposit payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
+	if payload.OwnerPublicKey == "" {
+		return nil
+	}
+	if _, err := pgxTx.Exec(ctx, "UPDATE producers SET state='Returned' WHERE owner_pubkey=$1", payload.OwnerPublicKey); err != nil {
+		metrics.IncGovHandlerError("handleReturnDeposit")
+		return fmt.Errorf("handleReturnDeposit: update producers: %w", err)
+	}
+	return nil
 }
 
-func (tp *TxProcessor) handleInactiveArbiters(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleInactiveArbiters(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		Arbiters []string `json:"arbiters"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse InactiveArbiters payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	for _, pubkey := range payload.Arbiters {
 		if _, err := pgxTx.Exec(ctx, "UPDATE producers SET state='Inactive', inactive_height=$2 WHERE node_pubkey=$1 OR owner_pubkey=$1",
 			pubkey, blockHeight); err != nil {
-			slog.Warn("handleInactiveArbiters: exec failed", "pubkey", pubkey, "error", err)
+			metrics.IncGovHandlerError("handleInactiveArbiters")
+			return fmt.Errorf("handleInactiveArbiters: update producers (pubkey=%s): %w", pubkey, err)
 		}
 	}
+	return nil
 }
 
 // --- CR handlers ---
 
-func (tp *TxProcessor) handleRegisterCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleRegisterCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		Code     string `json:"code"`
 		CID      string `json:"cid"`
@@ -740,7 +805,8 @@ func (tp *TxProcessor) handleRegisterCR(ctx context.Context, pgxTx pgx.Tx, tx *n
 		Location uint64 `json:"location"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse RegisterCR payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, `
 		INSERT INTO cr_members (cid, did, code, nickname, url, location, state, register_height, last_updated)
@@ -749,11 +815,13 @@ func (tp *TxProcessor) handleRegisterCR(ctx context.Context, pgxTx pgx.Tx, tx *n
 			did=$2, code=$3, nickname=$4, url=$5, location=$6, register_height=$7, last_updated=$7`,
 		payload.CID, payload.DID, payload.Code, payload.NickName, payload.URL, payload.Location, blockHeight,
 	); err != nil {
-		slog.Warn("handleRegisterCR: exec failed", "cid", payload.CID, "error", err)
+		metrics.IncGovHandlerError("handleRegisterCR")
+		return fmt.Errorf("handleRegisterCR: upsert cr_members (cid=%s): %w", payload.CID, err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleUpdateCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) {
+func (tp *TxProcessor) handleUpdateCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		CID      string `json:"cid"`
 		NickName string `json:"nickname"`
@@ -761,24 +829,30 @@ func (tp *TxProcessor) handleUpdateCR(ctx context.Context, pgxTx pgx.Tx, tx *nod
 		Location uint64 `json:"location"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse UpdateCR payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE cr_members SET nickname=$2, url=$3, location=$4 WHERE cid=$1",
 		payload.CID, payload.NickName, payload.URL, payload.Location); err != nil {
-		slog.Warn("handleUpdateCR: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleUpdateCR")
+		return fmt.Errorf("handleUpdateCR: update cr_members: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleUnregisterCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleUnregisterCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		CID string `json:"cid"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse UnregisterCR payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE cr_members SET state='Canceled' WHERE cid=$1", payload.CID); err != nil {
-		slog.Warn("handleUnregisterCR: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleUnregisterCR")
+		return fmt.Errorf("handleUnregisterCR: update cr_members: %w", err)
 	}
+	return nil
 }
 
 // --- Proposal handlers ---
@@ -871,7 +945,7 @@ func sumBudgets(raw json.RawMessage) string {
 	return strconv.FormatInt(totalSela, 10)
 }
 
-func (tp *TxProcessor) handleCRCProposal(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleCRCProposal(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		ProposalHash       string          `json:"proposalhash"`
 		Hash               string          `json:"hash"`
@@ -884,8 +958,8 @@ func (tp *TxProcessor) handleCRCProposal(ctx context.Context, pgxTx pgx.Tx, tx *
 		Budgets            json.RawMessage `json:"budgets"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		slog.Warn("parse CRCProposal payload failed", "error", err)
-		return
+		slog.Warn("parse CRCProposal payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 
 	propType := resolveProposalType(payload.ProposalType)
@@ -919,13 +993,14 @@ func (tp *TxProcessor) handleCRCProposal(ctx context.Context, pgxTx pgx.Tx, tx *
 		payload.OwnerPublicKey, payload.DraftHash, payload.Recipient,
 		budgetsJSON, budgetTotal, payload.CRCouncilMemberDID, blockHeight,
 	); err != nil {
-		slog.Warn("insert cr_proposal failed", "txid", tx.TxID, "error", err)
-		return
+		metrics.IncGovHandlerError("handleCRCProposal")
+		return fmt.Errorf("handleCRCProposal: insert cr_proposal (hash=%s): %w", proposalHash, err)
 	}
 
 	if tp.node != nil && payload.DraftHash != "" {
 		tp.tryFetchDraftInline(ctx, pgxTx, proposalHash, payload.DraftHash)
 	}
+	return nil
 }
 
 // tryFetchDraftInline attempts to fetch and store draft content immediately
@@ -966,7 +1041,7 @@ func (tp *TxProcessor) tryFetchDraftInline(ctx context.Context, pgxTx pgx.Tx, pr
 	slog.Info("proposal draft content synced inline", "hash", proposalHash[:16])
 }
 
-func (tp *TxProcessor) handleCRCProposalReview(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) {
+func (tp *TxProcessor) handleCRCProposalReview(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) error {
 	var payload struct {
 		ProposalHash string `json:"proposalhash"`
 		VoteResult   any    `json:"voteresult"`
@@ -976,7 +1051,7 @@ func (tp *TxProcessor) handleCRCProposalReview(ctx context.Context, pgxTx pgx.Tx
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
 		slog.Warn("handleCRCProposalReview: unmarshal failed", "txid", tx.TxID, "error", err)
-		return
+		return nil
 	}
 
 	opinion := resolveVoteResult(payload.VoteResult)
@@ -991,7 +1066,8 @@ func (tp *TxProcessor) handleCRCProposalReview(ctx context.Context, pgxTx pgx.Tx
 			review_height=$6`,
 		payload.DID, payload.ProposalHash, opinion, payload.OpinionHash, payload.OpinionData, blockHeight, blockTime, tx.TxID,
 	); err != nil {
-		slog.Warn("handleCRCProposalReview: insert review failed", "error", err)
+		metrics.IncGovHandlerError("handleCRCProposalReview")
+		return fmt.Errorf("handleCRCProposalReview: insert cr_proposal_reviews: %w", err)
 	}
 
 	// The vote / reject / abstain counter is incremented via three
@@ -1021,43 +1097,51 @@ func (tp *TxProcessor) handleCRCProposalReview(ctx context.Context, pgxTx pgx.Tx
 	default:
 		slog.Warn("handleCRCProposalReview: unknown opinion, counter not updated",
 			"opinion", opinion, "txid", tx.TxID, "proposal_hash", payload.ProposalHash)
-		return
+		return nil
 	}
 	if err != nil {
-		slog.Warn("handleCRCProposalReview: update count failed", "error", err)
+		metrics.IncGovHandlerError("handleCRCProposalReview")
+		return fmt.Errorf("handleCRCProposalReview: update cr_proposals counter (opinion=%s): %w", opinion, err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleCRCProposalTracking(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleCRCProposalTracking(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		ProposalHash string `json:"proposalhash"`
 		Stage        int    `json:"stage"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse CRCProposalTracking payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE cr_proposals SET tracking_count = tracking_count + 1, current_stage = $3, last_updated = $2 WHERE proposal_hash = $1",
 		payload.ProposalHash, blockHeight, payload.Stage); err != nil {
-		slog.Warn("handleCRCProposalTracking: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleCRCProposalTracking")
+		return fmt.Errorf("handleCRCProposalTracking: update cr_proposals: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleCRClaimNode(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) {
+func (tp *TxProcessor) handleCRClaimNode(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		NodePublicKey      string `json:"nodepublickey"`
 		CRCouncilMemberDID string `json:"crcouncilmemberdid"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse CRClaimNode payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE cr_members SET claimed_node=$2 WHERE did=$1", payload.CRCouncilMemberDID, payload.NodePublicKey); err != nil {
-		slog.Warn("handleCRClaimNode: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleCRClaimNode")
+		return fmt.Errorf("handleCRClaimNode: update cr_members: %w", err)
 	}
+	return nil
 }
 
 // --- Voting handlers ---
 
-func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		Contents []struct {
 			VoteType  int `json:"votetype"`
@@ -1078,7 +1162,7 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
 		slog.Warn("parse Voting payload failed", "txid", tx.TxID, "error", err)
-		return
+		return nil
 	}
 
 	voterAddr := tp.resolveVoterAddress(ctx, tx)
@@ -1090,7 +1174,8 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 			if _, err := pgxTx.Exec(ctx,
 				"UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3 WHERE txid=$1 AND vout_n=$4 AND is_active=TRUE",
 				vin.TxID, tx.TxID, blockHeight, vin.VOut); err != nil {
-				slog.Warn("handleVoting: deactivate consumed vin vote failed", "error", err)
+				metrics.IncGovHandlerError("handleVoting")
+				return fmt.Errorf("handleVoting: deactivate consumed vin (txid=%s, vout=%d): %w", vin.TxID, vin.VOut, err)
 			}
 		}
 	}
@@ -1115,7 +1200,8 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 				tx.TxID, voutN, voterAddr, vi.Candidate, vi.Candidate, content.VoteType,
 				amountSela, vi.LockTime, blockHeight, vi.LockTime, stakingRights,
 			); err != nil {
-				slog.Warn("handleVoting: insert vote failed", "txid", tx.TxID, "error", err)
+				metrics.IncGovHandlerError("handleVoting")
+				return fmt.Errorf("handleVoting: insert vote (candidate=%s): %w", vi.Candidate, err)
 			}
 		}
 	}
@@ -1142,7 +1228,8 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 			  AND is_active=TRUE
 			  AND txid != $2`,
 			renewal.ReferKey, tx.TxID, blockHeight); err != nil {
-			slog.Warn("handleVoting: deactivate renewal failed", "error", err)
+			metrics.IncGovHandlerError("handleVoting")
+			return fmt.Errorf("handleVoting: deactivate renewal (refer_key=%s): %w", renewal.ReferKey, err)
 		}
 
 		if _, err := pgxTx.Exec(ctx, `
@@ -1157,26 +1244,30 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 			amountSela, renewal.VotesInfo.LockTime, blockHeight, renewal.VotesInfo.LockTime,
 			stakingRights, renewal.ReferKey,
 		); err != nil {
-			slog.Warn("handleVoting: insert renewal vote failed", "error", err)
+			metrics.IncGovHandlerError("handleVoting")
+			return fmt.Errorf("handleVoting: insert renewal vote (refer_key=%s): %w", renewal.ReferKey, err)
 		}
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleReturnVotes(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleReturnVotes(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	for _, vin := range tx.VIn {
 		if vin.TxID != "" {
 			if _, err := pgxTx.Exec(ctx,
 				"UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3 WHERE txid=$1 AND vout_n=$4 AND is_active=TRUE",
 				vin.TxID, tx.TxID, blockHeight, vin.VOut); err != nil {
-				slog.Warn("handleReturnVotes: exec failed", "error", err)
+				metrics.IncGovHandlerError("handleReturnVotes")
+				return fmt.Errorf("handleReturnVotes: deactivate vote (txid=%s, vout=%d): %w", vin.TxID, vin.VOut, err)
 			}
 		}
 	}
+	return nil
 }
 
 // --- NFT handlers ---
 
-func (tp *TxProcessor) handleCreateNFT(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleCreateNFT(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		ReferKey         string `json:"referkey"`
 		StakeAddress     string `json:"stakeaddress"`
@@ -1188,7 +1279,8 @@ func (tp *TxProcessor) handleCreateNFT(ctx context.Context, pgxTx pgx.Tx, tx *no
 		TargetOwnerKey   string `json:"targetownerkey"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse CreateNFT payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 
 	if _, err := pgxTx.Exec(ctx, `
@@ -1199,28 +1291,33 @@ func (tp *TxProcessor) handleCreateNFT(ctx context.Context, pgxTx pgx.Tx, tx *no
 		payload.TargetOwnerKey, payload.StartHeight, payload.EndHeight,
 		payload.Votes, payload.VoteRights, tx.TxID, blockHeight,
 	); err != nil {
-		slog.Warn("handleCreateNFT: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleCreateNFT")
+		return fmt.Errorf("handleCreateNFT: insert nft: %w", err)
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleNFTDestroy(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleNFTDestroy(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	var payload struct {
 		IDs []string `json:"ids"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse NFTDestroy payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	for _, id := range payload.IDs {
 		if _, err := pgxTx.Exec(ctx, "UPDATE nfts SET is_destroyed=TRUE, destroy_txid=$2, destroy_height=$3 WHERE nft_id=$1",
 			id, tx.TxID, blockHeight); err != nil {
-			slog.Warn("handleNFTDestroy: exec failed", "nft_id", id, "error", err)
+			metrics.IncGovHandlerError("handleNFTDestroy")
+			return fmt.Errorf("handleNFTDestroy: update nfts (nft_id=%s): %w", id, err)
 		}
 	}
+	return nil
 }
 
 // --- Consensus handlers ---
 
-func (tp *TxProcessor) handleRevertToPOW(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) {
+func (tp *TxProcessor) handleRevertToPOW(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) error {
 	fromMode := "DPOS"
 	if blockHeight >= HeightDPoSV2Start {
 		fromMode = "BPOS"
@@ -1228,15 +1325,18 @@ func (tp *TxProcessor) handleRevertToPOW(ctx context.Context, pgxTx pgx.Tx, tx *
 	if _, err := pgxTx.Exec(ctx,
 		"INSERT INTO consensus_transitions (height, from_mode, to_mode, trigger_txid, timestamp) VALUES ($1, $2, 'POW', $3, $4) ON CONFLICT DO NOTHING",
 		blockHeight, fromMode, tx.TxID, blockTime); err != nil {
-		slog.Warn("handleRevertToPOW: insert transition failed", "error", err)
+		metrics.IncGovHandlerError("handleRevertToPOW")
+		return fmt.Errorf("handleRevertToPOW: insert consensus_transitions: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE chain_stats SET consensus_mode=$1 WHERE id=1", "POW"); err != nil {
-		slog.Warn("handleRevertToPOW: update chain_stats failed", "error", err)
+		metrics.IncGovHandlerError("handleRevertToPOW")
+		return fmt.Errorf("handleRevertToPOW: update chain_stats: %w", err)
 	}
 	slog.Warn("CONSENSUS: Reverted to POW", "height", blockHeight, "from", fromMode)
+	return nil
 }
 
-func (tp *TxProcessor) handleRevertToDPOS(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) {
+func (tp *TxProcessor) handleRevertToDPOS(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) error {
 	toMode := "DPOS"
 	if blockHeight >= HeightDPoSV2Start {
 		toMode = "BPOS"
@@ -1244,21 +1344,25 @@ func (tp *TxProcessor) handleRevertToDPOS(ctx context.Context, pgxTx pgx.Tx, tx 
 	if _, err := pgxTx.Exec(ctx,
 		"INSERT INTO consensus_transitions (height, from_mode, to_mode, trigger_txid, timestamp) VALUES ($1, 'POW', $2, $3, $4) ON CONFLICT DO NOTHING",
 		blockHeight, toMode, tx.TxID, blockTime); err != nil {
-		slog.Warn("handleRevertToDPOS: insert transition failed", "error", err)
+		metrics.IncGovHandlerError("handleRevertToDPOS")
+		return fmt.Errorf("handleRevertToDPOS: insert consensus_transitions: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx, "UPDATE chain_stats SET consensus_mode=$1 WHERE id=1", toMode); err != nil {
-		slog.Warn("handleRevertToDPOS: update chain_stats failed", "error", err)
+		metrics.IncGovHandlerError("handleRevertToDPOS")
+		return fmt.Errorf("handleRevertToDPOS: update chain_stats: %w", err)
 	}
 	slog.Info("CONSENSUS: Reverted to "+toMode, "height", blockHeight)
+	return nil
 }
 
-func (tp *TxProcessor) handleNextTurnDPOSInfo(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) {
+func (tp *TxProcessor) handleNextTurnDPOSInfo(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64) error {
 	var payload struct {
 		CRPublicKeys   []string `json:"crpublickeys"`
 		DPoSPublicKeys []string `json:"dpospublickeys"`
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
-		return
+		slog.Warn("parse NextTurnDPOSInfo payload failed", "txid", tx.TxID, "error", err)
+		return nil
 	}
 	crJSON, _ := json.Marshal(payload.CRPublicKeys)
 	dposJSON, _ := json.Marshal(payload.DPoSPublicKeys)
@@ -1269,13 +1373,15 @@ func (tp *TxProcessor) handleNextTurnDPOSInfo(ctx context.Context, pgxTx pgx.Tx,
 		ON CONFLICT (height) DO NOTHING`,
 		blockHeight, string(crJSON), string(dposJSON), blockTime,
 	); err != nil {
-		slog.Warn("handleNextTurnDPOSInfo: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleNextTurnDPOSInfo")
+		return fmt.Errorf("handleNextTurnDPOSInfo: insert arbiter_turns: %w", err)
 	}
+	return nil
 }
 
 // --- Slashing and cross-chain ---
 
-func (tp *TxProcessor) handleSlashingEvent(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) {
+func (tp *TxProcessor) handleSlashingEvent(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight int64) error {
 	slog.Info("slashing event detected", "type", TxTypeName(tx.Type), "txid", tx.TxID, "height", blockHeight)
 
 	var payload struct {
@@ -1292,7 +1398,7 @@ func (tp *TxProcessor) handleSlashingEvent(ctx context.Context, pgxTx pgx.Tx, tx
 	}
 	if err := json.Unmarshal(tx.Payload, &payload); err != nil {
 		slog.Warn("slashing: failed to parse evidence payload", "txid", tx.TxID, "error", err)
-		return
+		return nil
 	}
 
 	var arbiterKeys []string
@@ -1312,12 +1418,14 @@ func (tp *TxProcessor) handleSlashingEvent(ctx context.Context, pgxTx pgx.Tx, tx
 			`UPDATE producers SET state='Illegal', illegal_height=$1
 			 WHERE node_pubkey = ANY($2) OR owner_pubkey = ANY($2)`,
 			blockHeight, arbiterKeys); err != nil {
-			slog.Warn("slashing: failed to update producer state", "error", err)
+			metrics.IncGovHandlerError("handleSlashingEvent")
+			return fmt.Errorf("handleSlashingEvent: update producers: %w", err)
 		}
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleCrossChain(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64, direction string) {
+func (tp *TxProcessor) handleCrossChain(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo, blockHeight, blockTime int64, direction string) error {
 	var amount int64
 	for _, vout := range tx.VOut {
 		amount += parseELAToSela(vout.Value)
@@ -1328,7 +1436,8 @@ func (tp *TxProcessor) handleCrossChain(ctx context.Context, pgxTx pgx.Tx, tx *n
 		GenesisBlockAddress string `json:"genesisblockaddress"`
 		SideGenesisHash     string `json:"sidegenesishash"`
 	}
-	json.Unmarshal(tx.Payload, &payload)
+	// Payload parse is best-effort — not all cross-chain txs carry structured JSON.
+	_ = json.Unmarshal(tx.Payload, &payload)
 	if payload.SideGenesisHash != "" {
 		sidechainHash = payload.SideGenesisHash
 	} else if payload.GenesisBlockAddress != "" {
@@ -1341,20 +1450,23 @@ func (tp *TxProcessor) handleCrossChain(ctx context.Context, pgxTx pgx.Tx, tx *n
 		ON CONFLICT (txid) DO NOTHING`,
 		tx.TxID, tx.Type, direction, sidechainHash, amount, blockHeight, blockTime,
 	); err != nil {
-		slog.Warn("handleCrossChain: exec failed", "error", err)
+		metrics.IncGovHandlerError("handleCrossChain")
+		return fmt.Errorf("handleCrossChain: insert cross_chain_txs: %w", err)
 	}
+	return nil
 }
 
 // --- Output payload handlers ---
 
-func (tp *TxProcessor) handleVoteOutput(ctx context.Context, pgxTx pgx.Tx, txid string, vout node.VOutInfo, blockHeight int64) {
+func (tp *TxProcessor) handleVoteOutput(ctx context.Context, pgxTx pgx.Tx, txid string, vout node.VOutInfo, blockHeight int64) error {
 	if vout.Payload == nil || len(vout.Payload) == 0 {
-		return
+		return nil
 	}
 
 	var voteOutput node.VoteOutputInfo
 	if err := json.Unmarshal(vout.Payload, &voteOutput); err != nil {
-		return
+		slog.Warn("parse vote output payload failed", "txid", txid, "vout", vout.N, "error", err)
+		return nil
 	}
 
 	outputValue := parseELAToSela(vout.Value)
@@ -1382,19 +1494,22 @@ func (tp *TxProcessor) handleVoteOutput(ctx context.Context, pgxTx pgx.Tx, txid 
 				txid, vout.N, vout.Address, cv.Candidate, cv.Candidate, content.VoteType,
 				amountSela, cv.LockTime, blockHeight, cv.LockTime, stakingRights,
 			); err != nil {
-				slog.Warn("handleVoteOutput: insert vote failed", "error", err)
+				metrics.IncGovHandlerError("handleVoteOutput")
+				return fmt.Errorf("handleVoteOutput: insert vote (txid=%s, vout=%d, candidate=%s): %w", txid, vout.N, cv.Candidate, err)
 			}
 		}
 	}
+	return nil
 }
 
-func (tp *TxProcessor) handleStakeOutput(ctx context.Context, pgxTx pgx.Tx, txid string, vout node.VOutInfo, blockHeight int64) {
+func (tp *TxProcessor) handleStakeOutput(ctx context.Context, pgxTx pgx.Tx, txid string, vout node.VOutInfo, blockHeight int64) error {
 	if vout.Payload == nil || len(vout.Payload) == 0 {
-		return
+		return nil
 	}
 	var stakeOutput node.StakeOutputInfo
 	if err := json.Unmarshal(vout.Payload, &stakeOutput); err != nil {
-		return
+		slog.Warn("parse stake output payload failed", "txid", txid, "vout", vout.N, "error", err)
+		return nil
 	}
 	// Stake outputs (OTStake, type 7) lock ELA into the stake pool. The actual
 	// vote delegation is done via TxVoting (0x63) which references these outputs.
@@ -1404,6 +1519,7 @@ func (tp *TxProcessor) handleStakeOutput(ctx context.Context, pgxTx pgx.Tx, txid
 	// 3. The stake address is derivable from the owner public key
 	// If a dedicated stake_outputs table is needed in the future, persist here.
 	slog.Debug("stake output", "txid", txid, "n", vout.N, "stakeAddr", stakeOutput.StakeAddress)
+	return nil
 }
 
 // computeStakingRights calculates BPoS staking rights: N = E * log10(T/720)

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -15,6 +17,15 @@ var (
 	syncedHeight       atomic.Int64
 	chainTipHeight     atomic.Int64
 	startTime          = time.Now()
+
+	// Per-governance-handler error counter. Indexed by handler name
+	// (e.g. "handleVoting") so Prometheus + tg-monitor can alert on
+	// which specific tx handler is misbehaving instead of "something
+	// in the block sync is failing". Read/write-guarded by govMu —
+	// the write path is once-per-erroring-tx so lock contention is a
+	// non-issue; the read path fires only on /metrics scrape.
+	govMu            sync.RWMutex
+	govHandlerErrors = map[string]*atomic.Int64{}
 )
 
 func IncHTTPRequests()      { httpRequestsTotal.Add(1) }
@@ -22,6 +33,25 @@ func IncHTTPErrors()        { httpErrorsTotal.Add(1) }
 func IncWSConnections()     { wsConnectionsTotal.Add(1) }
 func SetSyncedHeight(h int64) { syncedHeight.Store(h) }
 func SetChainTip(h int64)     { chainTipHeight.Store(h) }
+
+// IncGovHandlerError increments the per-handler error counter. Safe to call
+// from any goroutine; lazily creates the counter on first use.
+func IncGovHandlerError(handler string) {
+	govMu.RLock()
+	c, ok := govHandlerErrors[handler]
+	govMu.RUnlock()
+	if ok {
+		c.Add(1)
+		return
+	}
+	govMu.Lock()
+	if c, ok = govHandlerErrors[handler]; !ok {
+		c = new(atomic.Int64)
+		govHandlerErrors[handler] = c
+	}
+	govMu.Unlock()
+	c.Add(1)
+}
 
 func Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
@@ -68,6 +98,22 @@ func Handler() http.HandlerFunc {
 
 		fmt.Fprintf(w, "# HELP go_goroutines Number of goroutines.\n")
 		fmt.Fprintf(w, "# TYPE go_goroutines gauge\n")
-		fmt.Fprintf(w, "go_goroutines %d\n", runtime.NumGoroutine())
+		fmt.Fprintf(w, "go_goroutines %d\n\n", runtime.NumGoroutine())
+
+		// Per-handler governance error counter. Emitted sorted-by-handler
+		// so metric output is deterministic across scrapes (helps diffs
+		// in alert rules and grafana).
+		fmt.Fprintf(w, "# HELP ela_explorer_gov_handler_errors_total Governance handler errors, labeled by handler name.\n")
+		fmt.Fprintf(w, "# TYPE ela_explorer_gov_handler_errors_total counter\n")
+		govMu.RLock()
+		handlers := make([]string, 0, len(govHandlerErrors))
+		for name := range govHandlerErrors {
+			handlers = append(handlers, name)
+		}
+		sort.Strings(handlers)
+		for _, name := range handlers {
+			fmt.Fprintf(w, "ela_explorer_gov_handler_errors_total{handler=%q} %d\n", name, govHandlerErrors[name].Load())
+		}
+		govMu.RUnlock()
 	}
 }

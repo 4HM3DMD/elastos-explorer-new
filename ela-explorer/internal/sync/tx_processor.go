@@ -994,15 +994,36 @@ func (tp *TxProcessor) handleCRCProposalReview(ctx context.Context, pgxTx pgx.Tx
 		slog.Warn("handleCRCProposalReview: insert review failed", "error", err)
 	}
 
-	countCol := "vote_count"
+	// The vote / reject / abstain counter is incremented via three
+	// explicit parameterised statements — NOT via fmt.Sprintf'd column
+	// names. Today resolveVoteResult() only returns one of these three
+	// strings so the old interpolated form was effectively safe, but
+	// the switch was the only guard against accidental future drift
+	// (e.g. a new vote result, a parsing bug, a refactor that widens
+	// the return type). Hardcoded literal SQL per case removes the
+	// interpolation surface entirely. Unknown opinions now log and
+	// skip the counter update instead of silently being lumped into
+	// vote_count, which is also more correct.
+	var err error
 	switch opinion {
+	case "approve":
+		_, err = pgxTx.Exec(ctx,
+			"UPDATE cr_proposals SET vote_count = vote_count + 1, last_updated = $2 WHERE proposal_hash = $1",
+			payload.ProposalHash, blockHeight)
 	case "reject":
-		countCol = "reject_count"
+		_, err = pgxTx.Exec(ctx,
+			"UPDATE cr_proposals SET reject_count = reject_count + 1, last_updated = $2 WHERE proposal_hash = $1",
+			payload.ProposalHash, blockHeight)
 	case "abstain":
-		countCol = "abstain_count"
+		_, err = pgxTx.Exec(ctx,
+			"UPDATE cr_proposals SET abstain_count = abstain_count + 1, last_updated = $2 WHERE proposal_hash = $1",
+			payload.ProposalHash, blockHeight)
+	default:
+		slog.Warn("handleCRCProposalReview: unknown opinion, counter not updated",
+			"opinion", opinion, "txid", tx.TxID, "proposal_hash", payload.ProposalHash)
+		return
 	}
-	if _, err := pgxTx.Exec(ctx, fmt.Sprintf("UPDATE cr_proposals SET %s = %s + 1, last_updated = $2 WHERE proposal_hash = $1", countCol, countCol),
-		payload.ProposalHash, blockHeight); err != nil {
+	if err != nil {
 		slog.Warn("handleCRCProposalReview: update count failed", "error", err)
 	}
 }

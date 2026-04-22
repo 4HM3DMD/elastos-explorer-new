@@ -127,6 +127,16 @@ func (c *Config) validate() error {
 	if c.DBAPIPassword == "" {
 		return fmt.Errorf("DB_API_PASSWORD is required")
 	}
+	// METRICS_AUTH_TOKEN guards /metrics and /health/detailed via the
+	// bearer-auth middleware. An empty token would be "helpful" in the
+	// worst way — the middleware allows empty Bearer values through and
+	// those endpoints then expose Prometheus internals + validation
+	// state (chain tip, memory, goroutines, fork detection) to the
+	// public internet. Refuse to start so a forgetful operator never
+	// ships a silently-unauthenticated metrics surface.
+	if c.MetricsAuthToken == "" {
+		return fmt.Errorf("METRICS_AUTH_TOKEN is required (guards /metrics and /health/detailed; set a random 32+ char value in .env)")
+	}
 	if c.SyncWorkers < 1 || c.SyncWorkers > 32 {
 		return fmt.Errorf("SYNC_WORKERS must be between 1 and 32, got %d", c.SyncWorkers)
 	}

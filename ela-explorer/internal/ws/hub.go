@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -89,12 +89,17 @@ func NewHub(cfg HubConfig) *Hub {
 	}
 }
 
+// clientIP returns the real peer IP for rate-limiting and per-IP connection
+// caps. We deliberately trust ONLY r.RemoteAddr (post chi middleware.RealIP
+// rewrite, so it carries nginx's $remote_addr that nginx set from its trusted
+// peer). Reading X-Real-IP / X-Forwarded-For directly here would be
+// spoofable — a malicious client could set X-Real-IP to a different value
+// on each connection and completely bypass h.maxClientsPerIP. The wrapping
+// middleware.RealIP at the /ws entry in api/server.go already resolved the
+// headers once, with the trust boundary applied. Don't re-read them here.
 func clientIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return strings.TrimSpace(ip)
-	}
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		return strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0])
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		return host
 	}
 	return r.RemoteAddr
 }

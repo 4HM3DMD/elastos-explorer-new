@@ -55,6 +55,10 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	r.Use(middleware.Compress(5))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(securityHeaders)
+	// Count panics BEFORE chi's Recoverer swallows them, so /metrics
+	// and tg-monitor can alert on code bugs even though chi suppresses
+	// the panic from reaching the process.
+	r.Use(panicCountMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(accessLogMiddleware)
 	r.Use(metricsMiddleware)
@@ -110,8 +114,17 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	metricsGroup.Get("/health/detailed", s.healthDetailed)
 	metricsGroup.Get("/metrics", metrics.Handler())
 	metricsGroup.Post("/cr/proposal/{hash}/resync", s.resyncProposalDraft)
-	metricsGroup.Get("/api/v1/admin/validators/logo.json", s.getValidatorLogos)
-	metricsGroup.Post("/api/v1/admin/validators/logo", s.uploadValidatorLogo)
+	// NOTE: validator-logo admin upload endpoints were removed (2026-04)
+	// pending a redesign where the validator's own node operator can
+	// submit a logo via a signed message, instead of an operator-bearer-token
+	// upload path. Security audit flagged the upload path as an
+	// authenticated write surface with client-supplied MIME type / no image
+	// decode validation — all deemed acceptable behind bearer auth but
+	// the feature was only used by hand and not depended on.
+	//
+	// Until the signed-submission flow exists, validator logos remain
+	// served as static files via nginx from /static/validator-logos/
+	// (populated by scripts/download-validator-logos.mjs on deploy).
 
 	r.With(rateLimitMiddleware(rate.Limit(10), 20)).Post("/ela", s.walletRPC)
 
@@ -132,14 +145,32 @@ func (s *Server) AttachAggregator(agg *aggregator.Aggregator) {
 
 func (s *Server) Handler() http.Handler {
 	wsRateLimiter := newPerIPRateLimiter(rate.Limit(5), 10)
+
+	// The /ws path bypasses chi's middleware chain (we intercept before
+	// s.router.ServeHTTP fires), so chi's middleware.RealIP — which
+	// rewrites r.RemoteAddr from the trusted proxy headers — never runs.
+	// Wrap the WS path in the same middleware so:
+	//   1. extractClientIP() sees the real client IP, not nginx's 127.0.0.1
+	//      (otherwise wsRateLimiter below effectively rate-limits GLOBALLY)
+	//   2. ws/hub.go's clientIP() (which we also hardened in this commit
+	//      to use only r.RemoteAddr) returns the real client, not whatever
+	//      a malicious client put in X-Real-IP / X-Forwarded-For
+	// chi's middleware.RealIP reads X-Real-IP and X-Forwarded-For but only
+	// after the TCP peer is a trusted proxy; since nginx is the only peer
+	// this backend ever sees (listen on 127.0.0.1:8339 behind nginx) this
+	// is safe.
+	wsHandler := middleware.RealIP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := extractClientIP(r)
+		if !wsRateLimiter.getLimiter(ip).Allow() {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		s.wsHub.ServeWS(w, r)
+	}))
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/ws" && s.wsHub != nil {
-			ip := extractClientIP(r)
-			if !wsRateLimiter.getLimiter(ip).Allow() {
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-				return
-			}
-			s.wsHub.ServeWS(w, r)
+			wsHandler.ServeHTTP(w, r)
 			return
 		}
 		s.router.ServeHTTP(w, r)
@@ -201,6 +232,26 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// panicCountMiddleware increments the panic counter on any panic and re-raises
+// so chi's Recoverer can take over (log + HTTP 500 response). Placed BEFORE
+// Recoverer in the chain so our deferred recover runs LAST on panic unwind,
+// which is when we actually see the panic value. If we placed this after
+// Recoverer, chi would swallow the panic and we'd never increment.
+func panicCountMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				metrics.IncPanic()
+				// Re-raise so chi's Recoverer handles the response + logging.
+				// This is the normal way to chain recoverers — we only
+				// observe; chi decides the response.
+				panic(rec)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
@@ -259,6 +310,55 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// Content Security Policy — defence-in-depth against XSS.
+		//
+		// MarkdownContent sanitises user-controlled proposal drafts with
+		// DOMPurify before any dangerouslySetInnerHTML path fires; CSP
+		// caps the blast radius if a future XSS bypasses sanitisation.
+		//
+		// Directives, left→right:
+		//   default-src 'self'          — same-origin only for everything not
+		//                                  otherwise specified
+		//   script-src 'self'           — no inline scripts; no eval.
+		//                                  Vite production bundles do not need
+		//                                  either. A breakage here means we
+		//                                  accidentally shipped an inline
+		//                                  <script> and should fix the source,
+		//                                  not the CSP.
+		//   style-src 'self' 'unsafe-inline'
+		//                                — Tailwind + recharts emit inline
+		//                                  style= attributes at runtime; the
+		//                                  unsafe-inline is for STYLE only,
+		//                                  not script (unlike the far-riskier
+		//                                  script-src 'unsafe-inline').
+		//   img-src 'self' data: https: — data: for the inline SVG fallbacks
+		//                                  we render for missing logos; https:
+		//                                  for the externally-hosted proposal
+		//                                  draft images we proxy via
+		//                                  /api/v1/cr/proposal-image/...
+		//   font-src 'self' data:       — data: for base64-inlined font glyphs
+		//                                  in some icon packs
+		//   connect-src 'self' https:   — XHR/fetch/WebSocket: same-origin for
+		//                                  our own API; https: so CoinGecko
+		//                                  price fetches still work
+		//   frame-ancestors 'none'      — pairs with X-Frame-Options: DENY
+		//                                  (modern browsers prefer this)
+		//   base-uri 'self'             — blocks <base href="//evil"> rewrites
+		//   form-action 'self'          — no forms today but cheap to enforce
+		//   object-src 'none'           — no Flash / legacy plugin loading
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: https:; "+
+				"font-src 'self' data:; "+
+				"connect-src 'self' https:; "+
+				"frame-ancestors 'none'; "+
+				"base-uri 'self'; "+
+				"form-action 'self'; "+
+				"object-src 'none'")
+
 		next.ServeHTTP(w, r)
 	})
 }

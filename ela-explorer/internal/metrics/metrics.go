@@ -17,7 +17,13 @@ var (
 	wsConnectionsTotal atomic.Int64
 	syncedHeight       atomic.Int64
 	chainTipHeight     atomic.Int64
-	startTime          = time.Now()
+	// Count of panics caught by the HTTP recover middleware. chi's
+	// middleware.Recoverer already absorbs panics so one bad request
+	// doesn't crash the process, but without a metric we only saw them
+	// in stderr — easy to miss. tg-monitor can alert on a nonzero
+	// value; any increment is a code bug that needs triage.
+	panicsTotal atomic.Int64
+	startTime   = time.Now()
 
 	// Per-governance-handler error counter. Indexed by handler name
 	// (e.g. "handleVoting") so Prometheus + tg-monitor can alert on
@@ -73,6 +79,7 @@ func newLatencyHist() *latencyHist {
 func IncHTTPRequests()      { httpRequestsTotal.Add(1) }
 func IncHTTPErrors()        { httpErrorsTotal.Add(1) }
 func IncWSConnections()     { wsConnectionsTotal.Add(1) }
+func IncPanic()             { panicsTotal.Add(1) }
 func SetSyncedHeight(h int64) { syncedHeight.Store(h) }
 func SetChainTip(h int64)     { chainTipHeight.Store(h) }
 
@@ -183,6 +190,10 @@ func Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP ela_explorer_http_errors_total Total HTTP error responses.\n")
 		fmt.Fprintf(w, "# TYPE ela_explorer_http_errors_total counter\n")
 		fmt.Fprintf(w, "ela_explorer_http_errors_total %d\n\n", httpErrorsTotal.Load())
+
+		fmt.Fprintf(w, "# HELP ela_explorer_panics_total Total panics caught by the HTTP recover middleware. Any nonzero value indicates a code bug that needs triage.\n")
+		fmt.Fprintf(w, "# TYPE ela_explorer_panics_total counter\n")
+		fmt.Fprintf(w, "ela_explorer_panics_total %d\n\n", panicsTotal.Load())
 
 		fmt.Fprintf(w, "# HELP ela_explorer_ws_connections_total Total WebSocket connections opened.\n")
 		fmt.Fprintf(w, "# TYPE ela_explorer_ws_connections_total counter\n")

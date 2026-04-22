@@ -207,6 +207,52 @@ sudo systemctl reload nginx
 sudo certbot --nginx -d explorer.elastos.io -d explorer.elastos.net
 ```
 
+### 6.1 Nginx Runs on the Host, Not in Docker -- What That Means for You
+
+The Go backend and PostgreSQL are containerized (see `docker-compose.yml`), but **nginx runs directly on the host OS as a `systemd` service**. This is an intentional split with real consequences:
+
+**What's coupled to the host:**
+- `/etc/nginx/sites-enabled/ela-explorer` -- the live config
+- `/etc/letsencrypt/` -- the TLS certs (managed by host-side `certbot`)
+- `systemctl reload nginx` -- the only way to apply a config change
+- Ports 80 and 443 -- bound directly by the host process, not via compose
+
+**Why this matters operationally:**
+
+1. **Container rebuilds don't touch nginx.** `docker compose up -d --build` restarts the Go backend on port 8339; nginx keeps serving the old config until you explicitly `systemctl reload nginx`. That's usually what you want, but if you changed `nginx/explorer.conf` in a PR, remember to redeploy it (Step 6 commands) or the changes don't ship.
+
+2. **A nginx crash looks different from a backend crash.** If the Go container panics, users see a 502 (backend down, nginx fine). If nginx crashes or its cert expires, users see a connection refused / cert error -- backend is fine but unreachable. The monitor distinguishes these two cases in its alert levels (see Section 8).
+
+3. **Backup doesn't include nginx state.** `pg_dump` captures the DB. It does NOT capture `/etc/nginx/` or `/etc/letsencrypt/`. If you rebuild the host from scratch you need to re-run Step 5 (server setup) + Step 6 (nginx deploy) + certbot renewal.
+
+4. **Rollback (Section 12) rolls back the backend container only.** The nginx config on the host is unaffected. If you shipped a nginx change and it broke things, `git checkout HEAD~1 -- nginx/explorer.conf` and repeat Step 6 to roll it back.
+
+### 6.2 Dedicated "nginx down while backend up" Alert
+
+Because the services are split across container and host, the most confusing failure mode is **backend healthy, nginx broken**: `curl http://127.0.0.1:8339/health` returns OK (container fine) but `curl https://explorer.elastos.io` returns 502 or connection refused (nginx broken). The tg-monitor already flags this as a Warning check; confirm after deploy:
+
+```bash
+# Both should return HTTP 200. If the first succeeds and the second fails,
+# nginx is the problem, not the Go backend.
+curl -s -o /dev/null -w "backend (container):  %{http_code}\n" http://127.0.0.1:8339/health
+curl -s -o /dev/null -w "nginx (public entry): %{http_code}\n" http://127.0.0.1/
+```
+
+### 6.3 Future: Containerize nginx (not yet done)
+
+A sidecar-nginx-in-compose rework was considered in the platform audit and intentionally deferred:
+
+- **Pros**: single `docker compose up` reproduces the whole stack; backup/restore captures more state; nginx + backend co-versioned.
+- **Cons**: need to rebind ports 80/443 from the host to the container, relocate TLS cert management (certbot-in-a-container or external renewal), migrate rate-limit config. Estimated 2-3 hours plus a staging validation pass.
+
+**If/when this is revisited**, the migration plan is:
+1. Move `nginx/explorer.conf` into a `docker-compose.yml` service stanza
+2. Move `/etc/letsencrypt` into a docker volume, or switch to traefik/caddy auto-TLS
+3. Test on a staging host with a separate DNS name before cutting over production
+4. Update this doc and `tg-monitor.sh` (the "Nginx service (systemd)" check becomes a "Nginx container" check)
+
+Until then: nginx is a host service, treat it that way.
+
 ---
 
 ## 7. Verify Everything Works

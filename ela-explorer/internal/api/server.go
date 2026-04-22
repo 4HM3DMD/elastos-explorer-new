@@ -205,10 +205,25 @@ func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		metrics.IncHTTPRequests()
+		start := time.Now()
+
 		next.ServeHTTP(rec, r)
+
 		if rec.status >= 400 {
 			metrics.IncHTTPErrors()
 		}
+
+		// Record per-endpoint latency using chi's route template (NOT the
+		// concrete URL). RoutePattern returns e.g.
+		// "/api/v1/address/{address}/staking", never the real address, so
+		// our histogram label cardinality stays bounded. If the router
+		// never matched (404), RoutePattern is empty — we bucket those as
+		// "unmatched" rather than skip so ops still sees 404 volume.
+		route := chi.RouteContext(r.Context()).RoutePattern()
+		if route == "" {
+			route = "unmatched"
+		}
+		metrics.ObserveHTTPLatency(route, r.Method, rec.status, time.Since(start))
 	})
 }
 

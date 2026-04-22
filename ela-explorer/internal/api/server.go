@@ -431,6 +431,14 @@ func (s *Server) getSyncStatus(w http.ResponseWriter, r *http.Request) {
 			"isLive":        isLive,
 		},
 		"backfills": backfills,
+		// Detailed progress for the address_transactions backfill.
+		// The boolean in `backfills.addressTransactions` only answers
+		// "is it done?" — this object answers "how far along?" while
+		// it's mid-pass. Shape is stable:
+		//   { running: bool, currentBlock: int, totalBlocks: int, percentDone: 0-100 }
+		"backfillProgress": map[string]any{
+			"addressTransactions": s.syncer.AddressTxBackfillProgress(),
+		},
 	}
 
 	if s.aggregator != nil {

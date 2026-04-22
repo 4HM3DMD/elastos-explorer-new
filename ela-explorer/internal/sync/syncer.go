@@ -49,6 +49,17 @@ type Syncer struct {
 	govBackfillDone atomic.Bool
 	addrTxDone      atomic.Bool
 
+	// Live progress for the address_transactions backfill. Exposed via
+	// /sync-status so operators can see progress of long backfills
+	// without grepping logs. Updated at each chunk boundary inside
+	// addressTransactionsBackfill. `addrTxTotal` is the target max
+	// height at the start of the pass (block height at t=0); if new
+	// blocks arrive during the backfill we don't chase them — they
+	// get caught by the live sync path.
+	addrTxRunning atomic.Bool
+	addrTxCurrent atomic.Int64
+	addrTxTotal   atomic.Int64
+
 	// Broadcast callback (set by main to push to WebSocket).
 	OnNewBlock func(height int64, hash string, txCount int, timestamp int64, size int, minerInfo, minerAddress string)
 }
@@ -422,6 +433,13 @@ func (s *Syncer) addressTransactionsBackfill(ctx context.Context, wg *sync.WaitG
 		return
 	}
 
+	// Publish progress fields so /sync-status can report this pass to
+	// operators. Reset on exit whether we completed or got cancelled.
+	s.addrTxRunning.Store(true)
+	s.addrTxTotal.Store(maxHeight)
+	s.addrTxCurrent.Store(0)
+	defer s.addrTxRunning.Store(false)
+
 	const chunkSize int64 = 50000
 
 	for chunkStart := int64(0); chunkStart <= maxHeight; chunkStart += chunkSize {
@@ -506,9 +524,11 @@ func (s *Syncer) addressTransactionsBackfill(ctx context.Context, wg *sync.WaitG
 			"chunk_elapsed", time.Since(chunkTimer).Round(time.Second),
 			"total_elapsed", time.Since(start).Round(time.Second),
 		)
+		s.addrTxCurrent.Store(chunkEnd)
 	}
 
 	slog.Info("address_tx backfill: complete", "total_elapsed", time.Since(start).Round(time.Second))
+	s.addrTxCurrent.Store(maxHeight)
 	s.addrTxDone.Store(true)
 }
 
@@ -1172,5 +1192,36 @@ func (s *Syncer) BackfillStatus() map[string]bool {
 		"postSync":            s.postSyncDone.Load(),
 		"governance":          s.govBackfillDone.Load(),
 		"addressTransactions": s.addrTxDone.Load(),
+	}
+}
+
+// AddressTxBackfillProgress exposes the in-flight progress of the
+// address_transactions backfill for /sync-status. On a ~2M-block chain
+// the pass takes minutes; on a ~10M-block chain it could be hours, and
+// operators need visibility without tailing logs. When the pass isn't
+// running this returns running=false and zero values.
+type AddressTxProgress struct {
+	Running      bool  `json:"running"`
+	CurrentBlock int64 `json:"currentBlock"`
+	TotalBlocks  int64 `json:"totalBlocks"`
+	PercentDone  int   `json:"percentDone"` // 0-100, integer for stable JSON diffs
+}
+
+func (s *Syncer) AddressTxBackfillProgress() AddressTxProgress {
+	running := s.addrTxRunning.Load()
+	cur := s.addrTxCurrent.Load()
+	tot := s.addrTxTotal.Load()
+	pct := 0
+	if tot > 0 {
+		pct = int(cur * 100 / tot)
+		if pct > 100 {
+			pct = 100
+		}
+	}
+	return AddressTxProgress{
+		Running:      running,
+		CurrentBlock: cur,
+		TotalBlocks:  tot,
+		PercentDone:  pct,
 	}
 }

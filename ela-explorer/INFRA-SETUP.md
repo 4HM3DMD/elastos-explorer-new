@@ -17,8 +17,9 @@ Everything you need to set up monitoring, backups, and hardening for the Elastos
 9. [What Auto-Fix Does](#9-what-auto-fix-does)
 10. [Backups and Restore](#10-backups-and-restore)
 11. [WAL Archiving (Point-in-Time Recovery)](#11-wal-archiving-point-in-time-recovery)
-12. [Silencing Alerts](#12-silencing-alerts)
-13. [Troubleshooting](#13-troubleshooting)
+12. [Rolling Back a Bad Deploy](#12-rolling-back-a-bad-deploy)
+13. [Silencing Alerts](#13-silencing-alerts)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -424,7 +425,81 @@ WAL archive files older than 7 days are automatically cleaned up by the daily cr
 
 ---
 
-## 12. Silencing Alerts
+## 12. Rolling Back a Bad Deploy
+
+Sometimes a fresh build misbehaves -- panics on startup, obviously-wrong output, regressed perf. You want the previous working version back FAST, at 3am, without thinking. Use `scripts/rollback.sh`.
+
+### The 30-second path
+
+```bash
+cd /opt/elastos-explorer-new/ela-explorer
+./scripts/rollback.sh
+```
+
+It lists the last 5 locally-cached `ela-explorer-explorer` images, asks which one to roll back to, retags it as `:latest`, swaps the container, and tails the logs + health-checks so you see whether it came back.
+
+### Flags
+
+```bash
+./scripts/rollback.sh --list           # show recent images, exit
+./scripts/rollback.sh --dry-run        # print the plan, change nothing
+./scripts/rollback.sh <tag>            # non-interactive: use that tag
+```
+
+### What it does and doesn't do
+
+| Does | Doesn't |
+|---|---|
+| Retag a previous image as `:latest` | Touch the database |
+| `docker compose up -d --force-recreate` | Remove the failing image (so you can investigate) |
+| Preserve volumes (your data) | Pull from a remote registry -- local images only |
+| Health-check `/health` after swap | Roll back schema changes (see note below) |
+
+### Schema-change caveat
+
+If the bad deploy included a schema-changing migration (future work -- see plan), a container-only rollback is NOT enough. You would also need to restore the DB from the pre-deploy backup (see section 10). This is why the rollback script ONLY swaps containers -- it deliberately does not pretend to handle schema.
+
+For today's deployments (no formal migrations yet), container rollback is sufficient in every case we've shipped.
+
+### After a successful rollback
+
+1. You're back on a known-good version. Don't panic.
+2. Don't re-deploy the forward build until you know WHY it broke. `docker logs ela-explorer-broken-tag` and staging are your friends.
+3. The failing image stays cached locally -- it's the one you were on just before rolling back. You can `docker image inspect <tag>` or even `docker run --rm -it <tag> sh` to poke at it.
+
+### Sample output
+
+```
+Recent ela-explorer-explorer images (most recent first):
+  IDX           TAG                   AGE                   SIZE
+  [0] a1b2c3d4   latest                2 minutes ago         42MB
+  [1] e5f6g7h8   <none>                3 hours ago           42MB
+  [2] i9j0k1l2   <none>                1 day ago             41MB
+
+Enter the image IDX [0..2] or a tag name: 1
+
+=== Rollback plan ===
+  Target image:  ela-explorer-explorer:<none>
+  Retag as:      ela-explorer-explorer:latest
+  ...
+
+Proceed? [y/N] y
+Retagging ... ✓
+Swapping container ... ✓
+Waiting 10s ...
+
+=== Last 30 log lines ===
+{"level":"INFO","msg":"ela-explorer starting"}
+...
+{"level":"INFO","msg":"ela-explorer ready"}
+
+=== Health check ===
+  /health: OK
+```
+
+---
+
+## 13. Silencing Alerts
 
 ### Temporary Silence (Maintenance Window)
 
@@ -456,7 +531,7 @@ Edit the script and comment out the specific `check_*` function call at the bott
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 ### "I'm not getting Telegram messages"
 

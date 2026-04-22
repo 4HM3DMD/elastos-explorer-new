@@ -974,47 +974,61 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 	}
 	affectedRows.Close()
 
+	// Cleanup steps: return on first failure instead of log-and-continue.
+	//
+	// Old behaviour: each cleanup Exec that failed logged a WARN and proceeded.
+	// pgx's aborted-transaction semantics meant the final Commit would fail and
+	// the outer caller would see an error — but only after N-1 useless WARN
+	// log lines fired, all saying "command ignored, transaction is aborted".
+	// The real root cause was buried and debugging reorg failures took ages.
+	//
+	// New behaviour: return fmt.Errorf on the first cleanup failure. The
+	// `defer pgxTx.Rollback(ctx)` at the top of handleReorg cleans up
+	// atomically, and the caller now sees exactly one error pointing at
+	// exactly which cleanup step blew up. Semantically identical end state
+	// (block fully rolls back on any failure), just far better diagnostics.
+
 	// 4. Remove address_transactions for orphaned blocks
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM address_transactions WHERE height > $1", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean address_transactions", "error", err)
+		return fmt.Errorf("reorg: clean address_transactions: %w", err)
 	}
 
 	// 4b. Clean governance/auxiliary tables not cascaded from blocks
 	orphanedTxidList := "SELECT txid FROM transactions WHERE block_height > $1"
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM votes WHERE txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean votes", "error", err)
+		return fmt.Errorf("reorg: clean votes: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM cr_proposals WHERE tx_hash IN ("+orphanedTxidList+")", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean cr_proposals", "error", err)
+		return fmt.Errorf("reorg: clean cr_proposals: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM cr_proposal_reviews WHERE txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean cr_proposal_reviews", "error", err)
+		return fmt.Errorf("reorg: clean cr_proposal_reviews: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM nfts WHERE create_txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean nfts", "error", err)
+		return fmt.Errorf("reorg: clean nfts: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM cross_chain_txs WHERE txid IN ("+orphanedTxidList+")", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean cross_chain_txs", "error", err)
+		return fmt.Errorf("reorg: clean cross_chain_txs: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM consensus_transitions WHERE height > $1", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean consensus_transitions", "error", err)
+		return fmt.Errorf("reorg: clean consensus_transitions: %w", err)
 	}
 
 	// 4c. Clean BPoS/governance snapshot tables affected by orphaned blocks
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM bpos_stakes WHERE block_height > $1", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean bpos_stakes", "error", err)
+		return fmt.Errorf("reorg: clean bpos_stakes: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"DELETE FROM cr_election_tallies WHERE voting_end_height > $1", forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean cr_election_tallies", "error", err)
+		return fmt.Errorf("reorg: clean cr_election_tallies: %w", err)
 	}
 
 	// 4d. Remove daily_stats rows for dates that fall within the orphaned range,
@@ -1022,18 +1036,18 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 	if _, err := pgxTx.Exec(ctx, `
 		DELETE FROM daily_stats
 		WHERE date >= (SELECT DATE(to_timestamp(timestamp)) FROM blocks WHERE height = $1)`, forkPoint); err != nil {
-		slog.Warn("reorg: failed to clean daily_stats", "error", err)
+		return fmt.Errorf("reorg: clean daily_stats: %w", err)
 	}
 
 	// 4e. Reset producer/cr_member state changes from orphaned blocks.
 	// The aggregator will re-sync the current state from the node on its next run.
 	if _, err := pgxTx.Exec(ctx,
 		"UPDATE producers SET last_updated = 0 WHERE last_updated > $1", forkPoint); err != nil {
-		slog.Warn("reorg: failed to reset producers", "error", err)
+		return fmt.Errorf("reorg: reset producers: %w", err)
 	}
 	if _, err := pgxTx.Exec(ctx,
 		"UPDATE cr_members SET last_updated = 0 WHERE last_updated > $1", forkPoint); err != nil {
-		slog.Warn("reorg: failed to reset cr_members", "error", err)
+		return fmt.Errorf("reorg: reset cr_members: %w", err)
 	}
 
 	// 5. Get counts being orphaned for chain_stats correction
@@ -1068,7 +1082,7 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 				first_seen = LEAST(address_balances.first_seen, EXCLUDED.first_seen),
 				last_seen = GREATEST(address_balances.last_seen, EXCLUDED.last_seen)`,
 			affectedAddresses, ELAAssetID); err != nil {
-			slog.Warn("reorg: failed to recalculate balances", "error", err)
+			return fmt.Errorf("reorg: recalculate balances: %w", err)
 		}
 
 		// Delete stale balances for addresses that no longer have any ELA vouts
@@ -1080,7 +1094,7 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 			    WHERE v.address = address_balances.address
 			      AND (v.asset_id = $2 OR v.asset_id = '')
 			  )`, affectedAddresses, ELAAssetID); err != nil {
-			slog.Warn("reorg: failed to clean orphan-only address balances", "error", err)
+			return fmt.Errorf("reorg: clean orphan-only address balances: %w", err)
 		}
 
 		// Rebuild address_tx_counts for affected addresses
@@ -1094,7 +1108,7 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 			GROUP BY address
 			ON CONFLICT (address) DO UPDATE SET tx_count = EXCLUDED.tx_count`,
 			affectedAddresses); err != nil {
-			slog.Warn("reorg: failed to rebuild address_tx_counts", "error", err)
+			return fmt.Errorf("reorg: rebuild address_tx_counts: %w", err)
 		}
 
 		// Delete tx counts for addresses with no remaining txs
@@ -1106,7 +1120,7 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 			    UNION ALL
 			    SELECT 1 FROM tx_vins vi WHERE vi.address = address_tx_counts.address
 			  )`, affectedAddresses); err != nil {
-			slog.Warn("reorg: failed to clean orphan-only address_tx_counts", "error", err)
+			return fmt.Errorf("reorg: clean orphan-only address_tx_counts: %w", err)
 		}
 	}
 
@@ -1117,7 +1131,7 @@ func (s *Syncer) handleReorg(ctx context.Context, fromHeight int64) error {
 			total_txs = total_txs - $2,
 			total_addresses = (SELECT COUNT(*) FROM address_balances WHERE balance_sela > 0 AND address NOT LIKE 'S%')
 		WHERE id = 1`, orphanedBlocks, orphanedTxs); err != nil {
-		slog.Warn("reorg: failed to update chain_stats", "error", err)
+		return fmt.Errorf("reorg: update chain_stats: %w", err)
 	}
 
 	if err := pgxTx.Commit(ctx); err != nil {

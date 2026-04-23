@@ -610,12 +610,28 @@ func (a *Aggregator) refreshCRMembers(ctx context.Context) error {
 }
 
 // electionVotingPeriod returns the narrow voting window (start, end) and the
-// term boundary (termStart) for a given CR term. The narrow window is the
-// theoretical voting-only period; termStart is when the new council takes over.
+// term boundary (termStart) for a given CR term.
+//
+// Matches Elastos.ELA `cr/state/committee.go:isInVotingPeriod`:
+//   height >= committeeUpdateHeight - VotingPeriod && height < committeeUpdateHeight
+// where committeeUpdateHeight = termStart for the new committee.
+//
+// So voting occupies [termStart - VotingPeriod, termStart - 1]. The claim
+// period (ClaimingPeriod blocks) runs AFTER voting closes but BEFORE the
+// new committee takes office — it overlaps with the tail of the outgoing
+// committee's duty period. Previous revisions of this function subtracted
+// ClaimingPeriod from narrowEnd, which shifted the entire window 10,080
+// blocks earlier than reality. Result: the election snapshot (narrowEnd)
+// was computed at a moment when voters still had live votes that would
+// later be consumed, and we undercounted long-holders + overcounted
+// quick-churn votes. Fix verified against Term 6 diagnostic: under the
+// corrected window, seated members (4HM3D, Jimmy, etc.) move back into
+// the top-12 and quick-churn non-seated candidates (j-z-007, NBW Team,
+// Rebecca Zhu) drop out — matching the actual council.
 func electionVotingPeriod(term int64) (narrowStart, narrowEnd, termStart int64) {
 	termStart = CRFirstTermStart + (term-1)*CRTermLength
-	narrowEnd = termStart - 1 - CRClaimingPeriod
-	narrowStart = narrowEnd - CRVotingPeriod
+	narrowEnd = termStart - 1
+	narrowStart = narrowEnd - CRVotingPeriod + 1
 	return
 }
 

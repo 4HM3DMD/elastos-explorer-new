@@ -115,6 +115,14 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	metricsGroup.Get("/health/detailed", s.healthDetailed)
 	metricsGroup.Get("/metrics", metrics.Handler())
 	metricsGroup.Post("/cr/proposal/{hash}/resync", s.resyncProposalDraft)
+
+	// Election-tally replay diagnostics — R1/R2 of the CR election plan.
+	// Bearer-auth gated because these are operator tools during validation
+	// and calibration, not public endpoints. They're read-only: they run
+	// the replay engine and return the computed tally, but they DO NOT
+	// write anything to cr_election_tallies (until R3 lands).
+	metricsGroup.Get("/api/v1/admin/replay/tally/{term}", s.replayTermTally)
+	metricsGroup.Get("/api/v1/admin/replay/validate/{term}", s.replayValidateTerm)
 	// NOTE: validator-logo admin upload endpoints were removed (2026-04)
 	// pending a redesign where the validator's own node operator can
 	// submit a logo via a signed message, instead of an operator-bearer-token

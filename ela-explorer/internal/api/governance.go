@@ -682,3 +682,108 @@ func (s *Server) resyncProposalDraft(w http.ResponseWriter, r *http.Request) {
 	slog.Info("resyncProposalDraft: proposal draft reset for re-sync", "hash", hash)
 	writeJSON(w, 200, map[string]any{"status": "ok", "message": "proposal draft will be re-synced on next aggregator cycle"})
 }
+
+// replayTermTally runs the authoritative state-machine replay for the
+// given term and returns the computed tally as JSON. Does NOT write to
+// cr_election_tallies — this is a diagnostic endpoint used during R1/R2
+// calibration. When R3 lands, replay output will drive the live tally
+// written by the aggregator.
+//
+// Bearer-auth gated via server.go's metricsGroup.
+func (s *Server) replayTermTally(w http.ResponseWriter, r *http.Request) {
+	termStr := chi.URLParam(r, "term")
+	term := int64(parseInt(termStr, 0))
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	if s.aggregator == nil {
+		writeError(w, 503, "aggregator not attached")
+		return
+	}
+	result, err := s.aggregator.ReplayTermTally(r.Context(), term)
+	if err != nil {
+		slog.Warn("replayTermTally: replay failed", "term", term, "error", err)
+		writeError(w, 500, "replay failed: "+err.Error())
+		return
+	}
+	// Return as JSON. Candidates already sorted by votes desc.
+	candidates := make([]map[string]any, 0, len(result.Candidates))
+	for _, c := range result.Candidates {
+		candidates = append(candidates, map[string]any{
+			"rank":          c.Rank,
+			"cid":           c.CID,
+			"did":           c.DID,
+			"nickname":      c.Nickname,
+			"votesSela":     c.VotesSela,
+			"votesEla":      float64(c.VotesSela) / 1e8,
+			"voterCount":    c.VoterCount,
+			"elected":       c.Elected,
+			"lastRegHeight": c.LastRegHeight,
+		})
+	}
+	writeJSON(w, 200, map[string]any{
+		"term":                 result.Term,
+		"narrowStart":          result.NarrowStart,
+		"narrowEnd":            result.NarrowEnd,
+		"snapshotHeight":       result.SnapshotHeight,
+		"totalCandidates":      result.TotalCandidates,
+		"totalDistinctVoters":  result.TotalVotersDistinct,
+		"computedAt":           result.ComputedAt,
+		"candidates":           candidates,
+	})
+}
+
+// replayValidateTerm runs replay for the given term and asserts top-12
+// equals the currently-seated council. Returns 200 + {ok: true} on
+// match; 200 + {ok: false, diff: ...} on mismatch (not 500 because the
+// mismatch IS the useful output during calibration). Diagnostic log
+// line is also written.
+func (s *Server) replayValidateTerm(w http.ResponseWriter, r *http.Request) {
+	termStr := chi.URLParam(r, "term")
+	term := int64(parseInt(termStr, 0))
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	if s.aggregator == nil {
+		writeError(w, 503, "aggregator not attached")
+		return
+	}
+	err := s.aggregator.ValidateTermAgainstSeatedCouncil(r.Context(), term)
+	if err == nil {
+		writeJSON(w, 200, map[string]any{
+			"ok":      true,
+			"term":    term,
+			"message": "replay top-N matches currently-seated council",
+		})
+		return
+	}
+	// Mismatch: return structured info for iteration. Full diff is also
+	// in the server log via slog.Warn.
+	result, replayErr := s.aggregator.ReplayTermTally(r.Context(), term)
+	payload := map[string]any{
+		"ok":      false,
+		"term":    term,
+		"error":   err.Error(),
+	}
+	if replayErr == nil && result != nil {
+		topN := 12
+		if len(result.Candidates) < topN {
+			topN = len(result.Candidates)
+		}
+		top := make([]map[string]any, 0, topN)
+		for i := 0; i < topN; i++ {
+			c := result.Candidates[i]
+			top = append(top, map[string]any{
+				"rank":       c.Rank,
+				"cid":        c.CID,
+				"nickname":   c.Nickname,
+				"votesEla":   float64(c.VotesSela) / 1e8,
+				"voterCount": c.VoterCount,
+			})
+		}
+		payload["replayTopN"] = top
+	}
+	writeJSON(w, 200, payload)
+}

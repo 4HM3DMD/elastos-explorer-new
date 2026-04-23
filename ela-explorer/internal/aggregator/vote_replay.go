@@ -164,10 +164,23 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			c.lastRegHeight = ev.height
 			c.did = ev.did
 			c.nickname = ev.nickname
-			// Re-registration resets Canceled/Returned flags — the node
-			// treats this as a fresh candidacy. But their vote counter
-			// stays at 0 (any old votes were already consumed or zeroed).
+			// Per Elastos `cr/state/state.go`, a (re-)registration creates a
+			// fresh candidate entry with `Votes: 0`. The node does NOT
+			// carry prior-term votes across a re-registration, even if
+			// some of those votes are still unspent — the candidate is
+			// treated as a new one. Match that here: reset the running
+			// counter on every register event. First-time registrations
+			// start from zero already, so this is a no-op for them; for
+			// re-registrations it correctly drops stale votes that were
+			// earned under a previous candidacy.
+			//
+			// Without this reset, candidates who ran in multiple terms
+			// (e.g. Rebecca Zhu) accumulate ghost votes from earlier
+			// terms that weren't consumed via TxVoting replacement, and
+			// their Term N tally is inflated.
 			c.lastRegisterState = 1
+			c.votes = 0
+			c.voters = map[string]int{}
 
 		case evUpdate:
 			if c, ok := candidates[ev.cid]; ok {

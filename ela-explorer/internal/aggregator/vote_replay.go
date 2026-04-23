@@ -123,6 +123,42 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	slog.Info("vote replay: starting", "term", term, "narrowStart", narrowStart, "narrowEnd", narrowEnd)
 	started := time.Now()
 
+	// 1a. Load the set of candidates currently seated per cr_members
+	//     (source: listcurrentcrs, refreshed every 120s by the aggregator).
+	//     This is our heuristic for "was this candidate a seated council
+	//     member in the previous term" — empirically the signal the node
+	//     uses to decide which candidates' prior-term votes carry forward
+	//     to the new term's tally.
+	//
+	// Recurring seated members (chen2rong2, Igor, Sash, Tyro, gelaxy)
+	// accumulate votes across their multi-term candidacies; our replay
+	// must count ALL their unspent votes at narrowEnd. Non-seated
+	// candidates (Rebecca Zhu, j-z-007) don't get the prior-term
+	// carry — only votes cast during THIS term's voting window count.
+	//
+	// This is an approximation: we use "currently seated" as a proxy for
+	// "was seated in the immediately-prior term". Matches empirically
+	// across Term 6's 12 seated members and known non-seated candidates.
+	// If it breaks for an edge case, revisit by consulting historical
+	// cr_election_tallies for the previous term.
+	seatedCIDs := map[string]bool{}
+	seatedRows, seatedErr := a.db.API.Query(ctx, `
+		SELECT cid FROM cr_members
+		WHERE state IN ('Elected', 'Inactive', 'Impeached')`)
+	if seatedErr == nil {
+		for seatedRows.Next() {
+			var cid string
+			if seatedRows.Scan(&cid) == nil {
+				seatedCIDs[cid] = true
+			}
+		}
+		seatedRows.Close()
+	} else {
+		slog.Warn("vote replay: seated-CID lookup failed, using window-only for ALL candidates",
+			"error", seatedErr)
+	}
+	slog.Info("vote replay: seated CIDs loaded", "term", term, "count", len(seatedCIDs))
+
 	// 1. Load all events in one pass, sort by height + subOrder.
 	events, err := a.loadReplayEvents(ctx, narrowEnd)
 	if err != nil {
@@ -206,10 +242,21 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			}
 
 		case evVoteAdd:
-			// A vote slice counts ONLY if the target CID is currently
-			// registered (not canceled/returned). Matches node semantics:
-			// `processVoteCRC` checks `GetCandidate(cid)` — returns nil
-			// for non-active. Our lookup simulates that.
+			// A vote slice counts ONLY if:
+			//   1. The target CID is currently registered (not
+			//      canceled/returned). Matches node semantics:
+			//      `processVoteCRC` checks `GetCandidate(cid)`.
+			//   2. If the candidate is NOT currently seated, the vote
+			//      must be cast within THIS term's voting window.
+			//      Non-seated candidates don't inherit prior-term
+			//      votes — Rebecca Zhu's inflated tally was the
+			//      symptom that revealed this rule.
+			//      Seated candidates (currently on the council) carry
+			//      their prior-term vote base forward — this is what
+			//      makes recurring incumbents stable across elections.
+			if !seatedCIDs[ev.cid] && ev.height < narrowStart {
+				continue
+			}
 			c, ok := candidates[ev.cid]
 			if !ok || c.lastRegisterState != 1 {
 				continue
@@ -218,6 +265,12 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			c.voters[ev.voter]++
 
 		case evVoteSub:
+			// Symmetric filter: if the candidate is not currently
+			// seated, ignore pre-window consumption events — they
+			// subtract from an add we also didn't count.
+			if !seatedCIDs[ev.cid] && ev.height < narrowStart {
+				continue
+			}
 			c, ok := candidates[ev.cid]
 			if !ok {
 				continue

@@ -123,6 +123,16 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	// write anything to cr_election_tallies (until R3 lands).
 	metricsGroup.Get("/api/v1/admin/replay/tally/{term}", s.replayTermTally)
 	metricsGroup.Get("/api/v1/admin/replay/validate/{term}", s.replayValidateTerm)
+
+	// Governance-data block refill — re-ingest a block range directly
+	// from the node. Use this to repair gaps in `transactions` /
+	// `votes` tables suspected of causing vote-tally mismatches (e.g.
+	// Term 6's seated council didn't appear in top-12 of replay). All
+	// writes are idempotent; safe to re-run. POST is async (starts a
+	// goroutine); poll status via the GET endpoint.
+	metricsGroup.Post("/api/v1/admin/refill/governance", s.refillGovernanceRange)
+	metricsGroup.Get("/api/v1/admin/refill/status", s.refillStatus)
+	metricsGroup.Post("/api/v1/admin/refill/cancel", s.refillCancel)
 	// NOTE: validator-logo admin upload endpoints were removed (2026-04)
 	// pending a redesign where the validator's own node operator can
 	// submit a logo via a signed message, instead of an operator-bearer-token

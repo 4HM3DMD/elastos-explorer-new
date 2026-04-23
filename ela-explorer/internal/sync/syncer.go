@@ -60,6 +60,12 @@ type Syncer struct {
 	addrTxCurrent atomic.Int64
 	addrTxTotal   atomic.Int64
 
+	// Refill state for the admin-triggered governance refill (see
+	// internal/sync/refill.go). Only one refill at a time; exposed via
+	// /api/v1/admin/refill/status. The `refill` field is zero-value-
+	// usable: no init needed in NewSyncer.
+	refill refillRun
+
 	// Broadcast callback (set by main to push to WebSocket).
 	OnNewBlock func(height int64, hash string, txCount int, timestamp int64, size int, minerInfo, minerAddress string)
 }

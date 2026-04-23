@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -786,4 +788,90 @@ func (s *Server) replayValidateTerm(w http.ResponseWriter, r *http.Request) {
 		payload["replayTopN"] = top
 	}
 	writeJSON(w, 200, payload)
+}
+
+// refillGovernanceRange kicks off an async refill of governance data
+// over a block range. Re-fetches each block from the node and runs the
+// full idempotent ingest chain for every tx. Use this when we suspect
+// `transactions` has gaps (or worse, TxVoting rows never ran through
+// governance handlers) for a specific window — e.g., a term's voting
+// period whose vote tallies don't match the node's seated council.
+//
+// Request: POST /api/v1/admin/refill/governance?from=N&to=M
+// Bearer-auth gated. Returns 202 immediately; operator polls
+// /api/v1/admin/refill/status for progress.
+//
+// Safety:
+//   - Only one refill runs at a time. Second call returns 409.
+//   - All writes are idempotent (ON CONFLICT DO NOTHING on core rows,
+//     same handler path as live-sync for governance side-effects).
+//   - Range bounds are validated; a hard ceiling of 1,000,000 blocks
+//     per call prevents obvious typos like "from=0&to=999999999".
+func (s *Server) refillGovernanceRange(w http.ResponseWriter, r *http.Request) {
+	if s.syncer == nil {
+		writeError(w, 503, "syncer not attached")
+		return
+	}
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	if fromStr == "" || toStr == "" {
+		writeError(w, 400, "missing required query params: from, to")
+		return
+	}
+	from, err1 := strconv.ParseInt(fromStr, 10, 64)
+	to, err2 := strconv.ParseInt(toStr, 10, 64)
+	if err1 != nil || err2 != nil {
+		writeError(w, 400, "from/to must be integers")
+		return
+	}
+	if from < 0 || to < from {
+		writeError(w, 400, "invalid range: from must be >=0 and to >= from")
+		return
+	}
+	const maxRange = int64(1_000_000)
+	if to-from+1 > maxRange {
+		writeError(w, 400, fmt.Sprintf("range too large: max %d blocks per call", maxRange))
+		return
+	}
+	if err := s.syncer.StartRefillGovernance(from, to); err != nil {
+		// Already running or invalid range → 409 with the reason.
+		writeJSON(w, 409, map[string]any{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+	slog.Info("refill governance: accepted", "from", from, "to", to)
+	writeJSON(w, 202, map[string]any{
+		"ok":      true,
+		"from":    from,
+		"to":      to,
+		"message": "refill started; poll /api/v1/admin/refill/status",
+	})
+}
+
+// refillStatus returns the current refill's progress snapshot. Safe to
+// call at any time — returns `running: false` when no refill has been
+// started or the last one finished.
+func (s *Server) refillStatus(w http.ResponseWriter, r *http.Request) {
+	if s.syncer == nil {
+		writeError(w, 503, "syncer not attached")
+		return
+	}
+	status := s.syncer.RefillStatusSnapshot()
+	writeJSON(w, 200, status)
+}
+
+// refillCancel signals the in-flight refill to stop at the next block
+// boundary. Returns 200 regardless of whether a refill was running, so
+// operators can safely call it as a "make sure nothing is running"
+// pre-flight. Check `running` in the subsequent status poll to confirm
+// the refill actually stopped (it may take up to a few seconds).
+func (s *Server) refillCancel(w http.ResponseWriter, r *http.Request) {
+	if s.syncer == nil {
+		writeError(w, 503, "syncer not attached")
+		return
+	}
+	s.syncer.CancelRefill()
+	writeJSON(w, 200, map[string]any{"ok": true, "message": "cancel signal sent"})
 }

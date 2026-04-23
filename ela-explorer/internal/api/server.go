@@ -93,6 +93,7 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/cr/members", s.getCRMembers)
 		r.Get("/cr/elections", s.getCRElections)
 		r.Get("/cr/elections/{term}", s.getCRElectionByTerm)
+		r.Get("/cr/election/status", s.getCRElectionStatus)
 		r.Get("/cr/proposals", s.getCRProposals)
 		r.Get("/cr/proposal/{hash}", s.getCRProposalDetail)
 		r.Get("/cr/proposal-image/{draftHash}/{filename}", s.getProposalImage)

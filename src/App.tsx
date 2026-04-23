@@ -18,6 +18,8 @@ const ValidatorDetail = lazy(() => import('./pages/ValidatorDetail.js'));
 const CRCouncil = lazy(() => import('./pages/CRCouncil.js'));
 const CRProposals = lazy(() => import('./pages/CRProposals.js'));
 const ProposalDetail = lazy(() => import('./pages/ProposalDetail.js'));
+const Elections = lazy(() => import('./pages/Elections.js'));
+const ElectionDetail = lazy(() => import('./pages/ElectionDetail.js'));
 const Charts = lazy(() => import('./pages/Charts.js'));
 const Mempool = lazy(() => import('./pages/Mempool.js'));
 const Ranking = lazy(() => import('./pages/Ranking.js'));
@@ -117,6 +119,8 @@ function AnimatedRoutes() {
           <Route path="/governance" element={<CRCouncil />} />
           <Route path="/governance/proposals" element={<CRProposals />} />
           <Route path="/governance/proposal/:hash" element={<ProposalDetail />} />
+          <Route path="/governance/elections" element={<Elections />} />
+          <Route path="/governance/elections/:term" element={<ElectionDetail />} />
 
           <Route path="/charts" element={<Charts />} />
           <Route path="/mempool" element={<Mempool />} />

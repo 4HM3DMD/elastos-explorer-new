@@ -186,6 +186,74 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getCRElectionStatus returns the current election phase of the DAO:
+// whether we're in a live voting window, a claiming window, or a regular
+// duty period; what the surrounding block-height boundaries are; and the
+// current chain tip so the frontend can render a countdown without having
+// to math-against-stale values.
+//
+// Sourced from the ELA node's getcrrelatedstage RPC — that is the
+// authoritative state machine (see cr/state/committee.go in Elastos.ELA).
+// Shared server-side cache (default 30s TTL) buffers the node from a
+// burst of page loads; 30s is well under Elastos's ~120s block time so
+// staleness is invisible to users.
+//
+// Phase semantics:
+//   - "voting"   → InVoting is true; candidates can still register and
+//                  votes are being tallied. Countdown target = votingEnd.
+//   - "claiming" → voting has closed, newly-elected members have a window
+//                  to claim their seat. Countdown target = OnDutyStart.
+//   - "duty"     → a council is seated. The next election has not opened.
+//                  Countdown target = votingStart of next window.
+//   - "pre-genesis" → current height < first election. Rare but honest.
+func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "crElectionStatus"
+
+	// Cheap path: recent cache hit, no node RPC at all.
+	if cached, ok := s.cache.Get(cacheKey); ok {
+		if resp, ok := cached.(map[string]any); ok {
+			writeJSON(w, 200, resp)
+			return
+		}
+	}
+
+	stage, err := s.node.GetCRRelatedStage(r.Context())
+	if err != nil {
+		slog.Warn("getCRElectionStatus: node RPC failed", "error", err)
+		writeError(w, 502, "election status unavailable")
+		return
+	}
+
+	// Current chain tip from the syncer — avoids another node round-trip
+	// and guarantees we're reporting the same height the rest of the API
+	// is showing (block list, tx list, etc. all key off the syncer).
+	currentHeight := s.syncer.LastHeight()
+
+	phase := "duty"
+	switch {
+	case stage.InVoting:
+		phase = "voting"
+	case !stage.OnDuty:
+		phase = "pre-genesis"
+	case currentHeight >= stage.VotingEndHeight && currentHeight < stage.OnDutyStartHeight:
+		phase = "claiming"
+	}
+
+	resp := map[string]any{
+		"phase":             phase,
+		"currentHeight":     currentHeight,
+		"inVoting":          stage.InVoting,
+		"onDuty":            stage.OnDuty,
+		"votingStartHeight": stage.VotingStartHeight,
+		"votingEndHeight":   stage.VotingEndHeight,
+		"onDutyStartHeight": stage.OnDutyStartHeight,
+		"onDutyEndHeight":   stage.OnDutyEndHeight,
+	}
+
+	s.cache.Set(cacheKey, resp)
+	writeJSON(w, 200, resp)
+}
+
 func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 	page := parseInt(r.URL.Query().Get("page"), 1)
 	pageSize := clampPageSize(parseInt(r.URL.Query().Get("pageSize"), 20), 100)

@@ -6,6 +6,7 @@ import type {
   BlockchainStats, Widgets, HashrateData, MempoolInfo, ChartDataPoint, SearchResult,
   TopStaker, StakingSummary, ELAPrice, SupplyData, SyncStatusDetail,
   BalanceHistoryPoint, VoteHistoryEntry, GovernanceActivity,
+  ElectionStatus, ElectionSummary, ElectionTermDetail,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
 
@@ -204,18 +205,22 @@ export const blockchainApi = {
     return unwrap<CRMember[]>(await api.get('/cr/members'));
   },
 
-  getCRElections: async () => {
-    const res = await api.get<{ term: number; candidates: number; electedCount: number; totalVotes: string; votingStartHeight: number; votingEndHeight: number }[]>('/cr/elections');
+  getCRElections: async (): Promise<ElectionSummary[]> => {
+    const res = await api.get<ElectionSummary[]>('/cr/elections');
     return res.data;
   },
 
-  getCRElectionByTerm: async (term: number) => {
-    const res = await api.get<{
-      term: number;
-      votingStartHeight: number;
-      votingEndHeight: number;
-      candidates: { rank: number; cid: string; did?: string; nickname: string; votes: string; voterCount: number; elected: boolean }[];
-    }>(`/cr/elections/${term}`);
+  getCRElectionByTerm: async (term: number): Promise<ElectionTermDetail> => {
+    const res = await api.get<ElectionTermDetail>(`/cr/elections/${term}`);
+    return res.data;
+  },
+
+  // Current phase of the DAO (voting / claiming / duty / pre-genesis) plus
+  // the block-height boundaries and chain tip. Backed by the node's
+  // getcrrelatedstage RPC, with a shared server-side cache (~30s).
+  // Safe to poll roughly every block (~120s) without overloading anything.
+  getElectionStatus: async (): Promise<ElectionStatus> => {
+    const res = await api.get<ElectionStatus>('/cr/election/status');
     return res.data;
   },
 

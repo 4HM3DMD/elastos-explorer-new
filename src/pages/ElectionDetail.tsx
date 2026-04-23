@@ -1,0 +1,380 @@
+// ElectionDetail — one term, full breakdown. Unlike the CRCouncil
+// historical dropdown (which hides losers to keep the "council members"
+// framing), this page is the true archive: every candidate that ran,
+// elected and not, in rank order.
+//
+// Data: GET /cr/elections/{term}. One call, cached server-side.
+//
+// Layout:
+//   - Page header + tabs (matching sibling governance pages)
+//   - Back link + term heading + voting window
+//   - Stat strip: candidates, elected, total votes, avg vote weight
+//   - Sortable leaderboard: rank, nickname, votes, voters, elected
+//
+// Phase B will add: "who voted for this term" section + per-candidate
+// voter drilldown + turnout %. All of those require new endpoints, so
+// deliberately out of scope here.
+
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { blockchainApi } from '../services/api';
+import type { ElectionTermDetail, ElectionCandidate } from '../types/blockchain';
+import { Vote, Users, FileText, ChevronLeft, Trophy, Coins } from 'lucide-react';
+import { cn } from '../lib/cn';
+import { PageSkeleton } from '../components/LoadingSkeleton';
+import SEO from '../components/SEO';
+import HashDisplay from '../components/HashDisplay';
+import { formatVotes } from '../utils/format';
+
+const NAV_TABS = [
+  { label: 'Council Members', path: '/governance',           icon: Users },
+  { label: 'Proposals',       path: '/governance/proposals', icon: FileText },
+  { label: 'Elections',       path: '/governance/elections', icon: Vote },
+] as const;
+const ACTIVE_PATH = '/governance/elections';
+
+type SortKey = 'rank' | 'votes' | 'voterCount';
+
+const ElectionDetail = () => {
+  const { term: termParam } = useParams<{ term: string }>();
+  const term = Number(termParam);
+
+  const [data, setData] = useState<ElectionTermDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('rank');
+
+  const fetchTerm = useCallback(async () => {
+    if (!Number.isFinite(term) || term < 1) {
+      setError('Invalid term number');
+      setLoading(false);
+      return;
+    }
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await blockchainApi.getCRElectionByTerm(term);
+      setData(res);
+    } catch {
+      setError(`No election data for Term ${term}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [term]);
+
+  useEffect(() => { fetchTerm(); }, [fetchTerm]);
+
+  // Derived candidate list — sorted per the active sort key. Rank
+  // order is always present from the backend; votes/voterCount sorts
+  // are ad-hoc in memory (no network round-trip). Kept in useMemo so
+  // a sort toggle doesn't re-sort on unrelated re-renders.
+  const sortedCandidates = useMemo(() => {
+    if (!data?.candidates) return [];
+    const rows = [...data.candidates];
+    switch (sort) {
+      case 'rank':
+        return rows.sort((a, b) => a.rank - b.rank);
+      case 'votes':
+        return rows.sort((a, b) => Number(b.votes) - Number(a.votes));
+      case 'voterCount':
+        return rows.sort((a, b) => b.voterCount - a.voterCount);
+      default:
+        return rows;
+    }
+  }, [data, sort]);
+
+  const summary = useMemo(() => {
+    if (!data?.candidates?.length) return null;
+    const total = data.candidates.length;
+    const elected = data.candidates.filter(c => c.elected).length;
+    const totalVotes = data.candidates.reduce((s, c) => s + Number(c.votes || 0), 0);
+    const uniqueVoters = data.candidates.reduce((s, c) => s + c.voterCount, 0);
+    const avgVotes = total > 0 ? totalVotes / total : 0;
+    return { total, elected, totalVotes, uniqueVoters, avgVotes };
+  }, [data]);
+
+  if (loading) return <PageSkeleton />;
+  if (error || !data) {
+    return (
+      <div className="px-4 lg:px-6 py-6 text-center">
+        <p className="text-accent-red mb-4">{error || 'Election data unavailable'}</p>
+        <Link to="/governance/elections" className="btn-primary inline-block">
+          Back to elections
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 lg:px-6 py-6 space-y-6">
+      <SEO
+        title={`Term ${data.term} Election`}
+        description={`Elastos DAO Term ${data.term} election results — every candidate, vote totals, and elected council members.`}
+        path={`/governance/elections/${data.term}`}
+      />
+
+      {/* Page header — same shape as Elections index + sibling governance pages */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-[30px] h-[30px] md:w-[36px] md:h-[36px] rounded-[8px] flex items-center justify-center"
+            style={{ background: 'rgba(255, 159, 24, 0.1)' }}
+          >
+            <Vote size={16} className="text-brand" />
+          </div>
+          <div>
+            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">
+              Term {data.term} Election
+            </h1>
+            <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">
+              {data.candidates.length} candidate{data.candidates.length === 1 ? '' : 's'}
+              {' · '}voting window block{' '}
+              <span className="font-mono">{data.votingStartHeight.toLocaleString()}</span>
+              {' → '}
+              <span className="font-mono">{data.votingEndHeight.toLocaleString()}</span>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
+          {NAV_TABS.map((tab) => {
+            const isActive = tab.path === ACTIVE_PATH;
+            const Icon = tab.icon;
+            return (
+              <Link
+                key={tab.path}
+                to={tab.path}
+                className={cn(
+                  'px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
+                  isActive ? 'bg-white text-black' : 'text-secondary hover:text-brand',
+                )}
+                aria-current={isActive ? 'page' : undefined}
+              >
+                <Icon size={12} />
+                {tab.label}
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Back to Elections index */}
+      <div>
+        <Link
+          to="/governance/elections"
+          className="inline-flex items-center gap-1 text-xs text-secondary hover:text-brand transition-colors"
+        >
+          <ChevronLeft size={12} />
+          Back to elections
+        </Link>
+      </div>
+
+      {/* Stat strip — four stats on md+, two columns on mobile so the
+          numbers don't squash. Each tile uses the MiniStat idiom from
+          the Staking page: left brand accent, label above, value below. */}
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatTile
+            icon={Users}
+            label="Candidates"
+            value={`${summary.total}`}
+            detail={`${summary.elected} elected`}
+          />
+          <StatTile
+            icon={Trophy}
+            label="Elected"
+            value={`${summary.elected}`}
+            detail={summary.total > 0 ? `${((summary.elected / summary.total) * 100).toFixed(0)}% accepted` : undefined}
+          />
+          <StatTile
+            icon={Coins}
+            label="Total votes"
+            value={`${fmtElaCompact(summary.totalVotes)} ELA`}
+            detail={`avg ${fmtElaCompact(summary.avgVotes)}`}
+          />
+          <StatTile
+            icon={Users}
+            label="Voter slots"
+            value={`${summary.uniqueVoters.toLocaleString()}`}
+            detail="sum across candidates"
+          />
+        </div>
+      )}
+
+      {/* Candidate leaderboard — sortable header, visual cue for
+          elected rows via left border + trophy icon. Keeps vertical
+          rhythm consistent with CRCouncil's table-clean pattern. */}
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="table-clean w-full">
+            <thead>
+              <tr>
+                <SortHeader label="#" active={sort === 'rank'} onClick={() => setSort('rank')} />
+                <th>Candidate</th>
+                <th className="hidden sm:table-cell">CID</th>
+                <SortHeader
+                  label="Votes"
+                  active={sort === 'votes'}
+                  onClick={() => setSort('votes')}
+                  className="text-right"
+                />
+                <SortHeader
+                  label="Voters"
+                  active={sort === 'voterCount'}
+                  onClick={() => setSort('voterCount')}
+                  className="text-right"
+                />
+                <th className="hidden md:table-cell text-right">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedCandidates.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-muted">
+                    No candidates recorded for this term
+                  </td>
+                </tr>
+              ) : (
+                sortedCandidates.map((c) => <CandidateRow key={c.cid} candidate={c} />)
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+function SortHeader({
+  label,
+  active,
+  onClick,
+  className,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <th className={cn(className)}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          'inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.1em] transition-colors',
+          active ? 'text-brand' : 'text-muted hover:text-secondary',
+        )}
+      >
+        {label}
+        {active && <span className="text-brand">↓</span>}
+      </button>
+    </th>
+  );
+}
+
+function CandidateRow({ candidate }: { candidate: ElectionCandidate }) {
+  return (
+    <tr className={cn(candidate.elected && 'bg-brand/[0.03]')}>
+      <td>
+        <span
+          className="font-bold text-xs text-secondary"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {candidate.rank}
+        </span>
+      </td>
+      <td>
+        <div className="flex items-center gap-2">
+          {candidate.elected && <Trophy size={11} className="text-brand shrink-0" />}
+          <span className={cn(
+            'text-xs',
+            candidate.elected ? 'font-semibold text-primary' : 'text-secondary',
+          )}>
+            {candidate.nickname || 'Unnamed'}
+          </span>
+        </div>
+      </td>
+      <td className="hidden sm:table-cell">
+        <HashDisplay hash={candidate.cid} length={10} showCopyButton isClickable={false} />
+      </td>
+      <td className="text-right">
+        <span
+          className="font-mono text-xs text-primary"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {formatVotes(candidate.votes)} ELA
+        </span>
+      </td>
+      <td className="text-right">
+        <span
+          className="font-mono text-xs text-secondary"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {candidate.voterCount.toLocaleString()}
+        </span>
+      </td>
+      <td className="hidden md:table-cell text-right">
+        {candidate.elected ? (
+          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-brand font-medium">
+            Elected
+          </span>
+        ) : (
+          <span className="text-[10px] uppercase tracking-wider text-muted">
+            —
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  detail?: string;
+}) {
+  return (
+    <div className="card p-2.5 md:p-3 relative">
+      <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
+        <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
+      </div>
+      <div className="flex items-center gap-2 pl-1.5 relative">
+        <div
+          className="w-[22px] h-[22px] md:w-[28px] md:h-[28px] rounded-[5px] flex items-center justify-center shrink-0"
+          style={{ background: 'rgba(255, 159, 24, 0.1)' }}
+        >
+          <Icon size={13} className="text-brand" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[9px] md:text-[11px] text-muted tracking-[0.3px] md:tracking-[0.48px] truncate">
+            {label}
+          </p>
+          <p
+            className="text-[11px] md:text-sm font-semibold text-primary truncate"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+          >
+            {value}
+          </p>
+          {detail && (
+            <p className="text-[9px] text-muted truncate">{detail}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function fmtElaCompact(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '0';
+  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+export default ElectionDetail;

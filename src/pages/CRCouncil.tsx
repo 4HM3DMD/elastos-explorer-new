@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
-import type { CRMember } from '../types/blockchain';
+import type { CRMember, ElectionSummary, ElectionCandidate } from '../types/blockchain';
 import { CR_STATE_COLORS } from '../types/blockchain';
-import { ExternalLink, FileText, ChevronDown, Users } from 'lucide-react';
+import { ExternalLink, FileText, ChevronDown, Users, Vote } from 'lucide-react';
 import HashDisplay from '../components/HashDisplay';
 import { formatVotes, safeExternalUrl } from '../utils/format';
 import { cn } from '../lib/cn';
@@ -11,26 +11,11 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 
 const NAV_TABS = [
-  { label: 'Council Members', path: '/governance', active: true },
-  { label: 'Proposals', path: '/governance/proposals', active: false },
+  { label: 'Council Members', path: '/governance',           icon: Users },
+  { label: 'Proposals',       path: '/governance/proposals', icon: FileText },
+  { label: 'Elections',       path: '/governance/elections', icon: Vote },
 ] as const;
-
-interface ElectionSummary {
-  term: number;
-  candidates: number;
-  electedCount: number;
-  totalVotes: string;
-}
-
-interface ElectionCandidate {
-  rank: number;
-  cid: string;
-  did?: string;
-  nickname: string;
-  votes: string;
-  voterCount: number;
-  elected: boolean;
-}
+const ACTIVE_PATH = '/governance';
 
 const CRCouncil = () => {
   const [members, setMembers] = useState<CRMember[]>([]);
@@ -124,25 +109,25 @@ const CRCouncil = () => {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
-            {NAV_TABS.map((tab) =>
-              tab.active ? (
-                <Link key={tab.path} to={tab.path} className="px-3 py-1.5 rounded-md text-xs font-medium bg-white text-black" aria-current="page">
-                  {tab.label}
-                </Link>
-              ) : (
-                <Link
-                  key={tab.path}
-                  to={tab.path}
-                  className="px-3 py-1.5 rounded-md text-xs font-medium text-secondary hover:text-brand transition-colors inline-flex items-center gap-1.5"
-                >
-                  <FileText size={12} />
-                  {tab.label}
-                </Link>
-              ),
-            )}
-          </div>
+        <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
+          {NAV_TABS.map((tab) => {
+            const isActive = tab.path === ACTIVE_PATH;
+            const Icon = tab.icon;
+            return (
+              <Link
+                key={tab.path}
+                to={tab.path}
+                className={cn(
+                  'px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
+                  isActive ? 'bg-white text-black' : 'text-secondary hover:text-brand',
+                )}
+                aria-current={isActive ? 'page' : undefined}
+              >
+                <Icon size={12} />
+                {tab.label}
+              </Link>
+            );
+          })}
         </div>
       </div>
 

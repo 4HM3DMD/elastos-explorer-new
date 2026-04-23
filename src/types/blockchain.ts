@@ -386,6 +386,55 @@ export interface CRMember {
   claimedNode?: string;
 }
 
+// Response from GET /api/v1/cr/election/status.
+// phase:
+//   "voting"      → voting window open, candidates+votes being collected
+//   "claiming"    → voting closed, newly-elected members have a claim window
+//   "duty"        → a seated council is mid-term
+//   "pre-genesis" → chain height < first-ever election (rare)
+// Use `currentHeight` as the reference tip when feeding Countdown so the
+// countdown matches the rest of the API's view of the chain.
+export interface ElectionStatus {
+  phase: 'voting' | 'claiming' | 'duty' | 'pre-genesis';
+  currentHeight: number;
+  inVoting: boolean;
+  onDuty: boolean;
+  votingStartHeight: number;
+  votingEndHeight: number;
+  onDutyStartHeight: number;
+  onDutyEndHeight: number;
+}
+
+// Entry from GET /api/v1/cr/elections (per-term summary).
+export interface ElectionSummary {
+  term: number;
+  candidates: number;
+  electedCount: number;
+  totalVotes: string;
+  votingStartHeight: number;
+  votingEndHeight: number;
+  computedAt?: number;
+}
+
+// One candidate row from GET /api/v1/cr/elections/{term}.
+export interface ElectionCandidate {
+  rank: number;
+  cid: string;
+  did?: string;
+  nickname: string;
+  votes: string;
+  voterCount: number;
+  elected: boolean;
+}
+
+// Full response from GET /api/v1/cr/elections/{term}.
+export interface ElectionTermDetail {
+  term: number;
+  votingStartHeight: number;
+  votingEndHeight: number;
+  candidates: ElectionCandidate[];
+}
+
 export interface ProposalBudgetItem {
   type: number | string;
   stage: number;

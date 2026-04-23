@@ -527,6 +527,23 @@ export const API_GROUPS: EndpointGroup[] = [
       },
       {
         method: 'GET',
+        path: '/cr/election/status',
+        description: 'Current DAO election phase + block-height boundaries. Phase is one of "voting" (voting window open), "claiming" (newly elected members claiming seats), "duty" (council seated between elections), or "pre-genesis" (before first election). Backed by the ELA node\'s getcrrelatedstage RPC with a ~30s server-side cache.',
+        response: `{
+  "data": {
+    "phase": "duty",
+    "currentHeight": 2197500,
+    "inVoting": false,
+    "onDuty": true,
+    "votingStartHeight": 1941249,
+    "votingEndHeight": 1962849,
+    "onDutyStartHeight": 1972930,
+    "onDutyEndHeight": 2235730
+  }
+}`,
+      },
+      {
+        method: 'GET',
         path: '/cr/proposals',
         description: 'Paginated list of DAO proposals with optional status filter.',
         params: [

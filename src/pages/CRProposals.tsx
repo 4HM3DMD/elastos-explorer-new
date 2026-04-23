@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { CRProposal } from '../types/blockchain';
 import { PROPOSAL_STATUS_COLORS, PROPOSAL_STATUS_LABELS } from '../types/blockchain';
-import { FileText, Users, Coins, GitBranch, ThumbsUp, ThumbsDown, Minus, Hash, ExternalLink, Clock, ChevronDown, X } from 'lucide-react';
+import { FileText, Users, Coins, GitBranch, ThumbsUp, ThumbsDown, Minus, Hash, ExternalLink, Clock, ChevronDown, X, Vote } from 'lucide-react';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import { fmtEla, resolveProposalBudgetEla } from '../utils/format';
@@ -38,6 +38,7 @@ const FILTER_LABEL_BY_RAW: Record<string, string> = Object.fromEntries(
 const NAV_TABS = [
   { label: 'Council Members', path: '/governance',           icon: Users },
   { label: 'Proposals',       path: '/governance/proposals', icon: FileText },
+  { label: 'Elections',       path: '/governance/elections', icon: Vote },
 ] as const;
 
 const STATUS_BORDER_COLORS: Record<string, string> = {

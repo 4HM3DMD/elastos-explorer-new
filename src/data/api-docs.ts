@@ -528,7 +528,7 @@ export const API_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/cr/election/status',
-        description: 'Current DAO election phase + block-height boundaries. Phase is one of "voting" (voting window open), "claiming" (newly elected members claiming seats), "duty" (council seated between elections), or "pre-genesis" (before first election). Backed by the ELA node\'s getcrrelatedstage RPC with a ~30s server-side cache.',
+        description: 'Current DAO election phase + block-height boundaries. Phase is one of "voting" (voting window open), "claiming" (newly elected members claiming seats), "duty" (council seated between elections), or "pre-genesis" (before first election). Backed by the ELA node\'s getcrrelatedstage RPC with a ~30s server-side cache. nextVotingStartHeight / nextVotingEndHeight are computed from on-duty-end during duty/claiming phases (node reports those as 0 between voting windows); during voting they echo the active window.',
         response: `{
   "data": {
     "phase": "duty",
@@ -538,7 +538,9 @@ export const API_GROUPS: EndpointGroup[] = [
     "votingStartHeight": 1941249,
     "votingEndHeight": 1962849,
     "onDutyStartHeight": 1972930,
-    "onDutyEndHeight": 2235730
+    "onDutyEndHeight": 2235730,
+    "nextVotingStartHeight": 2204050,
+    "nextVotingEndHeight": 2225649
   }
 }`,
       },

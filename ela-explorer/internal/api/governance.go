@@ -204,10 +204,31 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 //   - "claiming" → voting has closed, newly-elected members have a window
 //                  to claim their seat. Countdown target = OnDutyStart.
 //   - "duty"     → a council is seated. The next election has not opened.
-//                  Countdown target = votingStart of next window.
+//                  Countdown target = nextVotingStartHeight.
 //   - "pre-genesis" → current height < first election. Rare but honest.
+//
+// nextVotingStartHeight / nextVotingEndHeight (computed, not from node):
+// in "duty" phase the node's stage only reports the PREVIOUS voting
+// window's bounds (zero if never held). The next window is knowable
+// from the current council's on-duty-end because elections are on a
+// hard block-height schedule (verified against Elastos.ELA
+// cr/state/committee.go). Voting for the next council ends ClaimingPeriod
+// blocks before the old council's term ends, and lasts VotingPeriod blocks:
+//
+//   nextVotingEndHeight   = onDutyEndHeight - ClaimingPeriod - 1
+//   nextVotingStartHeight = nextVotingEndHeight - VotingPeriod + 1
+//                         = onDutyEndHeight - (VotingPeriod + ClaimingPeriod)
+//
+// That's the same math aggregator.go uses when computing past-term
+// tallies (see aggregator.go:electionVotingPeriod). Matches e.g.
+// term 6 on main chain: termStart 1972930 → narrowStart 1941249,
+// narrowEnd 1962849. Diff 31681 = 21600 (voting) + 10080 (claim) + 1.
 func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	const cacheKey = "crElectionStatus"
+	// Match aggregator.go + src/constants/governance.ts + mainnet values
+	// verified against elastos/Elastos.ELA common/config/config.go.
+	const crVotingPeriodBlocks = 21600
+	const crClaimingPeriodBlocks = 10080
 
 	// Cheap path: recent cache hit, no node RPC at all.
 	if cached, ok := s.cache.Get(cacheKey); ok {
@@ -239,15 +260,33 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 		phase = "claiming"
 	}
 
+	// Derive next-election window for "duty"/"claiming" phase — see
+	// the doc comment for the formula. In "voting" phase these fields
+	// restate stage.VotingStartHeight/VotingEndHeight so the frontend
+	// has ONE field to read regardless of phase.
+	var nextVotingStart, nextVotingEnd int64
+	switch phase {
+	case "voting":
+		nextVotingStart = stage.VotingStartHeight
+		nextVotingEnd = stage.VotingEndHeight
+	case "duty", "claiming":
+		if stage.OnDutyEndHeight > 0 {
+			nextVotingEnd = stage.OnDutyEndHeight - crClaimingPeriodBlocks - 1
+			nextVotingStart = nextVotingEnd - crVotingPeriodBlocks + 1
+		}
+	}
+
 	resp := map[string]any{
-		"phase":             phase,
-		"currentHeight":     currentHeight,
-		"inVoting":          stage.InVoting,
-		"onDuty":            stage.OnDuty,
-		"votingStartHeight": stage.VotingStartHeight,
-		"votingEndHeight":   stage.VotingEndHeight,
-		"onDutyStartHeight": stage.OnDutyStartHeight,
-		"onDutyEndHeight":   stage.OnDutyEndHeight,
+		"phase":                  phase,
+		"currentHeight":          currentHeight,
+		"inVoting":               stage.InVoting,
+		"onDuty":                 stage.OnDuty,
+		"votingStartHeight":      stage.VotingStartHeight,
+		"votingEndHeight":        stage.VotingEndHeight,
+		"onDutyStartHeight":      stage.OnDutyStartHeight,
+		"onDutyEndHeight":        stage.OnDutyEndHeight,
+		"nextVotingStartHeight":  nextVotingStart,
+		"nextVotingEndHeight":    nextVotingEnd,
 	}
 
 	s.cache.Set(cacheKey, resp)

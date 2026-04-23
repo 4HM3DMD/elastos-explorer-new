@@ -394,6 +394,11 @@ export interface CRMember {
 //   "pre-genesis" → chain height < first-ever election (rare)
 // Use `currentHeight` as the reference tip when feeding Countdown so the
 // countdown matches the rest of the API's view of the chain.
+//
+// nextVotingStartHeight / nextVotingEndHeight are always populated (except
+// during pre-genesis) — backend computes them from onDutyEndHeight during
+// duty/claiming phases, and echoes the node's values during voting. Use
+// these directly instead of re-deriving on the client.
 export interface ElectionStatus {
   phase: 'voting' | 'claiming' | 'duty' | 'pre-genesis';
   currentHeight: number;
@@ -403,6 +408,8 @@ export interface ElectionStatus {
   votingEndHeight: number;
   onDutyStartHeight: number;
   onDutyEndHeight: number;
+  nextVotingStartHeight: number;
+  nextVotingEndHeight: number;
 }
 
 // Entry from GET /api/v1/cr/elections (per-term summary).

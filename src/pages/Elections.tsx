@@ -30,7 +30,6 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import Countdown from '../components/Countdown';
 import { webSocketService } from '../services/websocket';
-import { CR_VOTING_PERIOD_BLOCKS } from '../constants/governance';
 
 const NAV_TABS = [
   { label: 'Council Members', path: '/governance',           icon: Users },
@@ -278,14 +277,12 @@ function StatusHero({ status, latestTerm }: { status: ElectionStatus; latestTerm
   // interesting fact; frame it as a countdown so operators know when
   // to watch.
   //
-  // When the node's stage is "duty", votingStartHeight/votingEndHeight
-  // in the response refer to the PREVIOUS (closed) window. The NEXT
-  // window opens `CR_VOTING_PERIOD_BLOCKS` blocks before the current
-  // term's on-duty-end — derived from constants/governance.ts which
-  // mirrors aggregator.go's constants (verified against Elastos.ELA
-  // mainchain source at cr/state/committee.go).
+  // Backend computes nextVotingStartHeight using the correct
+  // voting + claiming offset from on-duty-end — see the comment on
+  // getCRElectionStatus in governance.go for the formula. We just
+  // consume the authoritative value here.
   if (status.phase === 'duty') {
-    const nextElectionOpensAt = status.onDutyEndHeight - CR_VOTING_PERIOD_BLOCKS;
+    const nextElectionOpensAt = status.nextVotingStartHeight;
     return (
       <div className="card relative overflow-hidden p-4 sm:p-5 md:p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center">

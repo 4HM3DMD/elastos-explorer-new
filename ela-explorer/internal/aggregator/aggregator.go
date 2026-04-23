@@ -657,7 +657,13 @@ func (a *Aggregator) refreshElectionTallies(ctx context.Context) error {
 		}
 
 		// For completed elections, skip if already computed.
-		if termStart < syncedHeight {
+		// Exception: the currently-seated term is always re-run so
+		// the `elected` flag reflects live cr_members.state (mid-term
+		// impeachments flip members from 'Elected' to 'Impeached' in
+		// cr_members; the tally's elected set must follow). Past
+		// terms are immutable — their vote totals are finalised and
+		// we have no live-state data that could change them.
+		if termStart < syncedHeight && term != currentTerm {
 			var existing int64
 			_ = a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM cr_election_tallies WHERE term = $1`, term).Scan(&existing)
 			if existing > 0 {
@@ -667,7 +673,11 @@ func (a *Aggregator) refreshElectionTallies(ctx context.Context) error {
 
 		slog.Info("computing election tally", "term", term, "narrowStart", narrowStart, "narrowEnd", narrowEnd, "termStart", termStart)
 
-		if err := a.computeElectionTally(ctx, term, narrowStart, narrowEnd, termStart); err != nil {
+		// currentTerm is the on-duty term (the one whose council is
+		// currently seated). Passed down so computeElectionTally can
+		// sync the `elected` flag from cr_members.state for that term
+		// — and use the rank-based heuristic everywhere else.
+		if err := a.computeElectionTally(ctx, term, narrowStart, narrowEnd, termStart, currentTerm); err != nil {
 			slog.Warn("election tally failed", "term", term, "error", err)
 			continue
 		}
@@ -690,7 +700,7 @@ func (a *Aggregator) refreshElectionTallies(ctx context.Context) error {
 //  3. Only include candidates who received at least one vote in the broader period
 //     (from previous term's start to current term's start) to filter out stale
 //     candidates who aren't running this term.
-func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart, narrowEnd, termStart int64) error {
+func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart, narrowEnd, termStart, currentOnDutyTerm int64) error {
 	if _, err := a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies WHERE term = $1`, term); err != nil {
 		return fmt.Errorf("delete old tally: %w", err)
 	}
@@ -753,6 +763,52 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 		term,
 	); err != nil {
 		return fmt.Errorf("assign ranks: %w", err)
+	}
+
+	// Elected-flag override for the CURRENTLY SEATED term.
+	//
+	// Without this, `elected` is set purely from rank: top-12 by votes.
+	// That is wrong for the in-flight term because the actual council
+	// can differ from raw top-12:
+	//   - A top-voted candidate can fail to claim their seat within the
+	//     claim window → they were highest-voted but never seated.
+	//   - A seated member can be impeached and REPLACED by the next-
+	//     ranked candidate, who then IS on the council despite being
+	//     rank 13+ by votes.
+	//   - Some elected members may have state='Inactive' (node down)
+	//     but are still legally seated.
+	//
+	// cr_members reflects the node's current view of the council via
+	// listcrcandidates (updated every 120s by refreshCRMembers).
+	// State semantics — verified against mainchain + operator confirmation:
+	//   'Elected'   → currently seated, node active
+	//   'Inactive'  → currently seated, node offline (still a council member)
+	//   'Impeached' → was seated this term; node may have replaced them,
+	//                 but the impeachment record makes them historically
+	//                 elected (include in elected set)
+	// Anything else (Unknown / Returned / Pending / Canceled) → NOT seated.
+	//
+	// Only applied for the on-duty term. Past terms don't have reliable
+	// live state in cr_members (the table is a single-row-per-cid snapshot
+	// of the CURRENT committee, not per-term history), so rank-based is
+	// the best available approximation.
+	if term == currentOnDutyTerm {
+		if _, err := a.db.Syncer.Exec(ctx, `
+			UPDATE cr_election_tallies et
+			SET elected = EXISTS (
+				SELECT 1 FROM cr_members cm
+				WHERE cm.cid = et.candidate_cid
+				  AND cm.state IN ('Elected', 'Inactive', 'Impeached')
+			)
+			WHERE et.term = $1`,
+			term,
+		); err != nil {
+			// Non-fatal: fall back to rank-based elected flag so the
+			// tally is still usable if cr_members sync hiccupped.
+			slog.Warn("election tally: elected-flag sync from cr_members failed",
+				"term", term, "error", err,
+				"note", "falling back to rank-based top-12 heuristic")
+		}
 	}
 
 	var count int64

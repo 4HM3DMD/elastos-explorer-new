@@ -162,13 +162,26 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 	//
 	// Fix approach: tx_vins is the authoritative consumer record (populated
 	// during bulk sync and always accurate). Re-derive is_active for CRC
-	// vote rows from it. The match condition:
-	//   - (tv.prev_vout = v.vout_n)      → old-style handleVoteOutput rows
-	//                                       (real vout_n stored at insert)
-	//   - (v.vout_n = -1 AND tv.prev_vout = 0)
-	//                                     → new-style TxVoting CRC/DPoSv1 rows
-	//                                       (virtual vout_n=-1 stored, real
-	//                                        on-chain vote output at index 0)
+	// vote rows from it. The match condition is the direct UTXO identity:
+	//   (tv.prev_txid = v.txid AND tv.prev_vout = v.vout_n)
+	//
+	// This correctly handles legacy pre-TxVoting CRC votes inserted by
+	// handleVoteOutput, where `vout_n` holds the real on-chain output
+	// index. Those rows ARE tied to a real vote UTXO, so consumption of
+	// that UTXO cancels the vote — matching Elastos `processVoteCancel`.
+	//
+	// History note: a prior version of this heal also ran `(v.vout_n = -1
+	// AND tv.prev_vout = 0)` to "catch" TxVoting-era CRC rows stored with
+	// the virtual `vout_n = -1`. That branch was WRONG: CRC votes cast via
+	// TxVoting are tracked by stakeAddress in the node's
+	// `UsedCRVotes[stakeAddress]` map, not by UTXO. The `vout=0` of a
+	// TxVoting is a regular transfer/change output (output_type=0), not a
+	// vote UTXO — consuming it does NOT cancel a CRC vote. That branch
+	// was over-deactivating CRC rows every time anyone touched a
+	// TxVoting's change output (TxTransferAsset, TxRegisterCR funded from
+	// change, TxDposV2ClaimReward, another TxVoting spending the change).
+	// It caused the Term 6 4HM3D-below-j-z-007 tally bug. Fixed here;
+	// Heal #7 below restores the falsely-deactivated rows.
 	//
 	// Idempotent: a second run finds zero is_active=TRUE rows with a
 	// matching tx_vins consumer — all the work the first pass needed to
@@ -187,10 +200,7 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 		WHERE v.vote_type = 1
 		  AND v.is_active = TRUE
 		  AND tv.prev_txid = v.txid
-		  AND (
-		        tv.prev_vout = v.vout_n
-		     OR (v.vout_n = -1 AND tv.prev_vout = 0)
-		  )`)
+		  AND tv.prev_vout = v.vout_n`)
 	if err != nil {
 		return fmt.Errorf("heal #4 (CRC vote consumption): %w", err)
 	}
@@ -260,6 +270,78 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 					"to", tallySemanticVersion,
 					"rows_cleared", n,
 					"note", "aggregator will rebuild under window-bounded semantics next cycle")
+			}
+		}
+	}
+
+	// Heal #7 (2026-04 TxVoting CRC over-deactivation rollback) — undo the
+	// damage done by a prior version of Heal #4 that matched
+	// `(v.vout_n = -1 AND tv.prev_vout = 0)` and thus marked CRC vote rows
+	// as spent every time ANY tx consumed the change output of their
+	// original TxVoting. CRC votes cast via TxVoting aren't tied to a
+	// UTXO — they're tracked by stakeAddress in the node's
+	// `UsedCRVotes[stakeAddress]` map. Consuming a TxVoting's `vout=0`
+	// (a regular transfer output, output_type=0) does NOT cancel a CRC
+	// vote per Elastos `processVoteCancel` semantics.
+	//
+	// Restore target: CRC rows (vote_type=1) stored with vout_n=-1 where:
+	//   - the row is currently marked spent (spent_txid NOT NULL), AND
+	//   - the original TxVoting's vout=0 is NOT a vote UTXO (output_type
+	//     is NOT OTVote=1 or OTDposV2Vote=6 — it's a regular transfer).
+	//
+	// The `NOT EXISTS` clause ensures we don't touch rows that were
+	// correctly deactivated because vout=0 actually IS a vote UTXO
+	// (legacy OTVote-style TxVoting, rare but legal).
+	//
+	// Gated by a sync_state key so it runs exactly once per deploy of the
+	// fix. Paired with cr_election_tallies clear below to force an
+	// immediate aggregator rebuild under corrected is_active state.
+	const crcRestoreVersion = "heal-7-crc-utxo-deactivation-rollback-v1"
+	var crcRestoreDone string
+	_ = pool.QueryRow(ctx, `SELECT value FROM sync_state WHERE key = 'heal_7_version'`).Scan(&crcRestoreDone)
+	if crcRestoreDone != crcRestoreVersion {
+		res, err := pool.Exec(ctx, `
+			UPDATE votes v
+			SET is_active    = TRUE,
+			    spent_txid   = NULL,
+			    spent_height = NULL
+			WHERE v.vote_type = 1
+			  AND v.vout_n    = -1
+			  AND v.spent_txid IS NOT NULL
+			  AND NOT EXISTS (
+			    SELECT 1 FROM tx_vouts ov
+			    WHERE ov.txid = v.txid
+			      AND ov.n = 0
+			      AND ov.output_type IN (1, 6)
+			  )`)
+		if err != nil {
+			slog.Warn("heal #7 (CRC UTXO-deactivation rollback) failed", "error", err)
+		} else {
+			n := res.RowsAffected()
+			if _, err := pool.Exec(ctx,
+				`INSERT INTO sync_state (key, value) VALUES ('heal_7_version', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = $1`,
+				crcRestoreVersion,
+			); err != nil {
+				slog.Warn("heal #7 (version flag) write failed", "error", err)
+			}
+			if n > 0 {
+				slog.Warn("data-heal applied: restored CRC vote rows falsely marked spent",
+					"heal", "crc-utxo-deactivation-rollback",
+					"rows_restored", n,
+					"note", "TxVoting CRC votes are stakeAddress-tracked, not UTXO-tracked — "+
+						"prior Heal #4 branch over-deactivated them")
+			}
+			// Heal #8 — force tally rebuild if rollback touched anything.
+			if n > 0 {
+				if res2, err := pool.Exec(ctx, `DELETE FROM cr_election_tallies`); err != nil {
+					slog.Warn("heal #8 (tally invalidation) skipped", "error", err)
+				} else if cleared := res2.RowsAffected(); cleared > 0 {
+					slog.Warn("data-heal applied: cleared cr_election_tallies to force recompute",
+						"heal", "tally-recompute-post-rollback",
+						"rows_cleared", cleared,
+						"note", "aggregator will rebuild with corrected is_active state next cycle")
+				}
 			}
 		}
 	}

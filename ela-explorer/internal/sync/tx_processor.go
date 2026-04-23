@@ -1180,6 +1180,48 @@ func (tp *TxProcessor) handleVoting(ctx context.Context, pgxTx pgx.Tx, tx *node.
 		}
 	}
 
+	// CRC vote replacement by stakeAddress (Elastos `UsedCRVotes[stakeAddress]`
+	// semantic). CRC votes cast via TxVoting are tracked by the voter's
+	// stake address in the node — a new TxVoting with CRC contents REPLACES
+	// the voter's prior CRC votes, regardless of whether the new tx consumed
+	// the old vote's UTXO. Our vin-based deactivation above doesn't catch
+	// this because CRC vote rows are stored with a virtual vout_n=-1 that
+	// never matches a real vin (vins have prev_vout >= 0).
+	//
+	// Scan contents once to decide: if any content is CRC (VoteType = 1),
+	// deactivate prior CRC rows for this voter before inserting the new
+	// ones. Empty votesinfo means "cancel all" — same deactivation, zero new
+	// inserts.
+	//
+	// Guards:
+	//   - txid != $2: idempotency on re-processing; don't deactivate rows we
+	//     just inserted in this same tx.
+	//   - stake_height <= $3 (current blockHeight): refill-safety — when
+	//     replaying historical blocks, don't deactivate FUTURE votes from
+	//     the same voter that live-sync has already ingested. Only rows
+	//     whose stake_height is at or before the current block qualify as
+	//     "prior CRC votes".
+	hasCRCContent := false
+	for _, content := range payload.Contents {
+		if content.VoteType == VoteCRC {
+			hasCRCContent = true
+			break
+		}
+	}
+	if hasCRCContent && voterAddr != "" {
+		if _, err := pgxTx.Exec(ctx, `
+			UPDATE votes SET is_active=FALSE, spent_txid=$2, spent_height=$3
+			WHERE vote_type = 1
+			  AND address = $1
+			  AND is_active = TRUE
+			  AND stake_height <= $3
+			  AND txid != $2`,
+			voterAddr, tx.TxID, blockHeight); err != nil {
+			metrics.IncGovHandlerError("handleVoting")
+			return fmt.Errorf("handleVoting: deactivate prior CRC for stakeAddr=%s: %w", voterAddr, err)
+		}
+	}
+
 	// TxVoting always creates exactly one output (n=0). DPoS v2 votes use this
 	// real output index so deactivation by (txid, vout_n) matches when the UTXO
 	// is later spent by TxReturnVotes / TxExchangeVotes / TxVotesRealWithdraw.

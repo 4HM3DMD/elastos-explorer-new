@@ -1041,10 +1041,20 @@ func (a *Aggregator) scanBlockRangeForCRCVotes(ctx context.Context, startHeight,
 	// just scanned (keeps the UPDATE index-friendly on large votes
 	// tables). Idempotent: a second run finds zero rows.
 	//
-	// Same match logic as schema.go's Heal #4:
-	//   - real vout_n → old-style handleVoteOutput inserts
-	//   - virtual vout_n=-1 → new-style TxVoting composite outputs
-	//     (always at on-chain index 0)
+	// Match logic: direct UTXO identity only
+	//   (tv.prev_txid = v.txid AND tv.prev_vout = v.vout_n)
+	// This covers legacy pre-TxVoting CRC votes stored by
+	// handleVoteOutput with the real on-chain vout_n. Those rows ARE
+	// tied to a vote UTXO and its consumption cancels the vote
+	// per Elastos `processVoteCancel` semantics.
+	//
+	// The prior "OR (v.vout_n = -1 AND tv.prev_vout = 0)" branch was
+	// removed — see schema.go Heal #4 for the full explanation. In
+	// short: TxVoting-era CRC votes are tracked by stakeAddress in
+	// the node (`UsedCRVotes[stakeAddress]`), not by UTXO, so
+	// consuming a TxVoting's vout=0 change output does NOT cancel a
+	// CRC vote. handleVoting now replaces old CRC votes by
+	// stakeAddress directly when a new TxVoting arrives.
 	if _, err := a.db.Syncer.Exec(ctx, `
 		UPDATE votes v
 		SET is_active    = FALSE,
@@ -1055,10 +1065,7 @@ func (a *Aggregator) scanBlockRangeForCRCVotes(ctx context.Context, startHeight,
 		WHERE v.vote_type = 1
 		  AND v.is_active = TRUE
 		  AND tv.prev_txid = v.txid
-		  AND (
-		        tv.prev_vout = v.vout_n
-		     OR (v.vout_n = -1 AND tv.prev_vout = 0)
-		  )
+		  AND tv.prev_vout = v.vout_n
 		  AND v.stake_height BETWEEN $1 AND $2`,
 		startHeight, endHeight,
 	); err != nil {

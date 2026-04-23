@@ -141,5 +141,85 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	slog.Debug("data-heal: voter_rights SELECT grant ensured for ela_api")
 
+	// Heal #4 (2026-04 CRC-vote consumption bug) — CR election vote rows
+	// (vote_type=1) inserted by the early-term backfill path
+	// (aggregator.scanBlockRangeForCRCVotes) were never marked is_active=FALSE
+	// when consumed by a later TxVoting / TxReturnVotes / TxExchangeVotes.
+	// Root cause: the backfill scan only inserts vote OUTPUT rows — it never
+	// runs the vin-consumption step that lives in handleVoting. Meanwhile
+	// handleVoting's consumption SQL matches on (txid, vout_n=vin.VOut),
+	// which misses rows stored with the virtual vout_n=-1 used for the
+	// composite CRC/DPoSv1 vote-output format (multiple candidates share
+	// one on-chain output).
+	//
+	// Effect on the UI: cr_election_tallies over-counts every voter who
+	// ever withdrew votes (TxReturnVotes) without re-voting — their
+	// withdrawn row still carries is_active=TRUE and the tally picks it up.
+	// Voters who CHANGED their vote are rescued by the tally's
+	// MAX(stake_height) dedupe, but the pollution of is_active also breaks
+	// any other query that filters on it (e.g. per-address vote-history
+	// UI, future voter-list endpoints, etc).
+	//
+	// Fix approach: tx_vins is the authoritative consumer record (populated
+	// during bulk sync and always accurate). Re-derive is_active for CRC
+	// vote rows from it. The match condition:
+	//   - (tv.prev_vout = v.vout_n)      → old-style handleVoteOutput rows
+	//                                       (real vout_n stored at insert)
+	//   - (v.vout_n = -1 AND tv.prev_vout = 0)
+	//                                     → new-style TxVoting CRC/DPoSv1 rows
+	//                                       (virtual vout_n=-1 stored, real
+	//                                        on-chain vote output at index 0)
+	//
+	// Idempotent: a second run finds zero is_active=TRUE rows with a
+	// matching tx_vins consumer — all the work the first pass needed to
+	// do is already done.
+	//
+	// Paired with Heal #5 (below) which forces a tally recompute if this
+	// heal touched any rows, because cached cr_election_tallies rows were
+	// computed against the bad is_active state.
+	res, err = pool.Exec(ctx, `
+		UPDATE votes v
+		SET is_active    = FALSE,
+		    spent_txid   = tv.txid,
+		    spent_height = NULLIF(COALESCE(t.block_height, 0), 0)
+		FROM tx_vins tv
+		LEFT JOIN transactions t ON t.txid = tv.txid
+		WHERE v.vote_type = 1
+		  AND v.is_active = TRUE
+		  AND tv.prev_txid = v.txid
+		  AND (
+		        tv.prev_vout = v.vout_n
+		     OR (v.vout_n = -1 AND tv.prev_vout = 0)
+		  )`)
+	if err != nil {
+		return fmt.Errorf("heal #4 (CRC vote consumption): %w", err)
+	}
+	crcHealed := res.RowsAffected()
+	if crcHealed > 0 {
+		slog.Warn("data-heal applied: deactivated CRC vote rows consumed per tx_vins",
+			"heal", "crc-vote-consumption",
+			"rows_corrected", crcHealed,
+			"note", "use tx_vins as authoritative consumer record")
+	}
+
+	// Heal #5 — if Heal #4 touched anything, the cached cr_election_tallies
+	// rows are stale (they were computed against the over-inflated is_active
+	// set). Clearing them triggers the aggregator's critical loop to
+	// re-compute on its next cycle (~60s). Skipped entirely when Heal #4 was
+	// a no-op, so steady-state boots don't needlessly churn the tally table.
+	if crcHealed > 0 {
+		res, err := pool.Exec(ctx, `DELETE FROM cr_election_tallies`)
+		if err != nil {
+			// Non-fatal: aggregator will still re-compute if it finds
+			// the data wrong; the DELETE just speeds up convergence.
+			slog.Warn("heal #5 (tally invalidation) skipped", "error", err)
+		} else if n := res.RowsAffected(); n > 0 {
+			slog.Warn("data-heal applied: cleared cr_election_tallies to force recompute",
+				"heal", "tally-recompute",
+				"rows_cleared", n,
+				"note", "aggregator will rebuild next cycle")
+		}
+	}
+
 	return nil
 }

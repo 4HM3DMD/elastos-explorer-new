@@ -933,6 +933,47 @@ func (a *Aggregator) scanBlockRangeForCRCVotes(ctx context.Context, startHeight,
 	}
 	flushBatch()
 
+	// Consumption pass — mark any vote row we just inserted that was
+	// later spent (per tx_vins) as is_active=FALSE. The block scan above
+	// only handles the OUTPUT side; it never runs handleVoting's
+	// vin-consumption step, which is the only place the "this vote
+	// UTXO was spent" transition happens in the live-sync path.
+	// Without this pass, every CRC vote from terms 1-3 stays
+	// is_active=TRUE forever — voters who withdrew votes without
+	// re-voting keep polluting the tally, and any future query that
+	// filters on is_active returns inflated results.
+	//
+	// Uses tx_vins as the authoritative consumer record — populated
+	// during bulk sync, never wrong. Scoped to the height range we
+	// just scanned (keeps the UPDATE index-friendly on large votes
+	// tables). Idempotent: a second run finds zero rows.
+	//
+	// Same match logic as schema.go's Heal #4:
+	//   - real vout_n → old-style handleVoteOutput inserts
+	//   - virtual vout_n=-1 → new-style TxVoting composite outputs
+	//     (always at on-chain index 0)
+	if _, err := a.db.Syncer.Exec(ctx, `
+		UPDATE votes v
+		SET is_active    = FALSE,
+		    spent_txid   = tv.txid,
+		    spent_height = NULLIF(COALESCE(t.block_height, 0), 0)
+		FROM tx_vins tv
+		LEFT JOIN transactions t ON t.txid = tv.txid
+		WHERE v.vote_type = 1
+		  AND v.is_active = TRUE
+		  AND tv.prev_txid = v.txid
+		  AND (
+		        tv.prev_vout = v.vout_n
+		     OR (v.vout_n = -1 AND tv.prev_vout = 0)
+		  )
+		  AND v.stake_height BETWEEN $1 AND $2`,
+		startHeight, endHeight,
+	); err != nil {
+		slog.Warn("backfillEarlyVotes: consumption pass failed",
+			"range", label, "error", err,
+			"note", "schema.go Heal #4 will cover this on next restart")
+	}
+
 	slog.Info("backfillEarlyVotes: scan complete", "range", label, "inserted", inserted)
 }
 

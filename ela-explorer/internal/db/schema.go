@@ -221,5 +221,48 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 
+	// Heal #6 (2026-04 CRC tally semantic change) — cr_election_tallies
+	// rows were previously built with a "persistent-UTXO" model that
+	// summed every vote a candidate had ever received up to termStart,
+	// deduped per-voter by latest vote. That model inflated every
+	// candidate's total by carrying old votes across terms (verified
+	// on live data: Sash had 118 "term 6 voters" but only 37 actually
+	// voted in term 6's voting window).
+	//
+	// The aggregator now uses a window-bounded model: each term's tally
+	// is built only from votes cast in that term's voting window.
+	//
+	// Existing rows in cr_election_tallies carry the old semantics. This
+	// heal clears them ONCE, gated by a sync_state key, so the aggregator
+	// rebuilds them under the new semantics on its next cycle.
+	// Key survives future deploys — subsequent boots no-op unless the
+	// key string changes (i.e. we intentionally want another rebuild).
+	const tallySemanticVersion = "window-bounded-v1"
+	var currentVersion string
+	_ = pool.QueryRow(ctx, `SELECT value FROM sync_state WHERE key = 'tally_semantic_version'`).Scan(&currentVersion)
+	if currentVersion != tallySemanticVersion {
+		res, err := pool.Exec(ctx, `DELETE FROM cr_election_tallies`)
+		if err != nil {
+			slog.Warn("heal #6 (tally semantic clear) failed", "error", err)
+		} else {
+			n := res.RowsAffected()
+			if _, err := pool.Exec(ctx,
+				`INSERT INTO sync_state (key, value) VALUES ('tally_semantic_version', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = $1`,
+				tallySemanticVersion,
+			); err != nil {
+				slog.Warn("heal #6 (tally semantic version flag) write failed", "error", err)
+			}
+			if n > 0 {
+				slog.Warn("data-heal applied: cleared cr_election_tallies for semantic upgrade",
+					"heal", "tally-semantic-upgrade",
+					"from", currentVersion,
+					"to", tallySemanticVersion,
+					"rows_cleared", n,
+					"note", "aggregator will rebuild under window-bounded semantics next cycle")
+			}
+		}
+	}
+
 	return nil
 }

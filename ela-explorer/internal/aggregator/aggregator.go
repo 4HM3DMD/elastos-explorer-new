@@ -688,34 +688,47 @@ func (a *Aggregator) refreshElectionTallies(ctx context.Context) error {
 
 // computeElectionTally calculates the vote tally for a single election term.
 //
-// CRC votes in Elastos are persistent UTXOs: a vote cast in term 1 carries over
-// to all future elections until the voter changes it or unstakes. The node counts
-// ALL active vote UTXOs at the election snapshot, not just ones created during
-// the voting window.
+// Semantics — each CR election's tally is built ONLY from votes cast within
+// that election's voting window (narrowStart..narrowEnd). Votes cast outside
+// the window — or in prior terms — do NOT carry over.
 //
-// Algorithm:
-//  1. Collect ALL CRC votes from the beginning of time up to termStart (when the
-//     new council takes over). This captures carry-over votes from previous terms.
-//  2. Deduplicate by taking each voter's LATEST vote (max stake_height per address).
-//  3. Only include candidates who received at least one vote in the broader period
-//     (from previous term's start to current term's start) to filter out stale
-//     candidates who aren't running this term.
+// This corrects a prior "persistent-UTXO" model that summed every CRC vote a
+// candidate had ever received up to termStart, deduped per-voter by latest
+// vote. That model matched UTXO-on-chain reality but NOT election semantics:
+//   - it inflated totals by rolling in stale votes from defunct candidates,
+//   - it made a voter who voted once years ago count for every subsequent
+//     election whether they re-engaged or not,
+//   - the vote counts did not match the DAO portal or the operator's
+//     expectation for per-election totals.
+//
+// Verified against live DB (2026-04) for Term 6:
+//   Sash had 118 "voters" in the old model — 37 actually voted in T6's
+//   window (the other 81 were carry-over from terms 1–5). The node's own
+//   listcrcandidates during an active voting window reports only the
+//   in-window vote total.
+//
+// Algorithm — window-bounded:
+//   1. Collect every CRC vote with stake_height in [narrowStart, narrowEnd].
+//   2. Per voter, keep only their LATEST in-window vote (MAX(stake_height)).
+//      Handles voters who submitted multiple TxVoting txs in the same window.
+//   3. Discard votes that were spent BEFORE the voting window closed
+//      (spent_height <= narrowEnd). A vote that was returned or replaced
+//      after voting closed still counted in the election snapshot.
+//   4. Candidates that received ≥1 in-window vote are implicitly included —
+//      no separate candidate filter is needed (the in-window bound already
+//      excludes CIDs that weren't on any in-window ballot).
+//
+// Aggregates: SUM(amount_sela) and COUNT(DISTINCT address) per candidate.
 func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart, narrowEnd, termStart, currentOnDutyTerm int64) error {
 	if _, err := a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies WHERE term = $1`, term); err != nil {
 		return fmt.Errorf("delete old tally: %w", err)
 	}
 
-	// The effective cutoff is the term start (when new council takes office).
-	// All votes up to this point represent the final state of each voter.
-	cutoff := termStart - 1
-
-	// Previous term's start determines the "active candidates" window.
-	// A candidate must have received at least one vote after the previous term started
-	// to be considered a candidate for this election.
-	var prevTermStart int64
-	if term > 1 {
-		prevTermStart = CRFirstTermStart + (term-2)*CRTermLength
-	}
+	// termStart is kept in the signature for forward-compat but the
+	// window-bounded query no longer uses it directly — the bound is
+	// [narrowStart, narrowEnd] which ends BEFORE termStart by design
+	// (claim period sits between them).
+	_ = termStart
 
 	_, err := a.db.Syncer.Exec(ctx, `
 		INSERT INTO cr_election_tallies (term, candidate_cid, nickname, final_votes_sela, voter_count,
@@ -726,27 +739,31 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 			COALESCE(cr.nickname, ''),
 			SUM(v.amount_sela),
 			COUNT(DISTINCT v.address),
+			$2,
 			$3,
-			$4,
 			0,
 			FALSE,
 			EXTRACT(EPOCH FROM NOW())::BIGINT
 		FROM votes v
 		JOIN (
+			-- Latest in-window vote per voter. Deduplicates voters who
+			-- submitted multiple TxVotings within the same window.
 			SELECT address, MAX(stake_height) AS max_h
 			FROM votes
-			WHERE vote_type = 1 AND stake_height <= $2
+			WHERE vote_type = 1
+			  AND stake_height BETWEEN $2 AND $3
 			GROUP BY address
 		) latest ON v.address = latest.address AND v.stake_height = latest.max_h
 		LEFT JOIN cr_members cr ON cr.cid = v.candidate
 		WHERE v.vote_type = 1
-		  AND v.stake_height <= $2
-		  AND v.candidate IN (
-			SELECT DISTINCT candidate FROM votes
-			WHERE vote_type = 1 AND stake_height > $5 AND stake_height <= $2
-		  )
+		  AND v.stake_height BETWEEN $2 AND $3
+		  -- Exclude votes spent BEFORE the election closed. Spent after
+		  -- is fine — the election snapshot captures state at narrowEnd,
+		  -- post-close changes (returnVotes, replacement) are future
+		  -- terms' concern.
+		  AND (v.spent_height IS NULL OR v.spent_height > $3)
 		GROUP BY v.candidate, cr.nickname`,
-		term, cutoff, narrowStart, narrowEnd, prevTermStart,
+		term, narrowStart, narrowEnd,
 	)
 	if err != nil {
 		return fmt.Errorf("insert tally: %w", err)

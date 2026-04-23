@@ -206,22 +206,10 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			}
 
 		case evVoteAdd:
-			// A vote slice counts ONLY if:
-			//   1. The target CID is currently registered (not canceled
-			//      /returned) — matches node `processVoteCRC` which
-			//      checks `GetCandidate(cid)`.
-			//   2. The vote was cast within THIS term's voting window
-			//      (stake_height >= narrowStart). The node's per-term
-			//      election tally considers only votes cast during that
-			//      term's voting period; persistent votes from earlier
-			//      terms do not carry over to a candidate's new
-			//      candidacy. Without this bound, recurring candidates
-			//      (e.g. Rebecca Zhu, who has RegisterCR events in
-			//      terms 2-6) inherit ghost votes from prior terms that
-			//      voters never actively replaced.
-			if ev.height < narrowStart {
-				continue
-			}
+			// A vote slice counts ONLY if the target CID is currently
+			// registered (not canceled/returned). Matches node semantics:
+			// `processVoteCRC` checks `GetCandidate(cid)` — returns nil
+			// for non-active. Our lookup simulates that.
 			c, ok := candidates[ev.cid]
 			if !ok || c.lastRegisterState != 1 {
 				continue
@@ -230,15 +218,6 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			c.voters[ev.voter]++
 
 		case evVoteSub:
-			// Symmetric window bound: only subtract votes consumed
-			// within this term's voting window. Votes cast in the
-			// window that get consumed later (post-narrowEnd) are out
-			// of scope for THIS election. Votes cast before the window
-			// were never counted above, so their consumption also has
-			// nothing to subtract from.
-			if ev.height < narrowStart {
-				continue
-			}
 			c, ok := candidates[ev.cid]
 			if !ok {
 				continue

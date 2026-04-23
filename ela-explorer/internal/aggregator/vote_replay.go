@@ -161,26 +161,28 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			if c.firstRegHeight == 0 {
 				c.firstRegHeight = ev.height
 			}
+			// Per Elastos `cr/state/state.go`, when a candidate
+			// previously Unregistered or Returned comes back with a new
+			// RegisterCR, the node replaces their state machine with a
+			// fresh entry at Votes=0. Match that here: reset only when
+			// the prior state was Canceled (2) or Returned (3). For a
+			// first-time register (state 0) or an in-flight re-register
+			// without a prior unregister (state 1, which shouldn't occur
+			// on mainnet but does show up in edge cases), keep the
+			// running counter untouched.
+			//
+			// Without this reset, a candidate who unregistered in an
+			// earlier term and re-registered in this one would carry
+			// ghost votes across the gap — see Rebecca Zhu's inflated
+			// Term 6 tally before this fix.
+			if c.lastRegisterState == 2 || c.lastRegisterState == 3 {
+				c.votes = 0
+				c.voters = map[string]int{}
+			}
 			c.lastRegHeight = ev.height
 			c.did = ev.did
 			c.nickname = ev.nickname
-			// Per Elastos `cr/state/state.go`, a (re-)registration creates a
-			// fresh candidate entry with `Votes: 0`. The node does NOT
-			// carry prior-term votes across a re-registration, even if
-			// some of those votes are still unspent — the candidate is
-			// treated as a new one. Match that here: reset the running
-			// counter on every register event. First-time registrations
-			// start from zero already, so this is a no-op for them; for
-			// re-registrations it correctly drops stale votes that were
-			// earned under a previous candidacy.
-			//
-			// Without this reset, candidates who ran in multiple terms
-			// (e.g. Rebecca Zhu) accumulate ghost votes from earlier
-			// terms that weren't consumed via TxVoting replacement, and
-			// their Term N tally is inflated.
 			c.lastRegisterState = 1
-			c.votes = 0
-			c.voters = map[string]int{}
 
 		case evUpdate:
 			if c, ok := candidates[ev.cid]; ok {

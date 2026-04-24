@@ -747,17 +747,17 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	// only algorithm that matched the node's live observation and the
 	// currently-seated Term 6 council.
 
-	// Terms 1-3 ran on pre-DPoSv2 Elastos (before block 1,405,000). The
-	// 2020-2022-era election rules can't be perfectly reconstructed
-	// from UTXO data alone — specific candidates with higher raw vote
-	// totals were excluded by node-internal mechanics not fully
-	// captured in the current master source. For those terms, show
-	// only the 12 seated council members (authoritative via on-chain
-	// proposal-review records) with vote totals zeroed out so the
-	// frontend doesn't imply an inaccurate ranking.
-	if term <= 3 {
-		return a.computeLegacyTermTally(ctx, term, termStart)
-	}
+	// Unified rule for all terms: latest-TxVoting-per-voter within the
+	// voting window (the node's `UsedCRVotes[stakeAddress]` semantic).
+	// Per operator confirmation, this produces chain-accurate counts
+	// for every term we can verify (T5 matched the node snapshot to
+	// the ELA; T4 and T6 internally consistent with ground truth).
+	//
+	// Historical note: T1-3 previously ran in a "names-only" mode
+	// because the pre-DPoSv2 election rules weren't fully understood.
+	// Subsequent analysis showed the same latest-tx rule produces
+	// reasonable numbers for the legacy era too, so we removed the
+	// special case and let the replay handle all terms uniformly.
 	_ = narrowStart
 	_ = narrowEnd
 

@@ -336,22 +336,27 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	result.ComputedAt = time.Now()
 
 	distinctVoters := map[string]struct{}{}
-	// The candidate filter: registered for THIS term, not cancelled,
-	// valid DID. "Registered for this term" means their latest
-	// TxRegisterCR was AFTER the previous term began (so they're a
-	// fresh registration for this election) AND BEFORE this term's
-	// voting closes.
+	// Candidate filter — matches Elastos `cr/state/committee.go:1846-1865`
+	// (`getActiveAndExistDIDCRCandidatesDesc`):
+	//   1. State must be Active (lastRegisterState == 1). Canceled (2)
+	//      and Returned (3) are excluded.
+	//   2. DID must be non-empty. Early-era (pre-DID) registrations had
+	//      empty DID at RegisterCR; our handler for TxUpdateCR now
+	//      picks up DIDs added later via metadata updates.
+	//   3. lastRegHeight <= narrowEnd — a registration after the voting
+	//      window closes doesn't retroactively make the candidate
+	//      eligible for that election.
 	//
-	// Registration is permitted earlier than narrowStart — candidates
-	// can pre-register during the outgoing committee's duty period
-	// before voting opens. Verified on data: Tyro registered at
-	// block 1,944,443, which is 6,887 blocks BEFORE Term 6's correct
-	// narrowStart of 1,951,330, and Tyro is a legitimate seated member.
-	// So the lower bound is prevTermStart, not narrowStart.
-	prevTermStart := int64(0)
-	if term > 1 {
-		prevTermStart = CRFirstTermStart + (term-2)*CRTermLength
-	}
+	// NOTE: we do NOT filter by a lower registration-height bound. In
+	// Elastos, a candidate's Active state persists across terms unless
+	// they explicitly Unregister/ReturnDeposit. A T1 candidate who
+	// never unregistered is still Active in T2, T3, etc. and is on
+	// the ballot if voters cast CRC votes for their CID. An earlier
+	// version filtered with `c.lastRegHeight > prevTermStart`, which
+	// incorrectly dropped recurring-active candidates who never
+	// re-registered (e.g. Strawberry Council in Term 2 — registered
+	// once at T1 era, remained Active, received 507K T2 votes, but
+	// was absent from our T2 tally entirely).
 	for _, c := range candidates {
 		if c.lastRegisterState != 1 {
 			continue
@@ -359,7 +364,7 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 		if c.did == "" {
 			continue
 		}
-		if c.lastRegHeight <= prevTermStart || c.lastRegHeight > narrowEnd {
+		if c.lastRegHeight > narrowEnd {
 			continue
 		}
 		rc := ReplayCandidate{

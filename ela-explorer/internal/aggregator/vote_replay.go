@@ -73,14 +73,17 @@ type TallyResult struct {
 
 // event is one state transition in chronological order.
 type event struct {
-	height   int64
-	subOrder int    // secondary sort: state events before votes within a block
-	kind     int    // evKind* constants
-	cid      string // candidate (for register/unregister/vote events)
-	voter    string // for vote events
-	amount   int64  // sela (vote amount)
-	did      string // for register events
-	nickname string // for register/update events
+	height     int64
+	subOrder   int    // secondary sort: state events before votes within a block
+	kind       int    // evKind* constants
+	cid        string // candidate (for register/unregister/vote events)
+	voter      string // for vote events
+	amount     int64  // sela (vote amount)
+	did        string // for register events
+	nickname   string // for register/update events
+	stakeHeight int64 // for vote events: the original vote-creation block
+	                  // (for evVoteAdd this equals `height`; for evVoteSub
+	                  //  it's the creation height of the UTXO being consumed)
 }
 
 const (
@@ -123,60 +126,14 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	slog.Info("vote replay: starting", "term", term, "narrowStart", narrowStart, "narrowEnd", narrowEnd)
 	started := time.Now()
 
-	// 1a. Load the set of candidates who were SEATED IN THE PRIOR TERM.
-	//     Per empirical observation on Term 6 data, the node carries a
-	//     recurring candidate's prior-term unspent CRC votes across a
-	//     re-registration boundary only if that candidate was actually
-	//     seated (top-12) in the previous term. Non-seated prior
-	//     candidates start fresh at Votes=0 and only accumulate votes
-	//     cast during the current term's voting window.
-	//
-	// Source of truth: cr_election_tallies rows for (term - 1) where
-	// elected = TRUE. This self-consistently chains across terms — to
-	// get Term 6 right you need Term 5's top-12, which needs Term 4's,
-	// and so on back to Term 1 (which has no prior and thus uses the
-	// empty set, meaning no carry-over for any candidate).
-	//
-	// Fallback: if (term - 1) tallies aren't populated yet (first run,
-	// pre-heal state), fall back to cr_members current seating. This
-	// keeps the admin-endpoint path working from day one and works
-	// precisely for the on-duty term since current-seating ≈ prior-
-	// term-seating for the on-duty term.
-	seatedCIDs := map[string]bool{}
-	if term > 1 {
-		priorRows, priorErr := a.db.API.Query(ctx, `
-			SELECT candidate_cid FROM cr_election_tallies
-			WHERE term = $1 AND elected = TRUE`, term-1)
-		if priorErr == nil {
-			for priorRows.Next() {
-				var cid string
-				if priorRows.Scan(&cid) == nil {
-					seatedCIDs[cid] = true
-				}
-			}
-			priorRows.Close()
-		}
-	}
-	if len(seatedCIDs) == 0 && term > 1 {
-		// Fallback: prior-term tally isn't populated yet. Use
-		// cr_members current state — works well for the on-duty term.
-		fallbackRows, fallbackErr := a.db.API.Query(ctx, `
-			SELECT cid FROM cr_members
-			WHERE state IN ('Elected', 'Inactive', 'Impeached')`)
-		if fallbackErr == nil {
-			for fallbackRows.Next() {
-				var cid string
-				if fallbackRows.Scan(&cid) == nil {
-					seatedCIDs[cid] = true
-				}
-			}
-			fallbackRows.Close()
-			slog.Info("vote replay: prior-term tally empty, using cr_members fallback",
-				"term", term, "fallback_count", len(seatedCIDs))
-		}
-	}
-	slog.Info("vote replay: seated CIDs loaded",
-		"term", term, "source_term", term-1, "count", len(seatedCIDs))
+	// Each term's tally is built purely from CRC votes cast within THAT
+	// term's voting window [narrowStart, narrowEnd]. No cross-term
+	// carry-over. This matches the operator's observed ground truth:
+	// every CR election is a fresh race, votes cast in Term N do not
+	// count toward Term N+1 even if the candidate runs again. Rebecca
+	// Zhu (ran T2-T6, never seated) was the smoking gun — her unspent
+	// Term 5 votes were inflating her Term 6 tally until we removed
+	// the cross-term carry-over.
 
 	// 1. Load all events in one pass, sort by height + subOrder.
 	events, err := a.loadReplayEvents(ctx, narrowEnd)
@@ -271,19 +228,17 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			}
 
 		case evVoteAdd:
-			// A vote slice counts ONLY if:
-			//   1. The target CID is currently registered (not
-			//      canceled/returned). Matches node semantics:
-			//      `processVoteCRC` checks `GetCandidate(cid)`.
-			//   2. If the candidate is NOT currently seated, the vote
-			//      must be cast within THIS term's voting window.
-			//      Non-seated candidates don't inherit prior-term
-			//      votes — Rebecca Zhu's inflated tally was the
-			//      symptom that revealed this rule.
-			//      Seated candidates (currently on the council) carry
-			//      their prior-term vote base forward — this is what
-			//      makes recurring incumbents stable across elections.
-			if !seatedCIDs[ev.cid] && ev.height < narrowStart {
+			// Pure window-bounded tallying — a vote counts for THIS
+			// term's election only if it was cast within THIS term's
+			// voting window [narrowStart, narrowEnd]. Each term is a
+			// fresh election; votes cast in earlier terms do NOT carry
+			// over to a later term's tally, regardless of whether the
+			// candidate was previously seated.
+			//
+			// Also requires the candidate to be currently Active
+			// (not Canceled/Returned) at the time of the vote —
+			// mirrors node's `processVoteCRC` GetCandidate() check.
+			if ev.stakeHeight < narrowStart {
 				continue
 			}
 			c, ok := candidates[ev.cid]
@@ -294,18 +249,19 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			c.voters[ev.voter]++
 
 		case evVoteSub:
-			// Symmetric filter: if the candidate is not currently
-			// seated, ignore pre-window consumption events — they
-			// subtract from an add we also didn't count.
-			if !seatedCIDs[ev.cid] && ev.height < narrowStart {
+			// Mirror the window filter on the SUB side using the
+			// original vote's stakeHeight. If the add was out-of-window
+			// (skipped), the sub must also be skipped — otherwise the
+			// running counter goes negative and gets clamped to 0,
+			// under-reporting seated candidates whose prior-term votes
+			// happen to be consumed inside the current term's window.
+			if ev.stakeHeight < narrowStart {
 				continue
 			}
 			c, ok := candidates[ev.cid]
 			if !ok {
 				continue
 			}
-			// Subtract even if currently canceled — the node does, then
-			// the candidate.Votes gets zeroed by cancel separately.
 			c.votes -= ev.amount
 			if c.votes < 0 {
 				c.votes = 0
@@ -507,6 +463,7 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 	// --- Vote ADD events ---
 	// Every CRC vote slice (vote_type=1) the indexer has seen. One event
 	// per row. subOrder = 5 to process after state events in the same block.
+	// For adds, stake_height == height by definition.
 	addRows, err := a.db.Syncer.Query(ctx, `
 		SELECT candidate, address, amount_sela, stake_height
 		FROM votes
@@ -527,12 +484,13 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 			continue
 		}
 		events = append(events, event{
-			height:   height,
-			subOrder: 5,
-			kind:     evVoteAdd,
-			cid:      candidate,
-			voter:    address,
-			amount:   amount,
+			height:      height,
+			subOrder:    5,
+			kind:        evVoteAdd,
+			cid:         candidate,
+			voter:       address,
+			amount:      amount,
+			stakeHeight: height, // for adds, creation height == event height
 		})
 	}
 	addRows.Close()
@@ -541,8 +499,15 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 	// Every spent vote (spent_height <= maxHeight). subOrder = 6 to process
 	// after adds in the same block — if a vote is created and spent in the
 	// same block (possible via TxVoting + TxReturnVotes), we add first.
+	//
+	// Carry stake_height along so the state-machine walker can apply the
+	// same per-term window filter to subs that it applies to adds. Without
+	// this, a T5-cast vote consumed during T6's voting window would
+	// subtract from the T6 running counter even though its original add
+	// was (correctly) skipped as out-of-window. Net: tally drifts
+	// negative, capped at 0 → seated candidates under-reported.
 	subRows, err := a.db.Syncer.Query(ctx, `
-		SELECT candidate, address, amount_sela, spent_height
+		SELECT candidate, address, amount_sela, spent_height, stake_height
 		FROM votes
 		WHERE vote_type = 1
 		  AND spent_height IS NOT NULL
@@ -556,18 +521,19 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 
 	for subRows.Next() {
 		var candidate, address string
-		var amount, height int64
-		if err := subRows.Scan(&candidate, &address, &amount, &height); err != nil {
+		var amount, height, stakeH int64
+		if err := subRows.Scan(&candidate, &address, &amount, &height, &stakeH); err != nil {
 			slog.Warn("replay: scan vote-sub row", "error", err)
 			continue
 		}
 		events = append(events, event{
-			height:   height,
-			subOrder: 6,
-			kind:     evVoteSub,
-			cid:      candidate,
-			voter:    address,
-			amount:   amount,
+			height:      height,
+			subOrder:    6,
+			kind:        evVoteSub,
+			cid:         candidate,
+			voter:       address,
+			amount:      amount,
+			stakeHeight: stakeH,
 		})
 	}
 	subRows.Close()

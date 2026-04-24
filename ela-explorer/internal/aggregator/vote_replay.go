@@ -118,25 +118,39 @@ type candidateState struct {
 // The algorithm is deterministic: same DB state → same output. Safe to
 // re-run; idempotent. Typical runtime for mainnet is ~5-15s per term.
 func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyResult, error) {
-	narrowStart, narrowEnd, _ := electionVotingPeriod(term)
+	narrowStart, narrowEnd, termStart := electionVotingPeriod(term)
 	if narrowEnd <= 0 {
 		return nil, fmt.Errorf("replay: invalid term %d (narrowEnd=%d)", term, narrowEnd)
 	}
+	// The election snapshot (who gets seated) is taken at termStart, AFTER
+	// the claim period. Evidence: Term 1 actually-seated council per
+	// proposal-review DIDs includes Orchard Trinity, Michael S, Adem
+	// Bilican, 中文社区管理员团队 — each had empty DID at narrowEnd but
+	// added their DID during the claim period (648849 < update-height <
+	// 658930 = termStart). Snapshotting at narrowEnd would have excluded
+	// them via the node's non-empty-DID filter; snapshotting at termStart
+	// catches the DIDs and gets the historical tally right.
+	//
+	// Split points:
+	//   - State events (Register/Update/Unregister/ReturnDeposit) are
+	//     loaded up to termStart-1 so claim-period DID updates apply.
+	//   - Vote events (add/sub) are still scoped to the voting window —
+	//     skipped if stakeHeight < narrowStart or > narrowEnd. Votes
+	//     can't be cast during the claim period anyway, but spends
+	//     during it don't retroactively reduce an already-closed
+	//     election's tally.
+	snapshotHeight := termStart - 1
+	if snapshotHeight <= 0 {
+		snapshotHeight = narrowEnd
+	}
 
-	slog.Info("vote replay: starting", "term", term, "narrowStart", narrowStart, "narrowEnd", narrowEnd)
+	slog.Info("vote replay: starting",
+		"term", term, "narrowStart", narrowStart, "narrowEnd", narrowEnd,
+		"termStart", termStart, "snapshotHeight", snapshotHeight)
 	started := time.Now()
 
-	// Each term's tally is built purely from CRC votes cast within THAT
-	// term's voting window [narrowStart, narrowEnd]. No cross-term
-	// carry-over. This matches the operator's observed ground truth:
-	// every CR election is a fresh race, votes cast in Term N do not
-	// count toward Term N+1 even if the candidate runs again. Rebecca
-	// Zhu (ran T2-T6, never seated) was the smoking gun — her unspent
-	// Term 5 votes were inflating her Term 6 tally until we removed
-	// the cross-term carry-over.
-
 	// 1. Load all events in one pass, sort by height + subOrder.
-	events, err := a.loadReplayEvents(ctx, narrowEnd)
+	events, err := a.loadReplayEvents(ctx, snapshotHeight)
 	if err != nil {
 		return nil, fmt.Errorf("replay: load events: %w", err)
 	}
@@ -162,9 +176,9 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	}
 
 	for _, ev := range events {
-		if ev.height > narrowEnd {
-			// Events loader shouldn't give us anything past narrowEnd,
-			// but belt-and-suspenders.
+		if ev.height > snapshotHeight {
+			// Past the snapshot — we loaded up to termStart-1 but nothing
+			// after that is in scope for this term's election.
 			break
 		}
 		switch ev.kind {
@@ -233,12 +247,14 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			// voting window [narrowStart, narrowEnd]. Each term is a
 			// fresh election; votes cast in earlier terms do NOT carry
 			// over to a later term's tally, regardless of whether the
-			// candidate was previously seated.
+			// candidate was previously seated. Votes cast after
+			// narrowEnd (claim period or later) are out of scope for
+			// this election regardless of when they appear.
 			//
 			// Also requires the candidate to be currently Active
 			// (not Canceled/Returned) at the time of the vote —
 			// mirrors node's `processVoteCRC` GetCandidate() check.
-			if ev.stakeHeight < narrowStart {
+			if ev.stakeHeight < narrowStart || ev.stakeHeight > narrowEnd {
 				continue
 			}
 			c, ok := candidates[ev.cid]
@@ -255,7 +271,9 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			// running counter goes negative and gets clamped to 0,
 			// under-reporting seated candidates whose prior-term votes
 			// happen to be consumed inside the current term's window.
-			if ev.stakeHeight < narrowStart {
+			// Same upper bound: subs for votes cast post-narrowEnd
+			// aren't in scope either (their adds were out-of-window).
+			if ev.stakeHeight < narrowStart || ev.stakeHeight > narrowEnd {
 				continue
 			}
 			c, ok := candidates[ev.cid]
@@ -288,7 +306,7 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	result.Term = term
 	result.NarrowStart = narrowStart
 	result.NarrowEnd = narrowEnd
-	result.SnapshotHeight = narrowEnd
+	result.SnapshotHeight = snapshotHeight
 	result.ComputedAt = time.Now()
 
 	distinctVoters := map[string]struct{}{}
@@ -310,7 +328,7 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 		if c.lastRegisterState != 1 {
 			continue
 		}
-		if c.lastRegHeight > narrowEnd {
+		if c.lastRegHeight > snapshotHeight {
 			continue
 		}
 		rc := ReplayCandidate{

@@ -287,6 +287,22 @@ func (s *Syncer) refillBlock(ctx context.Context, block *node.BlockInfo, c *refi
 				continue
 			}
 			c.govTxsProcessed.Add(1)
+		} else if hasVoteOutput(tx) {
+			// Legacy-era voting (Terms 1-3): CRC votes were carried in
+			// OTVote output payloads on TxTransferAsset (type 2) rather
+			// than in a dedicated TxVoting payload. processOutputPayloads
+			// handles those via handleVoteOutput, but only if we run it.
+			// Without this branch, those votes never make it into the
+			// votes table during refill and early-term tallies stay
+			// incomplete.
+			if err := s.processor.txProc.processOutputPayloads(ctx, pgxTx, tx, block.Height); err != nil {
+				pgxTx.Rollback(ctx)
+				c.errors.Add(1)
+				slog.Warn("refill: processOutputPayloads (legacy) failed",
+					"txid", tx.TxID, "type", tx.Type, "height", block.Height, "error", err)
+				continue
+			}
+			c.govTxsProcessed.Add(1)
 		}
 
 		if err := pgxTx.Commit(ctx); err != nil {
@@ -425,4 +441,19 @@ func (s *Syncer) setLastError(msg string) {
 	s.refill.mu.Lock()
 	s.refill.status.LastError = msg
 	s.refill.mu.Unlock()
+}
+
+// hasVoteOutput returns true if any of the tx's outputs carries a vote
+// payload (OTVote = 1 or OTDposV2Vote = 6). Used by the refill path to
+// catch legacy-era voting done via TxTransferAsset + OTVote outputs —
+// these aren't in the governance-tx-types list but still need
+// processOutputPayloads to run so handleVoteOutput writes the per-slice
+// votes rows.
+func hasVoteOutput(tx *node.TransactionInfo) bool {
+	for _, vout := range tx.VOut {
+		if vout.Type == OTVote || vout.Type == OTDposV2Vote {
+			return true
+		}
+	}
+	return false
 }

@@ -244,6 +244,16 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 				if ev.nickname != "" {
 					c.nickname = ev.nickname
 				}
+				// TxUpdateCR can set or change the DID. Early-era CR
+				// registrations (Term 1 / pre-DID era) often had empty
+				// DID at initial RegisterCR time and acquired one via a
+				// later UpdateCR. Our snapshot filter requires non-empty
+				// DID, so missing this update meant those candidates
+				// were filtered out of the final elected-list even
+				// though they eventually held valid DIDs.
+				if ev.did != "" {
+					c.did = ev.did
+				}
 			}
 
 		case evUnregister:
@@ -452,6 +462,7 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 		case txTypeUpdateCR:
 			var p struct {
 				CID      string `json:"cid"`
+				DID      string `json:"did"`
 				NickName string `json:"nickname"`
 			}
 			if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil || p.CID == "" {
@@ -459,6 +470,7 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 			}
 			ev.kind = evUpdate
 			ev.cid = p.CID
+			ev.did = p.DID
 			ev.nickname = p.NickName
 		case txTypeUnregisterCR:
 			var p struct {

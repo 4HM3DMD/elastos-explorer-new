@@ -824,6 +824,7 @@ func (tp *TxProcessor) handleRegisterCR(ctx context.Context, pgxTx pgx.Tx, tx *n
 func (tp *TxProcessor) handleUpdateCR(ctx context.Context, pgxTx pgx.Tx, tx *node.TransactionInfo) error {
 	var payload struct {
 		CID      string `json:"cid"`
+		DID      string `json:"did"`
 		NickName string `json:"nickname"`
 		URL      string `json:"url"`
 		Location uint64 `json:"location"`
@@ -832,10 +833,25 @@ func (tp *TxProcessor) handleUpdateCR(ctx context.Context, pgxTx pgx.Tx, tx *nod
 		slog.Warn("parse UpdateCR payload failed", "txid", tx.TxID, "error", err)
 		return nil
 	}
-	if _, err := pgxTx.Exec(ctx, "UPDATE cr_members SET nickname=$2, url=$3, location=$4 WHERE cid=$1",
-		payload.CID, payload.NickName, payload.URL, payload.Location); err != nil {
-		metrics.IncGovHandlerError("handleUpdateCR")
-		return fmt.Errorf("handleUpdateCR: update cr_members: %w", err)
+	// Early-era CR registrations (pre-DID) often had empty DID at
+	// TxRegisterCR time and acquired their DID via a later TxUpdateCR.
+	// Only overwrite DID if the update actually carries one — otherwise
+	// a metadata-only update (nickname/URL change) would wipe the DID
+	// established by the original register.
+	if payload.DID != "" {
+		if _, err := pgxTx.Exec(ctx,
+			"UPDATE cr_members SET did=$2, nickname=$3, url=$4, location=$5 WHERE cid=$1",
+			payload.CID, payload.DID, payload.NickName, payload.URL, payload.Location); err != nil {
+			metrics.IncGovHandlerError("handleUpdateCR")
+			return fmt.Errorf("handleUpdateCR: update cr_members (with DID): %w", err)
+		}
+	} else {
+		if _, err := pgxTx.Exec(ctx,
+			"UPDATE cr_members SET nickname=$2, url=$3, location=$4 WHERE cid=$1",
+			payload.CID, payload.NickName, payload.URL, payload.Location); err != nil {
+			metrics.IncGovHandlerError("handleUpdateCR")
+			return fmt.Errorf("handleUpdateCR: update cr_members: %w", err)
+		}
 	}
 	return nil
 }

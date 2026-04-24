@@ -292,32 +292,22 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	result.ComputedAt = time.Now()
 
 	distinctVoters := map[string]struct{}{}
-	// Candidate filter — matches Elastos `cr/state/committee.go:1846-1865`
-	// (`getActiveAndExistDIDCRCandidatesDesc`):
-	//   1. State must be Active (lastRegisterState == 1). Canceled (2)
-	//      and Returned (3) are excluded.
-	//   2. DID must be non-empty. Early-era (pre-DID) registrations had
-	//      empty DID at RegisterCR; our handler for TxUpdateCR now
-	//      picks up DIDs added later via metadata updates.
-	//   3. lastRegHeight <= narrowEnd — a registration after the voting
-	//      window closes doesn't retroactively make the candidate
-	//      eligible for that election.
+	// Include every candidate who:
+	//   - was registered at or before narrowEnd, and
+	//   - is still Active at snapshot time (not Canceled / Returned).
 	//
-	// NOTE: we do NOT filter by a lower registration-height bound. In
-	// Elastos, a candidate's Active state persists across terms unless
-	// they explicitly Unregister/ReturnDeposit. A T1 candidate who
-	// never unregistered is still Active in T2, T3, etc. and is on
-	// the ballot if voters cast CRC votes for their CID. An earlier
-	// version filtered with `c.lastRegHeight > prevTermStart`, which
-	// incorrectly dropped recurring-active candidates who never
-	// re-registered (e.g. Strawberry Council in Term 2 — registered
-	// once at T1 era, remained Active, received 507K T2 votes, but
-	// was absent from our T2 tally entirely).
+	// The node's `getActiveAndExistDIDCRCandidatesDesc` ALSO requires a
+	// non-empty DID to be eligible for election. We apply that rule
+	// only to the `elected` flag below — not to whether a candidate is
+	// in the list at all. Operator feedback: "lots of missed names and
+	// missed votes" — voters want to SEE every candidate they voted for,
+	// even ones who didn't meet the node's strict snapshot filter.
+	// E.g. Term 1's top raw-vote-getter (Orchard Trinity, 394K) had
+	// empty DID at narrowEnd because the DID was added ~6K blocks later
+	// during the claim period; omitting her entirely hid 10 candidates
+	// and 1M+ ELA of votes from the T1 page.
 	for _, c := range candidates {
 		if c.lastRegisterState != 1 {
-			continue
-		}
-		if c.did == "" {
 			continue
 		}
 		if c.lastRegHeight > narrowEnd {
@@ -344,9 +334,20 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 		}
 		return result.Candidates[i].CID < result.Candidates[j].CID
 	})
+	// Rank every candidate 1..N by votes. Elected = top-12 among those
+	// that meet the node's snapshot eligibility rule (non-empty DID).
+	// A candidate without a DID at narrowEnd can still appear in the
+	// list at their raw-vote rank (e.g. Orchard Trinity at T1 rank 1
+	// with 394K votes) but `elected = false` since the node wouldn't
+	// have seated them.
+	electedSeats := 0
 	for i := range result.Candidates {
 		result.Candidates[i].Rank = i + 1
-		result.Candidates[i].Elected = i < 12
+		result.Candidates[i].Elected = false
+		if electedSeats < 12 && result.Candidates[i].DID != "" {
+			result.Candidates[i].Elected = true
+			electedSeats++
+		}
 	}
 	result.TotalCandidates = len(result.Candidates)
 	result.TotalVotersDistinct = len(distinctVoters)

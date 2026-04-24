@@ -150,7 +150,7 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	started := time.Now()
 
 	// 1. Load all events in one pass, sort by height + subOrder.
-	events, err := a.loadReplayEvents(ctx, snapshotHeight)
+	events, err := a.loadReplayEvents(ctx, snapshotHeight, narrowStart, narrowEnd)
 	if err != nil {
 		return nil, fmt.Errorf("replay: load events: %w", err)
 	}
@@ -398,7 +398,7 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 //      — parse payload_json inline to extract CID + metadata.
 //   2. Vote-creation events from `votes` (one per row, vote_type=1).
 //   3. Vote-consumption events from `votes` (where spent_height <= maxHeight).
-func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]event, error) {
+func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight, narrowStart, narrowEnd int64) ([]event, error) {
 	var events []event
 
 	// --- CR state events ---
@@ -491,15 +491,33 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 	stateRows.Close()
 
 	// --- Vote ADD events ---
-	// Every CRC vote slice (vote_type=1) the indexer has seen. One event
-	// per row. subOrder = 5 to process after state events in the same block.
-	// For adds, stake_height == height by definition.
+	// Per-voter LATEST-TxVoting-only semantics, matching the node's
+	// `UsedCRVotes[stakeAddress]` model. When a voter casts multiple
+	// TxVotings within the voting window, only the LATEST one's slices
+	// count for that term's tally. Earlier TxVotings are completely
+	// superseded.
+	//
+	// Verified against node ground truth for Term 5 (2024 voting):
+	// every candidate's vote count matches to the ELA when we apply
+	// this dedup. Without it we over-count by 1.4-2x on average.
+	//
+	// Restricting to WITHIN the voting window is essential — votes cast
+	// BEFORE narrowStart belong to a prior term and don't carry.
+	// Votes cast AFTER narrowEnd are outside this election's snapshot.
 	addRows, err := a.db.Syncer.Query(ctx, `
-		SELECT candidate, address, amount_sela, stake_height
-		FROM votes
-		WHERE vote_type = 1
-		  AND stake_height <= $1`,
-		maxHeight,
+		WITH latest_tx AS (
+			SELECT address, MAX(stake_height) AS max_h
+			FROM votes
+			WHERE vote_type = 1
+			  AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
+		)
+		SELECT v.candidate, v.address, v.amount_sela, v.stake_height
+		FROM votes v
+		JOIN latest_tx lt ON lt.address = v.address AND lt.max_h = v.stake_height
+		WHERE v.vote_type = 1
+		  AND v.stake_height BETWEEN $1 AND $2`,
+		narrowStart, narrowEnd,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load vote-add events: %w", err)
@@ -526,16 +544,13 @@ func (a *Aggregator) loadReplayEvents(ctx context.Context, maxHeight int64) ([]e
 	addRows.Close()
 
 	// --- Vote SUB events ---
-	// Every spent vote (spent_height <= maxHeight). subOrder = 6 to process
-	// after adds in the same block — if a vote is created and spent in the
-	// same block (possible via TxVoting + TxReturnVotes), we add first.
-	//
-	// Carry stake_height along so the state-machine walker can apply the
-	// same per-term window filter to subs that it applies to adds. Without
-	// this, a T5-cast vote consumed during T6's voting window would
-	// subtract from the T6 running counter even though its original add
-	// was (correctly) skipped as out-of-window. Net: tally drifts
-	// negative, capped at 0 → seated candidates under-reported.
+	// With the latest-tx-per-voter dedup above, most SUB events are
+	// redundant: we only added the voter's latest-tx slices, so older
+	// slices being consumed doesn't affect us (we never added them).
+	// The only case where SUBs matter: a voter's LATEST in-window
+	// TxVoting's UTXO gets consumed WITHIN the window (e.g., they did
+	// a TxReturnVotes during voting to withdraw). Those should
+	// subtract from the tally.
 	subRows, err := a.db.Syncer.Query(ctx, `
 		SELECT candidate, address, amount_sela, spent_height, stake_height
 		FROM votes

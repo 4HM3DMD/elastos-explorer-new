@@ -755,7 +755,7 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	// Zhu in Term 6.
 	_ = narrowStart
 	_ = narrowEnd
-	_ = termStart
+	// termStart is used below for the past-term proposal-review override.
 
 	result, err := a.ReplayTermTally(ctx, term)
 	if err != nil {
@@ -786,11 +786,24 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 		}
 	}
 
-	// Override elected flag from live cr_members state for the on-duty
-	// term only. Past terms: replay's top-12 flag is authoritative. The
-	// override matters when a mid-term impeachment replaces a rank-≤12
-	// candidate with a rank-13+ candidate; cr_members reflects the node's
-	// current council view via listcurrentcrs (refreshed every 120s).
+	// Override elected flag from authoritative sources that describe
+	// who ACTUALLY held a council seat that term, in preference to the
+	// replay's raw rank-by-vote output:
+	//
+	//   1. Current on-duty term → cr_members.state via listcurrentcrs
+	//      (updated every 120s by refreshCRMembers). Catches mid-term
+	//      impeachments / replacements.
+	//
+	//   2. Past terms → DIDs that reviewed proposals during that term's
+	//      on-duty period [termStart, nextTermStart). Every seated
+	//      member reviewed at least some proposals, and the node's
+	//      proposal-review acceptance rule is strict about the council
+	//      signature set — so this is a reliable historical oracle.
+	//      It fixes Term 1's divergence between raw-top-12 and the
+	//      actual council (node's election rule isn't exactly top-12
+	//      by votes — candidates with empty DIDs at narrowEnd can
+	//      still seat via claim-period DID updates; some subtle node
+	//      rules we may not perfectly mirror).
 	if term == currentOnDutyTerm {
 		if _, err := a.db.Syncer.Exec(ctx, `
 			UPDATE cr_election_tallies et
@@ -803,6 +816,27 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 			term,
 		); err != nil {
 			slog.Warn("election tally: elected-flag sync from cr_members failed",
+				"term", term, "error", err,
+				"note", "falling back to rank-based top-12 from replay")
+		}
+	} else {
+		// Past terms — use proposal reviews as the ground truth.
+		// On-duty period: [termStart, nextTermStart). Any candidate
+		// whose DID reviewed a proposal in that range was seated.
+		nextTermStart := termStart + CRTermLength
+		if _, err := a.db.Syncer.Exec(ctx, `
+			UPDATE cr_election_tallies et
+			SET elected = EXISTS (
+				SELECT 1 FROM cr_proposal_reviews pr
+				JOIN cr_members cm ON cm.did = pr.did
+				WHERE cm.cid = et.candidate_cid
+				  AND pr.review_height >= $2
+				  AND pr.review_height <  $3
+			)
+			WHERE et.term = $1`,
+			term, termStart, nextTermStart,
+		); err != nil {
+			slog.Warn("election tally: elected-flag sync from proposal reviews failed",
 				"term", term, "error", err,
 				"note", "falling back to rank-based top-12 from replay")
 		}

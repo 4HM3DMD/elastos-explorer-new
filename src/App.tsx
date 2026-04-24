@@ -15,7 +15,6 @@ const TransactionDetails = lazy(() => import('./pages/TransactionDetails.js'));
 const AddressDetails = lazy(() => import('./pages/AddressDetails.js'));
 const Validators = lazy(() => import('./pages/Validators.js'));
 const ValidatorDetail = lazy(() => import('./pages/ValidatorDetail.js'));
-const CRCouncil = lazy(() => import('./pages/CRCouncil.js'));
 const CRProposals = lazy(() => import('./pages/CRProposals.js'));
 const ProposalDetail = lazy(() => import('./pages/ProposalDetail.js'));
 const Elections = lazy(() => import('./pages/Elections.js'));
@@ -116,10 +115,10 @@ function AnimatedRoutes() {
           <Route path="/validators" element={<Validators />} />
           <Route path="/validator/:ownerPubKey" element={<ValidatorDetail />} />
 
-          <Route path="/governance" element={<CRCouncil />} />
+          <Route path="/governance" element={<Elections />} />
           <Route path="/governance/proposals" element={<CRProposals />} />
           <Route path="/governance/proposal/:hash" element={<ProposalDetail />} />
-          <Route path="/governance/elections" element={<Elections />} />
+          <Route path="/governance/elections" element={<Navigate to="/governance" replace />} />
           <Route path="/governance/elections/:term" element={<ElectionDetail />} />
 
           <Route path="/charts" element={<Charts />} />

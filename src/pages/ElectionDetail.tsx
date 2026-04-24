@@ -19,19 +19,13 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { ElectionTermDetail, ElectionCandidate } from '../types/blockchain';
-import { Vote, Users, FileText, ChevronLeft, Trophy, Coins } from 'lucide-react';
+import { Vote, Users, ChevronLeft, Trophy, Coins } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
+import GovernanceNav from '../components/GovernanceNav';
 import { formatVotes } from '../utils/format';
-
-const NAV_TABS = [
-  { label: 'Council Members', path: '/governance',           icon: Users },
-  { label: 'Proposals',       path: '/governance/proposals', icon: FileText },
-  { label: 'Elections',       path: '/governance/elections', icon: Vote },
-] as const;
-const ACTIVE_PATH = '/governance/elections';
 
 type SortKey = 'rank' | 'votes' | 'voterCount';
 
@@ -68,20 +62,26 @@ const ElectionDetail = () => {
   // order is always present from the backend; votes/voterCount sorts
   // are ad-hoc in memory (no network round-trip). Kept in useMemo so
   // a sort toggle doesn't re-sort on unrelated re-renders.
+  const legacyEra = data?.legacyEra === true;
+
   const sortedCandidates = useMemo(() => {
     if (!data?.candidates) return [];
-    const rows = [...data.candidates];
+    // For legacy (pre-BPoS) terms, the backend only inserts the 12
+    // seated members with zeroed votes. Show only those, skip the
+    // vote sort (no meaningful numbers).
+    const filtered = legacyEra ? data.candidates.filter((c) => c.elected) : [...data.candidates];
+    if (legacyEra) return filtered.sort((a, b) => a.rank - b.rank);
     switch (sort) {
       case 'rank':
-        return rows.sort((a, b) => a.rank - b.rank);
+        return filtered.sort((a, b) => a.rank - b.rank);
       case 'votes':
-        return rows.sort((a, b) => Number(b.votes) - Number(a.votes));
+        return filtered.sort((a, b) => Number(b.votes) - Number(a.votes));
       case 'voterCount':
-        return rows.sort((a, b) => b.voterCount - a.voterCount);
+        return filtered.sort((a, b) => b.voterCount - a.voterCount);
       default:
-        return rows;
+        return filtered;
     }
-  }, [data, sort]);
+  }, [data, sort, legacyEra]);
 
   const summary = useMemo(() => {
     if (!data?.candidates?.length) return null;
@@ -98,8 +98,8 @@ const ElectionDetail = () => {
     return (
       <div className="px-4 lg:px-6 py-6 text-center">
         <p className="text-accent-red mb-4">{error || 'Election data unavailable'}</p>
-        <Link to="/governance/elections" className="btn-primary inline-block">
-          Back to elections
+        <Link to="/governance" className="btn-primary inline-block">
+          Back to governance
         </Link>
       </div>
     );
@@ -127,51 +127,54 @@ const ElectionDetail = () => {
               Term {data.term} Election
             </h1>
             <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">
-              {data.candidates.length} candidate{data.candidates.length === 1 ? '' : 's'}
-              {' · '}voting window block{' '}
-              <span className="font-mono">{data.votingStartHeight.toLocaleString()}</span>
-              {' → '}
-              <span className="font-mono">{data.votingEndHeight.toLocaleString()}</span>
+              {legacyEra ? (
+                <>Pre-BPoS era &middot; {sortedCandidates.length} council member{sortedCandidates.length === 1 ? '' : 's'}</>
+              ) : (
+                <>
+                  {data.candidates.length} candidate{data.candidates.length === 1 ? '' : 's'}
+                  {' · '}voting window block{' '}
+                  <span className="font-mono">{data.votingStartHeight.toLocaleString()}</span>
+                  {' → '}
+                  <span className="font-mono">{data.votingEndHeight.toLocaleString()}</span>
+                </>
+              )}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
-          {NAV_TABS.map((tab) => {
-            const isActive = tab.path === ACTIVE_PATH;
-            const Icon = tab.icon;
-            return (
-              <Link
-                key={tab.path}
-                to={tab.path}
-                className={cn(
-                  'px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
-                  isActive ? 'bg-white text-black' : 'text-secondary hover:text-brand',
-                )}
-                aria-current={isActive ? 'page' : undefined}
-              >
-                <Icon size={12} />
-                {tab.label}
-              </Link>
-            );
-          })}
-        </div>
+        <GovernanceNav activePath="/governance" />
       </div>
 
-      {/* Back to Elections index */}
+      {/* Back to governance index */}
       <div>
         <Link
-          to="/governance/elections"
+          to="/governance"
           className="inline-flex items-center gap-1 text-xs text-secondary hover:text-brand transition-colors"
         >
           <ChevronLeft size={12} />
-          Back to elections
+          Back to governance
         </Link>
       </div>
 
-      {/* Stat strip — four stats on md+, two columns on mobile so the
-          numbers don't squash. Each tile uses the MiniStat idiom from
-          the Staking page: left brand accent, label above, value below. */}
-      {summary && (
+      {/* Legacy-era banner — pre-BPoS voter data isn't reconstructable
+          from chain UTXO history, so we show only names (authoritative
+          from cr_proposal_reviews) with no vote metrics. */}
+      {legacyEra && (
+        <div className="card border border-[var(--color-border)] p-4 flex items-start gap-3">
+          <Vote size={16} className="text-muted flex-shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-primary mb-1">Pre-BPoS era</p>
+            <p className="text-xs text-secondary">
+              Voter data unavailable at the moment. Vote counts for Terms 1–3 ran on a different
+              consensus (pre-DPoSv2) with node-side seating filters we can&apos;t reconstruct from
+              UTXO history. The 12 seated council members are shown below.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Stat strip — four stats on md+, two columns on mobile.
+          Legacy-era terms skip vote-based tiles entirely. */}
+      {summary && !legacyEra && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatTile
             icon={Users}
@@ -201,8 +204,9 @@ const ElectionDetail = () => {
       )}
 
       {/* Candidate leaderboard — sortable header, visual cue for
-          elected rows via left border + trophy icon. Keeps vertical
-          rhythm consistent with CRCouncil's table-clean pattern. */}
+          elected rows via left border + trophy icon. For legacy (T1-T3)
+          terms, vote/voter columns are hidden because the pre-BPoS era
+          doesn't have reconstructable numbers. */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="table-clean w-full">
@@ -211,30 +215,36 @@ const ElectionDetail = () => {
                 <SortHeader label="#" active={sort === 'rank'} onClick={() => setSort('rank')} />
                 <th>Candidate</th>
                 <th className="hidden sm:table-cell">CID</th>
-                <SortHeader
-                  label="Votes"
-                  active={sort === 'votes'}
-                  onClick={() => setSort('votes')}
-                  className="text-right"
-                />
-                <SortHeader
-                  label="Voters"
-                  active={sort === 'voterCount'}
-                  onClick={() => setSort('voterCount')}
-                  className="text-right"
-                />
+                {!legacyEra && (
+                  <SortHeader
+                    label="Votes"
+                    active={sort === 'votes'}
+                    onClick={() => setSort('votes')}
+                    className="text-right"
+                  />
+                )}
+                {!legacyEra && (
+                  <SortHeader
+                    label="Voters"
+                    active={sort === 'voterCount'}
+                    onClick={() => setSort('voterCount')}
+                    className="text-right"
+                  />
+                )}
                 <th className="hidden md:table-cell text-right">Result</th>
               </tr>
             </thead>
             <tbody>
               {sortedCandidates.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-muted">
+                  <td colSpan={legacyEra ? 4 : 6} className="py-12 text-center text-muted">
                     No candidates recorded for this term
                   </td>
                 </tr>
               ) : (
-                sortedCandidates.map((c) => <CandidateRow key={c.cid} candidate={c} />)
+                sortedCandidates.map((c) => (
+                  <CandidateRow key={c.cid} candidate={c} hideVotes={legacyEra} />
+                ))
               )}
             </tbody>
           </table>
@@ -272,7 +282,13 @@ function SortHeader({
   );
 }
 
-function CandidateRow({ candidate }: { candidate: ElectionCandidate }) {
+function CandidateRow({
+  candidate,
+  hideVotes,
+}: {
+  candidate: ElectionCandidate;
+  hideVotes?: boolean;
+}) {
   return (
     <tr className={cn(candidate.elected && 'bg-brand/[0.03]')}>
       <td>
@@ -297,22 +313,26 @@ function CandidateRow({ candidate }: { candidate: ElectionCandidate }) {
       <td className="hidden sm:table-cell">
         <HashDisplay hash={candidate.cid} length={10} showCopyButton isClickable={false} />
       </td>
-      <td className="text-right">
-        <span
-          className="font-mono text-xs text-primary"
-          style={{ fontVariantNumeric: 'tabular-nums' }}
-        >
-          {formatVotes(candidate.votes)} ELA
-        </span>
-      </td>
-      <td className="text-right">
-        <span
-          className="font-mono text-xs text-secondary"
-          style={{ fontVariantNumeric: 'tabular-nums' }}
-        >
-          {candidate.voterCount.toLocaleString()}
-        </span>
-      </td>
+      {!hideVotes && (
+        <td className="text-right">
+          <span
+            className="font-mono text-xs text-primary"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+          >
+            {formatVotes(candidate.votes)} ELA
+          </span>
+        </td>
+      )}
+      {!hideVotes && (
+        <td className="text-right">
+          <span
+            className="font-mono text-xs text-secondary"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+          >
+            {candidate.voterCount.toLocaleString()}
+          </span>
+        </td>
+      )}
       <td className="hidden md:table-cell text-right">
         {candidate.elected ? (
           <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-brand font-medium">

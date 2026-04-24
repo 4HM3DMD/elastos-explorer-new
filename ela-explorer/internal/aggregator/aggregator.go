@@ -749,20 +749,22 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 
 	// Era-aware rules.
 	//
-	// Terms 1-3 ran on pre-DPoSv2 Elastos (before block 1,405,000),
-	// legacy OTVote-on-TxTransferAsset mechanism. Votes were persistent
-	// UTXOs that carried over across terms until explicitly changed.
-	// Formula (from the original 2021 explorer codebase, confirmed by
-	// operator to match historical council): each voter's LATEST CRC
-	// vote across all time up to termStart-1, candidate filter =
-	// received at least one vote in (prevTermStart, termStart].
+	// Terms 1-3 ran on pre-DPoSv2 Elastos (before block 1,405,000). Node-side
+	// filters (impeachment, deposit slashing, KYC/approval state, mid-term
+	// cancellations) gated seating independently of raw vote count, so the
+	// UTXO-reconstructed numbers don't reliably reproduce the historical
+	// council. Rather than display misleading totals, we show ONLY the 12
+	// seated members (authoritative from cr_proposal_reviews) with votes
+	// zeroed. Frontend renders these as "Pre-BPoS era — voter data
+	// unavailable at the moment". computeCarryOverTermTally is kept
+	// compiled for cheap rollback.
 	//
 	// Terms 4+ use DPoSv2 TxVoting mechanism where the node's
 	// `UsedCRVotes[stakeAddress]` map stores only the voter's latest
 	// in-window payload. Each term is a fresh race; pre-window votes
 	// don't carry. Verified against T5 node ground truth to the ELA.
 	if term <= 3 {
-		return a.computeCarryOverTermTally(ctx, term, termStart)
+		return a.computeLegacyTermTally(ctx, term, termStart)
 	}
 	_ = narrowStart
 	_ = narrowEnd

@@ -1,47 +1,79 @@
-// Elections index — third governance tab alongside Council Members and
-// Proposals. This page answers "what's the state of DAO elections right
-// now, and what happened in all past terms?"
+// Unified governance page — becomes the single source of truth for both
+// the current council and the election history. Mounted at /governance.
 //
-// Shape depends on `phase` from GET /cr/election/status:
-//   - "voting"      → live hero with countdown to voting close, top
-//                     candidates preview, CTA to term detail
-//   - "claiming"    → claim-window banner, countdown to on-duty start,
-//                     full history below
-//   - "duty"        → "next election in ~N days" hero, current-council
-//                     snapshot teaser, full history below
-//   - "pre-genesis" → shouldn't happen on mainnet but rendered honestly
+// Dynamic surface based on the chain's election phase
+// (GET /cr/election/status):
+//   - duty           → "Council Members": live members table + history
+//                      archive below.
+//   - voting         → "DAO Elections": live hero + countdown + candidate
+//                      list for the target term.
+//   - claim          → "DAO Transition": incoming council preview, with
+//                      current council still shown as active until the
+//                      handover block.
+//   - failed_restart → "DAO Elections" + red banner explaining the
+//                      node restarted voting. Current council stays
+//                      seated; old members-table renders below.
+//   - pre-genesis    → "Council Members" (never seen on mainnet).
 //
-// Below the hero, always:
-//   - Archive cards: one per past term, click through to ElectionDetail
+// The backend emits "claim" as the Elastos-canonical name for the
+// post-voting window (CRClaimPeriod). Older builds emit "claiming";
+// both shapes are tolerated via the ElectionPhase union so rolling
+// deploys don't break the UI mid-swap.
 //
-// Data: GET /cr/election/status (phase + heights) + GET /cr/elections
-// (summary per term). Both are cheap, cached server-side.
-//
-// Live refresh: during `voting` phase, re-fetch status on every `newBlock`
-// WebSocket event so the countdown advances without full page reloads.
+// Live refresh: during `voting` phase we re-fetch status on every
+// `newBlock` WebSocket event so the countdown advances in lockstep
+// with the chain. Outside voting, the 30s server cache means faster
+// polling is pointless.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
-import type { ElectionStatus, ElectionSummary } from '../types/blockchain';
-import { Vote, Users, FileText, Trophy, Radio } from 'lucide-react';
+import type {
+  ElectionStatus,
+  ElectionSummary,
+  ElectionCandidate,
+  ElectionPhase,
+  CRMember,
+} from '../types/blockchain';
+import { CR_STATE_COLORS } from '../types/blockchain';
+import { Vote, Users, Trophy, Radio, AlertTriangle, ExternalLink } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import Countdown from '../components/Countdown';
+import HashDisplay from '../components/HashDisplay';
+import GovernanceNav from '../components/GovernanceNav';
+import { formatVotes, safeExternalUrl } from '../utils/format';
 import { webSocketService } from '../services/websocket';
 
-const NAV_TABS = [
-  { label: 'Council Members', path: '/governance',           icon: Users },
-  { label: 'Proposals',       path: '/governance/proposals', icon: FileText },
-  { label: 'Elections',       path: '/governance/elections', icon: Vote },
-] as const;
-const ACTIVE_PATH = '/governance/elections';
+// Phase → page title/subtitle metadata. The icon in the circular
+// pill mirrors the tab icon for visual continuity.
+const PAGE_TITLE: Record<ElectionPhase, string> = {
+  duty: 'Council Members',
+  voting: 'DAO Elections',
+  claim: 'DAO Transition',
+  claiming: 'DAO Transition',
+  failed_restart: 'DAO Elections',
+  'pre-genesis': 'Council Members',
+};
+
+const HEADER_ICON = {
+  duty: Users,
+  voting: Vote,
+  claim: Radio,
+  claiming: Radio,
+  failed_restart: Vote,
+  'pre-genesis': Users,
+} as const;
+
+// Normalise older "claiming" emission to "claim" so downstream
+// conditionals only need to handle one spelling.
+function normalisePhase(phase: ElectionPhase): Exclude<ElectionPhase, 'claiming'> {
+  return phase === 'claiming' ? 'claim' : phase;
+}
 
 // Display helper — total-votes strings come back as decimal ELA from the
-// API (the backend runs selaToELA before serialising). We format with
-// locale thousands separators and cap fractional precision to keep the
-// card visually clean.
+// API. Compact format for cards (e.g. 2.8M, 470K).
 function fmtElaCompact(value: string | number): string {
   const n = typeof value === 'string' ? Number(value) : value;
   if (!Number.isFinite(n) || n === 0) return '0';
@@ -52,131 +84,214 @@ function fmtElaCompact(value: string | number): string {
 
 const Elections = () => {
   const [status, setStatus] = useState<ElectionStatus | null>(null);
+  const [members, setMembers] = useState<CRMember[]>([]);
   const [elections, setElections] = useState<ElectionSummary[]>([]);
+  const [targetCandidates, setTargetCandidates] = useState<ElectionCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Initial fetch — status, council roster, past-term archive all at once.
+  // Use allSettled so a single failing endpoint doesn't wipe the page.
   const fetchAll = useCallback(async () => {
     try {
       setError(null);
-      // Parallel — both endpoints are independent. Status failure
-      // shouldn't hide the archive; archive failure shouldn't hide
-      // the live state. We treat them as best-effort and only
-      // surface an error if BOTH fail.
-      const [statusRes, electionsRes] = await Promise.allSettled([
+      const [statusRes, membersRes, electionsRes] = await Promise.allSettled([
         blockchainApi.getElectionStatus(),
+        blockchainApi.getCRMembers(),
         blockchainApi.getCRElections(),
       ]);
       if (statusRes.status === 'fulfilled') setStatus(statusRes.value);
+      if (membersRes.status === 'fulfilled') setMembers(membersRes.value);
       if (electionsRes.status === 'fulfilled') setElections(electionsRes.value);
-      if (statusRes.status === 'rejected' && electionsRes.status === 'rejected') {
-        setError('Failed to fetch election data');
+      const allFailed = [statusRes, membersRes, electionsRes].every((r) => r.status === 'rejected');
+      if (allFailed) {
+        setError('Failed to fetch governance data');
       }
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  // During voting or claim, fetch the target term's candidates so the
+  // hero + inline list can show who's running / who's about to be seated.
+  const phase = status ? normalisePhase(status.phase) : undefined;
+  const needsTargetCandidates = phase === 'voting' || phase === 'claim';
+  const targetTerm = status?.targetTerm;
+
+  useEffect(() => {
+    if (!needsTargetCandidates || !targetTerm) {
+      setTargetCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    blockchainApi
+      .getCRElectionByTerm(targetTerm)
+      .then((data) => {
+        if (!cancelled) setTargetCandidates(data.candidates);
+      })
+      .catch(() => {
+        if (!cancelled) setTargetCandidates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsTargetCandidates, targetTerm]);
 
   // Live refresh during an active voting window. On every `newBlock`
   // event, re-poll status so the countdown decrements in step with the
-  // chain. Outside voting phase, no point — status only changes when
-  // the node's stage flips, and the 30s server-cache makes a faster
-  // poll pointless anyway.
-  //
-  // Must pair `registerConnection` with `unregisterConnection` so the
-  // shared WebSocket closes cleanly when no page is listening; otherwise
-  // the socket leaks across route transitions.
+  // chain. registerConnection / unregisterConnection pair keeps the
+  // shared WebSocket from leaking when the page unmounts.
   useEffect(() => {
-    if (status?.phase !== 'voting') return;
+    if (phase !== 'voting') return;
     webSocketService.registerConnection();
     const sub = webSocketService.subscribe('newBlock', () => {
-      blockchainApi.getElectionStatus().then(setStatus).catch(() => {
-        // Silently swallow — the shown state is still the last
-        // successful snapshot. The next block retries.
-      });
+      blockchainApi
+        .getElectionStatus()
+        .then(setStatus)
+        .catch(() => {
+          /* last snapshot stands until next block */
+        });
     });
     return () => {
       webSocketService.unsubscribe(sub);
       webSocketService.unregisterConnection();
     };
-  }, [status?.phase]);
+  }, [phase]);
 
-  if (loading && !status && elections.length === 0) return <PageSkeleton />;
+  // Past-term archive is every term the backend has finalized.
+  // The "elections" list is already ordered term DESC by the API.
+  const pastTerms = elections;
+
+  const headerMeta = useMemo(() => {
+    const effectivePhase: ElectionPhase = phase ?? 'duty';
+    const title = PAGE_TITLE[effectivePhase];
+    const Icon = HEADER_ICON[effectivePhase];
+    let subtitle = '';
+    if (effectivePhase === 'duty') {
+      subtitle = status
+        ? `${members.length} council members · Term ${status.currentCouncilTerm}`
+        : `${members.length} council members`;
+    } else if (effectivePhase === 'voting') {
+      subtitle = status
+        ? `${targetCandidates.length || '—'} candidates · Voting for Term ${status.targetTerm}`
+        : 'Live voting in progress';
+    } else if (effectivePhase === 'claim') {
+      subtitle = status
+        ? `Transition to Term ${status.targetTerm} · handover at block ${status.newCouncilTakeoverHeight.toLocaleString()}`
+        : 'Claim window active';
+    } else if (effectivePhase === 'failed_restart') {
+      subtitle = status
+        ? `Election restarted · Term ${status.currentCouncilTerm} council continues`
+        : 'Election restarted';
+    } else {
+      subtitle = 'Pre-genesis';
+    }
+    return { title, Icon, subtitle };
+  }, [phase, status, members.length, targetCandidates.length]);
+
+  if (loading && !status && members.length === 0 && elections.length === 0) {
+    return <PageSkeleton />;
+  }
 
   if (error) {
     return (
       <div className="px-4 lg:px-6 py-6 text-center">
         <p className="text-accent-red mb-4">{error}</p>
-        <button onClick={fetchAll} className="btn-primary">Retry</button>
+        <button onClick={fetchAll} className="btn-primary">
+          Retry
+        </button>
       </div>
     );
   }
 
-  const pastTerms = elections;
-  const totalCandidates = pastTerms.reduce((s, t) => s + t.candidates, 0);
-  const totalVotesAllTerms = pastTerms.reduce((s, t) => s + Number(t.totalVotes || 0), 0);
-
   return (
     <div className="px-4 lg:px-6 py-6 space-y-6">
       <SEO
-        title="Elastos DAO Elections"
-        description="Complete record of Elastos DAO council elections — every term, every candidate, every voter. Live view during active elections."
-        path="/governance/elections"
+        title={`Elastos ${headerMeta.title}`}
+        description="Elastos DAO council members and elections — source of truth for both current council and historical election results."
+        path="/governance"
       />
 
-      {/* Page header — same layout as CRCouncil + Proposals so the three
-          tabs feel like one surface with three views. */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div
             className="w-[30px] h-[30px] md:w-[36px] md:h-[36px] rounded-[8px] flex items-center justify-center"
             style={{ background: 'rgba(255, 159, 24, 0.1)' }}
           >
-            <Vote size={16} className="text-brand" />
+            {(() => {
+              const HeaderIcon = headerMeta.Icon;
+              return <HeaderIcon size={16} className="text-brand" />;
+            })()}
           </div>
           <div>
-            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">DAO Elections</h1>
-            <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">
-              {pastTerms.length} past term{pastTerms.length === 1 ? '' : 's'} ·{' '}
-              {totalCandidates} candidate{totalCandidates === 1 ? '' : 's'} ·{' '}
-              {fmtElaCompact(totalVotesAllTerms)} ELA cast
+            <h1 className="text-xl md:text-2xl font-[200] text-white tracking-[0.04em]">
+              {headerMeta.title}
+            </h1>
+            <p className="text-[11px] md:text-xs text-muted tracking-[0.48px]">{headerMeta.subtitle}</p>
+          </div>
+        </div>
+        <GovernanceNav activePath="/governance" phase={status?.phase} />
+      </div>
+
+      {/* Failed-restart banner — shown above everything so it can't be
+          missed. Elastos node restarts voting when < 12 active candidates. */}
+      {phase === 'failed_restart' && status && (
+        <div className="card border border-red-500/30 bg-red-500/5 p-4 flex items-start gap-3">
+          <AlertTriangle size={18} className="text-red-400 flex-shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-primary mb-1">Election restarted</p>
+            <p className="text-xs text-secondary">
+              {status.failedRestartReason ||
+                'The node restarted voting because fewer than 12 candidates received votes.'}{' '}
+              The current Term {status.currentCouncilTerm} council continues. Next voting window
+              opens at block{' '}
+              <span className="font-mono text-primary">
+                {status.nextVotingStartHeight.toLocaleString()}
+              </span>
+              .
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1 rounded-lg p-0.5 border border-[var(--color-border)]">
-          {NAV_TABS.map((tab) => {
-            const isActive = tab.path === ACTIVE_PATH;
-            const Icon = tab.icon;
-            return (
-              <Link
-                key={tab.path}
-                to={tab.path}
-                className={cn(
-                  'px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
-                  isActive ? 'bg-white text-black' : 'text-secondary hover:text-brand',
-                )}
-                aria-current={isActive ? 'page' : undefined}
-              >
-                <Icon size={12} />
-                {tab.label}
-              </Link>
-            );
-          })}
-        </div>
-      </div>
+      )}
 
-      {/* Status hero — phase-conditional. Each branch intentionally
-          uses the same card shape (card-accent with left brand bar) so
-          the page doesn't feel like a layout shift when phase flips. */}
-      {status && <StatusHero status={status} latestTerm={pastTerms[0]?.term} />}
+      {/* Phase-specific hero. duty has no hero — the members table IS the body. */}
+      {status && phase && phase !== 'duty' && phase !== 'pre-genesis' && (
+        <StatusHero status={status} targetCandidateCount={targetCandidates.length} />
+      )}
 
-      {/* Archive — always shown. The grid density follows the same
-          rhythm as the Staking page's StakerCards: one column on phone,
-          two on tablets, three on desktop. Card content is deliberately
-          sparse here — full detail lives on the per-term page so the
-          archive stays scan-able. */}
+      {/* Body — depends on phase. */}
+      {(phase === 'duty' || phase === 'pre-genesis' || phase === 'failed_restart') && (
+        <CouncilMembersTable members={members} loading={loading} />
+      )}
+
+      {phase === 'voting' && (
+        <CandidatesList
+          candidates={targetCandidates}
+          title={`Term ${status?.targetTerm ?? '?'} candidates`}
+          emptyLabel="Candidate list loading..."
+        />
+      )}
+
+      {phase === 'claim' && (
+        <>
+          <CandidatesList
+            candidates={targetCandidates.filter((c) => c.elected)}
+            title={`Incoming Term ${status?.targetTerm ?? '?'} council`}
+            emptyLabel="Loading incoming council..."
+          />
+          <CouncilMembersTable
+            members={members}
+            loading={loading}
+            headline={`Current Term ${status?.currentCouncilTerm} council (active until handover)`}
+          />
+        </>
+      )}
+
+      {/* History — shown below everything. Always present. */}
       {pastTerms.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-sm font-semibold text-primary tracking-[0.02em] flex items-center gap-2">
@@ -195,16 +310,20 @@ const Elections = () => {
 };
 
 /**
- * StatusHero renders the top-of-page block differently per election
- * phase. Keeping it as a subcomponent (rather than inline branches)
- * makes the intent of each branch legible and lets us add animations
- * later without bloating the parent.
+ * StatusHero — phase-conditional block shown above the body. Not
+ * rendered for duty (which uses the members table as its body) or
+ * pre-genesis.
  */
-function StatusHero({ status, latestTerm }: { status: ElectionStatus; latestTerm?: number }) {
-  // "Live voting" — the most interesting state. Full card treatment +
-  // pulsing indicator dot so the operator notices immediately.
-  if (status.phase === 'voting') {
-    const termForVote = latestTerm ? latestTerm + 1 : undefined;
+function StatusHero({
+  status,
+  targetCandidateCount,
+}: {
+  status: ElectionStatus;
+  targetCandidateCount: number;
+}) {
+  const phase = normalisePhase(status.phase);
+
+  if (phase === 'voting') {
     return (
       <div className="card-accent relative overflow-hidden p-4 sm:p-5 md:p-6">
         <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
@@ -223,10 +342,10 @@ function StatusHero({ status, latestTerm }: { status: ElectionStatus; latestTerm
               className="text-gradient-brand text-[22px] sm:text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em]"
               style={{ fontVariantNumeric: 'tabular-nums' }}
             >
-              {termForVote ? `Term ${termForVote}` : 'Current term'}
+              Term {status.targetTerm}
             </p>
             <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
-              Voting window closes at block{' '}
+              {targetCandidateCount} candidate{targetCandidateCount === 1 ? '' : 's'} · Voting closes at block{' '}
               <span className="font-mono text-primary">{status.votingEndHeight.toLocaleString()}</span>
             </p>
           </div>
@@ -242,29 +361,29 @@ function StatusHero({ status, latestTerm }: { status: ElectionStatus; latestTerm
     );
   }
 
-  // Claim window — newly elected members claiming seats. Between terms
-  // but not "idle". Muted tone since it's read-only from a voter's
-  // perspective.
-  if (status.phase === 'claiming') {
+  if (phase === 'claim') {
     return (
       <div className="card relative overflow-hidden p-4 sm:p-5 md:p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center">
           <div>
             <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2">
-              Claim period
+              CRClaimPeriod
             </p>
             <p className="text-lg md:text-xl font-semibold text-primary">
-              Newly-elected members are claiming their seats.
+              New Term {status.targetTerm} council is claiming seats.
             </p>
             <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
-              Voting closed at block{' '}
-              <span className="font-mono text-primary">{status.votingEndHeight.toLocaleString()}</span>
+              Current council remains active until block{' '}
+              <span className="font-mono text-primary">
+                {status.newCouncilTakeoverHeight.toLocaleString()}
+              </span>
+              .
             </p>
           </div>
           <Countdown
-            targetHeight={status.onDutyStartHeight}
+            targetHeight={status.newCouncilTakeoverHeight}
             currentHeight={status.currentHeight}
-            label="Next council on duty"
+            label="Handover in"
             size="hero"
             showHeight
           />
@@ -273,36 +392,27 @@ function StatusHero({ status, latestTerm }: { status: ElectionStatus; latestTerm
     );
   }
 
-  // Duty phase (most common state). The next election is the
-  // interesting fact; frame it as a countdown so operators know when
-  // to watch.
-  //
-  // Backend computes nextVotingStartHeight using the correct
-  // voting + claiming offset from on-duty-end — see the comment on
-  // getCRElectionStatus in governance.go for the formula. We just
-  // consume the authoritative value here.
-  if (status.phase === 'duty') {
-    const nextElectionOpensAt = status.nextVotingStartHeight;
+  if (phase === 'failed_restart') {
     return (
       <div className="card relative overflow-hidden p-4 sm:p-5 md:p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center">
           <div>
             <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2">
-              Next election
+              Next voting window
             </p>
             <p className="text-lg md:text-xl font-semibold text-primary">
-              Voting opens at block{' '}
-              <span className="font-mono">{nextElectionOpensAt.toLocaleString()}</span>
+              Voting reopens at block{' '}
+              <span className="font-mono">{status.nextVotingStartHeight.toLocaleString()}</span>
             </p>
             <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
-              Current council is seated until block{' '}
-              <span className="font-mono text-primary">{status.onDutyEndHeight.toLocaleString()}</span>.
+              Term {status.currentCouncilTerm} council continues until a valid election seats {' '}
+              <span className="text-primary">12</span> members.
             </p>
           </div>
           <Countdown
-            targetHeight={nextElectionOpensAt}
+            targetHeight={status.nextVotingStartHeight}
             currentHeight={status.currentHeight}
-            label="Voting opens in"
+            label="Voting reopens in"
             size="hero"
             showHeight
           />
@@ -311,16 +421,195 @@ function StatusHero({ status, latestTerm }: { status: ElectionStatus; latestTerm
     );
   }
 
-  // pre-genesis — rendered for completeness; never seen on mainnet.
   return null;
 }
 
 /**
- * TermCard — one past election summarised. The design mirrors
- * stakers / proposal cards: quiet card base, left brand accent bar,
- * rank + headline + metric row. Click targets the term's detail page.
+ * CouncilMembersTable — the live council roster. Reused in duty phase
+ * (body) and claim/failed_restart phase (context panel).
+ */
+function CouncilMembersTable({
+  members,
+  loading,
+  headline,
+}: {
+  members: CRMember[];
+  loading: boolean;
+  headline?: string;
+}) {
+  return (
+    <div className="card overflow-hidden">
+      {headline && (
+        <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)]">
+          <span className="text-sm font-medium text-primary">{headline}</span>
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="table-clean w-full">
+          <thead>
+            <tr>
+              <th className="w-16">#</th>
+              <th>Member</th>
+              <th className="hidden sm:table-cell">DID</th>
+              <th className="hidden md:table-cell">State</th>
+              <th>Elected By</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && members.length === 0 ? (
+              Array.from({ length: 12 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 5 }).map((_, j) => (
+                    <td key={j}>
+                      <div className="h-3 w-16 animate-shimmer rounded" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : members.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-12 text-center text-muted">
+                  No council members found
+                </td>
+              </tr>
+            ) : (
+              members.map((m) => {
+                const stateColor = CR_STATE_COLORS[m.state] || 'bg-gray-500/20 text-gray-400';
+                return (
+                  <tr key={m.cid || m.did || `cr-${m.rank}`}>
+                    <td>
+                      <span className="font-bold text-xs text-secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {m.rank}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-primary text-xs">{m.nickname || 'Unnamed'}</span>
+                        {safeExternalUrl(m.url) && (
+                          <a
+                            href={safeExternalUrl(m.url)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-muted hover:text-brand transition-colors"
+                          >
+                            <ExternalLink size={11} />
+                          </a>
+                        )}
+                      </div>
+                    </td>
+                    <td className="hidden sm:table-cell">
+                      <HashDisplay hash={m.did} length={10} showCopyButton={true} isClickable={false} />
+                    </td>
+                    <td className="hidden md:table-cell">
+                      <span className={cn('badge', stateColor)}>{m.state}</span>
+                    </td>
+                    <td>
+                      <span className="font-mono text-xs text-primary" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {formatVotes(m.votes)} ELA
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * CandidatesList — live candidate roster for voting phase; or
+ * incoming elected council for claim phase. Vote column stays
+ * visible (non-legacy terms always have real counts).
+ */
+function CandidatesList({
+  candidates,
+  title,
+  emptyLabel,
+}: {
+  candidates: ElectionCandidate[];
+  title: string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)]">
+        <span className="text-sm font-medium text-primary">{title}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="table-clean w-full">
+          <thead>
+            <tr>
+              <th className="w-16">#</th>
+              <th>Candidate</th>
+              <th>Votes</th>
+              <th>Voters</th>
+              <th className="hidden sm:table-cell">Elected</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candidates.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-12 text-center text-muted">
+                  {emptyLabel}
+                </td>
+              </tr>
+            ) : (
+              candidates.map((c) => (
+                <tr key={c.cid}>
+                  <td>
+                    <span
+                      className="font-bold text-xs text-secondary"
+                      style={{ fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {c.rank}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="font-semibold text-primary text-xs">{c.nickname || 'Unnamed'}</span>
+                  </td>
+                  <td>
+                    <span
+                      className="font-mono text-xs text-primary"
+                      style={{ fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {formatVotes(c.votes)} ELA
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className="font-mono text-xs text-muted"
+                      style={{ fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {c.voterCount}
+                    </span>
+                  </td>
+                  <td className="hidden sm:table-cell">
+                    {c.elected ? (
+                      <span className="badge bg-green-500/20 text-green-400">Elected</span>
+                    ) : (
+                      <span className="text-muted text-xs">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * TermCard — one past election summarised. Links to the detail page.
+ * For legacy terms (T1-T3), total-votes is displayed as "—" since the
+ * pre-BPoS era's vote counts aren't reconstructable from UTXO data.
  */
 function TermCard({ term }: { term: ElectionSummary }) {
+  const legacy = term.legacyEra === true;
   return (
     <Link
       to={`/governance/elections/${term.term}`}
@@ -329,7 +618,9 @@ function TermCard({ term }: { term: ElectionSummary }) {
       <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
       <div className="pl-1.5">
         <div className="flex items-baseline justify-between mb-2">
-          <span className="text-[10px] text-muted uppercase tracking-[0.18em]">Term</span>
+          <span className="text-[10px] text-muted uppercase tracking-[0.18em]">
+            Term {legacy && <span className="ml-1 text-[9px] text-muted/70">(pre-BPoS)</span>}
+          </span>
           <span
             className="text-lg font-semibold text-primary"
             style={{ fontVariantNumeric: 'tabular-nums' }}
@@ -343,12 +634,19 @@ function TermCard({ term }: { term: ElectionSummary }) {
             value={`${term.candidates}`}
             detail={term.electedCount ? `${term.electedCount} elected` : undefined}
           />
-          <Row label="Total votes" value={`${fmtElaCompact(term.totalVotes)} ELA`} />
+          <Row
+            label="Total votes"
+            value={legacy ? '—' : `${fmtElaCompact(term.totalVotes)} ELA`}
+          />
           <Row
             label="Voting window"
-            value={term.votingStartHeight && term.votingEndHeight
-              ? `${term.votingStartHeight.toLocaleString()} → ${term.votingEndHeight.toLocaleString()}`
-              : '—'}
+            value={
+              legacy
+                ? 'Pre-BPoS era'
+                : term.votingStartHeight && term.votingEndHeight
+                ? `${term.votingStartHeight.toLocaleString()} → ${term.votingEndHeight.toLocaleString()}`
+                : '—'
+            }
           />
         </div>
       </div>

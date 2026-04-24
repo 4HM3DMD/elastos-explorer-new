@@ -120,6 +120,10 @@ func (s *Server) getCRElections(w http.ResponseWriter, r *http.Request) {
 			"votingStartHeight": votingStart,
 			"votingEndHeight":   votingEnd,
 			"computedAt":        computedAt,
+			// Pre-BPoS era: T1-T3 ran on legacy OTVote with node-side
+			// seating filters we can't reconstruct. Frontend renders
+			// vote columns as "—" when this flag is set.
+			"legacyEra": term <= 3,
 		})
 	}
 	writeJSON(w, 200, elections)
@@ -184,6 +188,7 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		"term":              term,
 		"votingStartHeight": firstVotingStart,
 		"votingEndHeight":   firstVotingEnd,
+		"legacyEra":         term <= 3,
 		"candidates":        results,
 	})
 }
@@ -229,8 +234,10 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	const cacheKey = "crElectionStatus"
 	// Match aggregator.go + src/constants/governance.ts + mainnet values
 	// verified against elastos/Elastos.ELA common/config/config.go.
-	const crVotingPeriodBlocks = 21600
-	const crClaimingPeriodBlocks = 10080
+	const crFirstTermStart = int64(658930)
+	const crTermLength = int64(262800)
+	const crVotingPeriodBlocks = int64(21600)
+	const crClaimPeriodBlocks = int64(10080)
 
 	// Cheap path: recent cache hit, no node RPC at all.
 	if cached, ok := s.cache.Get(cacheKey); ok {
@@ -252,6 +259,9 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	// is showing (block list, tx list, etc. all key off the syncer).
 	currentHeight := s.syncer.LastHeight()
 
+	// Phase. "claim" is the Elastos canonical name for the post-voting
+	// window (CRClaimPeriod); we used to emit "claiming" but the
+	// frontend now expects "claim" to match the config constant.
 	phase := "duty"
 	switch {
 	case stage.InVoting:
@@ -259,10 +269,10 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	case !stage.OnDuty:
 		phase = "pre-genesis"
 	case currentHeight >= stage.VotingEndHeight && currentHeight < stage.OnDutyStartHeight:
-		phase = "claiming"
+		phase = "claim"
 	}
 
-	// Derive next-election window for "duty"/"claiming" phase — see
+	// Derive next-election window for "duty"/"claim" phase — see
 	// the doc comment for the formula. In "voting" phase these fields
 	// restate stage.VotingStartHeight/VotingEndHeight so the frontend
 	// has ONE field to read regardless of phase.
@@ -271,24 +281,85 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	case "voting":
 		nextVotingStart = stage.VotingStartHeight
 		nextVotingEnd = stage.VotingEndHeight
-	case "duty", "claiming":
+	case "duty", "claim":
 		if stage.OnDutyEndHeight > 0 {
-			nextVotingEnd = stage.OnDutyEndHeight - crClaimingPeriodBlocks - 1
+			nextVotingEnd = stage.OnDutyEndHeight - crClaimPeriodBlocks - 1
 			nextVotingStart = nextVotingEnd - crVotingPeriodBlocks + 1
 		}
 	}
 
+	// Derive per-term framing. currentCouncilTerm = term whose duty
+	// period contains currentHeight. targetTerm = term being elected,
+	// which during voting/claim/failed_restart corresponds to the next
+	// council, and during duty is simply currentCouncilTerm + 1.
+	currentCouncilTerm := int64(1)
+	if currentHeight >= crFirstTermStart {
+		currentCouncilTerm = 1 + (currentHeight-crFirstTermStart)/crTermLength
+	}
+	targetTerm := currentCouncilTerm + 1
+
+	// Claim-window boundaries. During voting: claim starts right after
+	// voting ends. During claim/duty: we can restate the windows for
+	// the upcoming cycle using the OnDutyEndHeight anchor.
+	var claimStart, claimEnd, newCouncilTakeover int64
+	switch phase {
+	case "voting":
+		claimStart = stage.VotingEndHeight + 1
+		claimEnd = claimStart + crClaimPeriodBlocks - 1
+		newCouncilTakeover = claimEnd + 1
+	case "claim":
+		// Currently in the claim window; node's OnDutyStartHeight tells us
+		// exactly when the new council is seated.
+		claimStart = stage.VotingEndHeight + 1
+		claimEnd = stage.OnDutyStartHeight - 1
+		newCouncilTakeover = stage.OnDutyStartHeight
+	case "duty":
+		// Project NEXT claim window from the derived next voting end.
+		if nextVotingEnd > 0 {
+			claimStart = nextVotingEnd + 1
+			claimEnd = claimStart + crClaimPeriodBlocks - 1
+			newCouncilTakeover = claimEnd + 1
+		}
+	}
+
+	// Failed-election detection. Elastos.ELA restarts voting if fewer
+	// than MemberCount (12) candidates have votes when the voting
+	// window closes: LastVotingStartHeight gets reset to the current
+	// height, old council stays seated, InElectionPeriod stays true.
+	// Symptom: we're in "voting" but VotingStartHeight is well past the
+	// canonical election-start height for targetTerm (= termStart of
+	// targetTerm minus the scheduled voting window).
+	failedRestart := false
+	var failedRestartReason any
+	if phase == "voting" && stage.VotingStartHeight > 0 {
+		expectedTermStart := crFirstTermStart + (targetTerm-1)*crTermLength
+		expectedVotingStart := expectedTermStart - crClaimPeriodBlocks - crVotingPeriodBlocks
+		// Allow a small slack for block-time drift (a few blocks).
+		if stage.VotingStartHeight > expectedVotingStart+10 {
+			failedRestart = true
+			failedRestartReason = "candidates count less than required count"
+			phase = "failed_restart"
+		}
+	}
+
 	resp := map[string]any{
-		"phase":                  phase,
-		"currentHeight":          currentHeight,
-		"inVoting":               stage.InVoting,
-		"onDuty":                 stage.OnDuty,
-		"votingStartHeight":      stage.VotingStartHeight,
-		"votingEndHeight":        stage.VotingEndHeight,
-		"onDutyStartHeight":      stage.OnDutyStartHeight,
-		"onDutyEndHeight":        stage.OnDutyEndHeight,
-		"nextVotingStartHeight":  nextVotingStart,
-		"nextVotingEndHeight":    nextVotingEnd,
+		"phase":                    phase,
+		"currentHeight":            currentHeight,
+		"currentCouncilTerm":       currentCouncilTerm,
+		"targetTerm":               targetTerm,
+		"inVoting":                 stage.InVoting,
+		"onDuty":                   stage.OnDuty,
+		"votingStartHeight":        stage.VotingStartHeight,
+		"votingEndHeight":          stage.VotingEndHeight,
+		"onDutyStartHeight":        stage.OnDutyStartHeight,
+		"onDutyEndHeight":          stage.OnDutyEndHeight,
+		"claimStartHeight":         claimStart,
+		"claimEndHeight":           claimEnd,
+		"newCouncilTakeoverHeight": newCouncilTakeover,
+		"nextVotingStartHeight":    nextVotingStart,
+		"nextVotingEndHeight":      nextVotingEnd,
+		"failedRestart":            failedRestart,
+		"failedRestartReason":      failedRestartReason,
 	}
 
 	s.cache.Set(cacheKey, resp)

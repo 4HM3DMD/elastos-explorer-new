@@ -399,17 +399,36 @@ export interface CRMember {
 // during pre-genesis) — backend computes them from onDutyEndHeight during
 // duty/claiming phases, and echoes the node's values during voting. Use
 // these directly instead of re-deriving on the client.
+export type ElectionPhase =
+  | 'voting'
+  | 'claim'
+  | 'duty'
+  | 'failed_restart'
+  | 'pre-genesis'
+  // Legacy compatibility: the older backend emitted "claiming" for the
+  // post-voting window. Newer builds emit "claim" to match Elastos's
+  // canonical CRClaimPeriod spelling. Keep both so a rolling deploy
+  // doesn't break the UI mid-swap.
+  | 'claiming';
+
 export interface ElectionStatus {
-  phase: 'voting' | 'claiming' | 'duty' | 'pre-genesis';
+  phase: ElectionPhase;
   currentHeight: number;
+  currentCouncilTerm: number;
+  targetTerm: number;
   inVoting: boolean;
   onDuty: boolean;
   votingStartHeight: number;
   votingEndHeight: number;
   onDutyStartHeight: number;
   onDutyEndHeight: number;
+  claimStartHeight: number;
+  claimEndHeight: number;
+  newCouncilTakeoverHeight: number;
   nextVotingStartHeight: number;
   nextVotingEndHeight: number;
+  failedRestart: boolean;
+  failedRestartReason: string | null;
 }
 
 // Entry from GET /api/v1/cr/elections (per-term summary).
@@ -421,6 +440,7 @@ export interface ElectionSummary {
   votingStartHeight: number;
   votingEndHeight: number;
   computedAt?: number;
+  legacyEra?: boolean;
 }
 
 // One candidate row from GET /api/v1/cr/elections/{term}.
@@ -439,6 +459,7 @@ export interface ElectionTermDetail {
   term: number;
   votingStartHeight: number;
   votingEndHeight: number;
+  legacyEra?: boolean;
   candidates: ElectionCandidate[];
 }
 

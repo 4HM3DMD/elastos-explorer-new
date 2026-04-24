@@ -181,6 +181,17 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			// after that is in scope for this term's election.
 			break
 		}
+		// Vote ADD/SUB events outside the voting window are dropped
+		// entirely (even if within [narrowEnd, snapshotHeight]). The
+		// node's election tally is the state AT narrowEnd; consumptions
+		// in the claim period do NOT retroactively reduce counts, and
+		// no new adds can happen after voting closes. Only state
+		// transitions (Register/Update/Unregister/ReturnDeposit) during
+		// the claim period are processed here — mainly to pick up DIDs
+		// added late via TxUpdateCR.
+		if (ev.kind == evVoteAdd || ev.kind == evVoteSub) && ev.height > narrowEnd {
+			continue
+		}
 		switch ev.kind {
 		case evRegister:
 			c := getOrCreate(ev.cid)

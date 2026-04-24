@@ -291,7 +291,7 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 	//
 	// Gated by a sync_state key so it runs exactly once per deploy of
 	// this fix. Subsequent boots no-op unless the key value changes.
-	const tallyReplayVersion = "replay-backed-v6-snapshot-at-termstart"
+	const tallyReplayVersion = "replay-backed-v7-state-at-termstart-votes-at-narrowend"
 	var replayVer string
 	_ = pool.QueryRow(ctx, `SELECT value FROM sync_state WHERE key = 'tally_replay_version'`).Scan(&replayVer)
 	if replayVer != tallyReplayVersion {

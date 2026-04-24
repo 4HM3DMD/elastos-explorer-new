@@ -274,6 +274,48 @@ func runDataHeals(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 
+	// Heal #9 (2026-04 replay-backed tally rebuild) — one-shot clear of
+	// cr_election_tallies so the aggregator repopulates every term's row
+	// from the new replay-based path. Previous rows were written by the
+	// legacy window-bounded SQL path that couldn't distinguish recurring
+	// incumbents (carry prior-term votes) from recurring non-seated
+	// candidates (don't). Result: Term 6 had Rebecca Zhu at rank 1 or
+	// missed 4HM3D below j-z-007, depending on the specific bug.
+	//
+	// Replay reads (term-1)'s top-12 from cr_election_tallies to decide
+	// which candidates' prior-term unspent votes carry forward. The
+	// aggregator already iterates terms in order (1→N), so after this
+	// clear the first refresh cycle will replay term 1 (no prior, empty
+	// seated set), write it, then replay term 2 reading term 1's fresh
+	// top-12, and so on up to the current on-duty term.
+	//
+	// Gated by a sync_state key so it runs exactly once per deploy of
+	// this fix. Subsequent boots no-op unless the key value changes.
+	const tallyReplayVersion = "replay-backed-v1"
+	var replayVer string
+	_ = pool.QueryRow(ctx, `SELECT value FROM sync_state WHERE key = 'tally_replay_version'`).Scan(&replayVer)
+	if replayVer != tallyReplayVersion {
+		res9, err := pool.Exec(ctx, `DELETE FROM cr_election_tallies`)
+		if err != nil {
+			slog.Warn("heal #9 (replay-backed tally rebuild) failed", "error", err)
+		} else {
+			n := res9.RowsAffected()
+			if _, err := pool.Exec(ctx,
+				`INSERT INTO sync_state (key, value) VALUES ('tally_replay_version', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = $1`,
+				tallyReplayVersion,
+			); err != nil {
+				slog.Warn("heal #9 (version flag) write failed", "error", err)
+			}
+			if n > 0 {
+				slog.Warn("data-heal applied: cleared cr_election_tallies for replay rebuild",
+					"heal", "replay-backed-rebuild",
+					"rows_cleared", n,
+					"note", "aggregator will replay all terms in order next cycle")
+			}
+		}
+	}
+
 	// Heal #7 (2026-04 TxVoting CRC over-deactivation rollback) — undo the
 	// damage done by a prior version of Heal #4 that matched
 	// `(v.vout_n = -1 AND tv.prev_vout = 0)` and thus marked CRC vote rows

@@ -123,41 +123,60 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 	slog.Info("vote replay: starting", "term", term, "narrowStart", narrowStart, "narrowEnd", narrowEnd)
 	started := time.Now()
 
-	// 1a. Load the set of candidates currently seated per cr_members
-	//     (source: listcurrentcrs, refreshed every 120s by the aggregator).
-	//     This is our heuristic for "was this candidate a seated council
-	//     member in the previous term" — empirically the signal the node
-	//     uses to decide which candidates' prior-term votes carry forward
-	//     to the new term's tally.
+	// 1a. Load the set of candidates who were SEATED IN THE PRIOR TERM.
+	//     Per empirical observation on Term 6 data, the node carries a
+	//     recurring candidate's prior-term unspent CRC votes across a
+	//     re-registration boundary only if that candidate was actually
+	//     seated (top-12) in the previous term. Non-seated prior
+	//     candidates start fresh at Votes=0 and only accumulate votes
+	//     cast during the current term's voting window.
 	//
-	// Recurring seated members (chen2rong2, Igor, Sash, Tyro, gelaxy)
-	// accumulate votes across their multi-term candidacies; our replay
-	// must count ALL their unspent votes at narrowEnd. Non-seated
-	// candidates (Rebecca Zhu, j-z-007) don't get the prior-term
-	// carry — only votes cast during THIS term's voting window count.
+	// Source of truth: cr_election_tallies rows for (term - 1) where
+	// elected = TRUE. This self-consistently chains across terms — to
+	// get Term 6 right you need Term 5's top-12, which needs Term 4's,
+	// and so on back to Term 1 (which has no prior and thus uses the
+	// empty set, meaning no carry-over for any candidate).
 	//
-	// This is an approximation: we use "currently seated" as a proxy for
-	// "was seated in the immediately-prior term". Matches empirically
-	// across Term 6's 12 seated members and known non-seated candidates.
-	// If it breaks for an edge case, revisit by consulting historical
-	// cr_election_tallies for the previous term.
+	// Fallback: if (term - 1) tallies aren't populated yet (first run,
+	// pre-heal state), fall back to cr_members current seating. This
+	// keeps the admin-endpoint path working from day one and works
+	// precisely for the on-duty term since current-seating ≈ prior-
+	// term-seating for the on-duty term.
 	seatedCIDs := map[string]bool{}
-	seatedRows, seatedErr := a.db.API.Query(ctx, `
-		SELECT cid FROM cr_members
-		WHERE state IN ('Elected', 'Inactive', 'Impeached')`)
-	if seatedErr == nil {
-		for seatedRows.Next() {
-			var cid string
-			if seatedRows.Scan(&cid) == nil {
-				seatedCIDs[cid] = true
+	if term > 1 {
+		priorRows, priorErr := a.db.API.Query(ctx, `
+			SELECT candidate_cid FROM cr_election_tallies
+			WHERE term = $1 AND elected = TRUE`, term-1)
+		if priorErr == nil {
+			for priorRows.Next() {
+				var cid string
+				if priorRows.Scan(&cid) == nil {
+					seatedCIDs[cid] = true
+				}
 			}
+			priorRows.Close()
 		}
-		seatedRows.Close()
-	} else {
-		slog.Warn("vote replay: seated-CID lookup failed, using window-only for ALL candidates",
-			"error", seatedErr)
 	}
-	slog.Info("vote replay: seated CIDs loaded", "term", term, "count", len(seatedCIDs))
+	if len(seatedCIDs) == 0 && term > 1 {
+		// Fallback: prior-term tally isn't populated yet. Use
+		// cr_members current state — works well for the on-duty term.
+		fallbackRows, fallbackErr := a.db.API.Query(ctx, `
+			SELECT cid FROM cr_members
+			WHERE state IN ('Elected', 'Inactive', 'Impeached')`)
+		if fallbackErr == nil {
+			for fallbackRows.Next() {
+				var cid string
+				if fallbackRows.Scan(&cid) == nil {
+					seatedCIDs[cid] = true
+				}
+			}
+			fallbackRows.Close()
+			slog.Info("vote replay: prior-term tally empty, using cr_members fallback",
+				"term", term, "fallback_count", len(seatedCIDs))
+		}
+	}
+	slog.Info("vote replay: seated CIDs loaded",
+		"term", term, "source_term", term-1, "count", len(seatedCIDs))
 
 	// 1. Load all events in one pass, sort by height + subOrder.
 	events, err := a.loadReplayEvents(ctx, narrowEnd)

@@ -740,95 +740,57 @@ func (a *Aggregator) refreshElectionTallies(ctx context.Context) error {
 //
 // Aggregates: SUM(amount_sela) and COUNT(DISTINCT address) per candidate.
 func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart, narrowEnd, termStart, currentOnDutyTerm int64) error {
+	// Authoritative path: state-machine replay. Mirrors the node's
+	// `processVoteCRC` / `processVoteCancel` running-counter semantics
+	// and chains across terms by reading (term-1)'s top-12 from
+	// cr_election_tallies as the "prior-term seated" set. This is the
+	// only algorithm that matched the node's live observation and the
+	// currently-seated Term 6 council.
+	//
+	// Legacy SQL path (window-bounded per-voter latest-vote summing) is
+	// preserved in git history for reference. It could not differentiate
+	// recurring incumbents (who carry prior votes) from recurring
+	// non-seated candidates (who don't), so it produced wrong rankings
+	// for any term with a non-seated recurring candidate like Rebecca
+	// Zhu in Term 6.
+	_ = narrowStart
+	_ = narrowEnd
+	_ = termStart
+
+	result, err := a.ReplayTermTally(ctx, term)
+	if err != nil {
+		return fmt.Errorf("replay term %d: %w", term, err)
+	}
+
+	// Delete old rows for this term (idempotent rebuild).
 	if _, err := a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies WHERE term = $1`, term); err != nil {
 		return fmt.Errorf("delete old tally: %w", err)
 	}
 
-	// termStart is kept in the signature for forward-compat but the
-	// window-bounded query no longer uses it directly — the bound is
-	// [narrowStart, narrowEnd] which ends BEFORE termStart by design
-	// (claim period sits between them).
-	_ = termStart
-
-	_, err := a.db.Syncer.Exec(ctx, `
-		INSERT INTO cr_election_tallies (term, candidate_cid, nickname, final_votes_sela, voter_count,
-			voting_start_height, voting_end_height, rank, elected, computed_at)
-		SELECT
-			$1,
-			v.candidate,
-			COALESCE(cr.nickname, ''),
-			SUM(v.amount_sela),
-			COUNT(DISTINCT v.address),
-			$2,
-			$3,
-			0,
-			FALSE,
-			EXTRACT(EPOCH FROM NOW())::BIGINT
-		FROM votes v
-		JOIN (
-			-- Latest in-window vote per voter. Deduplicates voters who
-			-- submitted multiple TxVotings within the same window.
-			SELECT address, MAX(stake_height) AS max_h
-			FROM votes
-			WHERE vote_type = 1
-			  AND stake_height BETWEEN $2 AND $3
-			GROUP BY address
-		) latest ON v.address = latest.address AND v.stake_height = latest.max_h
-		LEFT JOIN cr_members cr ON cr.cid = v.candidate
-		WHERE v.vote_type = 1
-		  AND v.stake_height BETWEEN $2 AND $3
-		  -- Exclude votes spent BEFORE the election closed. Spent after
-		  -- is fine — the election snapshot captures state at narrowEnd,
-		  -- post-close changes (returnVotes, replacement) are future
-		  -- terms' concern.
-		  AND (v.spent_height IS NULL OR v.spent_height > $3)
-		GROUP BY v.candidate, cr.nickname`,
-		term, narrowStart, narrowEnd,
-	)
-	if err != nil {
-		return fmt.Errorf("insert tally: %w", err)
+	// Insert each replay candidate. The `elected` flag is set from
+	// Rank <= 12 in the replay output. For the on-duty term, override
+	// with cr_members.state after insert (same rule as before) so the
+	// displayed elected set follows live impeachments / inactive-node
+	// transitions.
+	for _, cand := range result.Candidates {
+		_, err := a.db.Syncer.Exec(ctx, `
+			INSERT INTO cr_election_tallies (
+				term, candidate_cid, nickname, final_votes_sela, voter_count,
+				voting_start_height, voting_end_height, rank, elected, computed_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, EXTRACT(EPOCH FROM NOW())::BIGINT)`,
+			term, cand.CID, cand.Nickname, cand.VotesSela, cand.VoterCount,
+			result.NarrowStart, result.NarrowEnd, cand.Rank, cand.Elected,
+		)
+		if err != nil {
+			return fmt.Errorf("insert tally row: %w", err)
+		}
 	}
 
-	if _, err := a.db.Syncer.Exec(ctx, `
-		UPDATE cr_election_tallies SET rank = sub.rn, elected = (sub.rn <= 12)
-		FROM (
-			SELECT candidate_cid, ROW_NUMBER() OVER (ORDER BY final_votes_sela DESC) AS rn
-			FROM cr_election_tallies
-			WHERE term = $1
-		) sub
-		WHERE cr_election_tallies.term = $1 AND cr_election_tallies.candidate_cid = sub.candidate_cid`,
-		term,
-	); err != nil {
-		return fmt.Errorf("assign ranks: %w", err)
-	}
-
-	// Elected-flag override for the CURRENTLY SEATED term.
-	//
-	// Without this, `elected` is set purely from rank: top-12 by votes.
-	// That is wrong for the in-flight term because the actual council
-	// can differ from raw top-12:
-	//   - A top-voted candidate can fail to claim their seat within the
-	//     claim window → they were highest-voted but never seated.
-	//   - A seated member can be impeached and REPLACED by the next-
-	//     ranked candidate, who then IS on the council despite being
-	//     rank 13+ by votes.
-	//   - Some elected members may have state='Inactive' (node down)
-	//     but are still legally seated.
-	//
-	// cr_members reflects the node's current view of the council via
-	// listcrcandidates (updated every 120s by refreshCRMembers).
-	// State semantics — verified against mainchain + operator confirmation:
-	//   'Elected'   → currently seated, node active
-	//   'Inactive'  → currently seated, node offline (still a council member)
-	//   'Impeached' → was seated this term; node may have replaced them,
-	//                 but the impeachment record makes them historically
-	//                 elected (include in elected set)
-	// Anything else (Unknown / Returned / Pending / Canceled) → NOT seated.
-	//
-	// Only applied for the on-duty term. Past terms don't have reliable
-	// live state in cr_members (the table is a single-row-per-cid snapshot
-	// of the CURRENT committee, not per-term history), so rank-based is
-	// the best available approximation.
+	// Override elected flag from live cr_members state for the on-duty
+	// term only. Past terms: replay's top-12 flag is authoritative. The
+	// override matters when a mid-term impeachment replaces a rank-≤12
+	// candidate with a rank-13+ candidate; cr_members reflects the node's
+	// current council view via listcurrentcrs (refreshed every 120s).
 	if term == currentOnDutyTerm {
 		if _, err := a.db.Syncer.Exec(ctx, `
 			UPDATE cr_election_tallies et
@@ -840,18 +802,16 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 			WHERE et.term = $1`,
 			term,
 		); err != nil {
-			// Non-fatal: fall back to rank-based elected flag so the
-			// tally is still usable if cr_members sync hiccupped.
 			slog.Warn("election tally: elected-flag sync from cr_members failed",
 				"term", term, "error", err,
-				"note", "falling back to rank-based top-12 heuristic")
+				"note", "falling back to rank-based top-12 from replay")
 		}
 	}
 
-	var count int64
-	_ = a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM cr_election_tallies WHERE term = $1`, term).Scan(&count)
-
-	slog.Info("election tally computed", "term", term, "candidates", count)
+	slog.Info("election tally computed via replay",
+		"term", term,
+		"candidates", result.TotalCandidates,
+		"distinct_voters", result.TotalVotersDistinct)
 	return nil
 }
 

@@ -746,16 +746,20 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	// cr_election_tallies as the "prior-term seated" set. This is the
 	// only algorithm that matched the node's live observation and the
 	// currently-seated Term 6 council.
-	//
-	// Legacy SQL path (window-bounded per-voter latest-vote summing) is
-	// preserved in git history for reference. It could not differentiate
-	// recurring incumbents (who carry prior votes) from recurring
-	// non-seated candidates (who don't), so it produced wrong rankings
-	// for any term with a non-seated recurring candidate like Rebecca
-	// Zhu in Term 6.
+
+	// Terms 1-3 ran on pre-DPoSv2 Elastos (before block 1,405,000). The
+	// 2020-2022-era election rules can't be perfectly reconstructed
+	// from UTXO data alone — specific candidates with higher raw vote
+	// totals were excluded by node-internal mechanics not fully
+	// captured in the current master source. For those terms, show
+	// only the 12 seated council members (authoritative via on-chain
+	// proposal-review records) with vote totals zeroed out so the
+	// frontend doesn't imply an inaccurate ranking.
+	if term <= 3 {
+		return a.computeLegacyTermTally(ctx, term, termStart)
+	}
 	_ = narrowStart
 	_ = narrowEnd
-	// termStart is used below for the past-term proposal-review override.
 
 	result, err := a.ReplayTermTally(ctx, term)
 	if err != nil {
@@ -871,6 +875,89 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 		"term", term,
 		"candidates", result.TotalCandidates,
 		"distinct_voters", result.TotalVotersDistinct)
+	return nil
+}
+
+// computeLegacyTermTally handles Terms 1-3 which ran on pre-DPoSv2 Elastos
+// (before DPoSV2StartHeight = 1,405,000). The election rules in that era
+// can't be perfectly reconstructed from UTXO data — specific candidates
+// were excluded by node-internal filters not fully captured in the
+// current Elastos.ELA master source (likely changed between 2020-v0.5.x
+// and current). Rather than display misleading raw vote counts that
+// don't match the node's historical seating decision, we show ONLY the
+// 12 seated council members by name (authoritative from on-chain
+// cr_proposal_reviews) with vote totals zeroed.
+//
+// Frontend should render zero-vote elected candidates as "Council
+// Member" without a ELA total.
+func (a *Aggregator) computeLegacyTermTally(ctx context.Context, term, termStart int64) error {
+	nextTermStart := termStart + CRTermLength
+
+	// Clear any prior rows for this term.
+	if _, err := a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies WHERE term = $1`, term); err != nil {
+		return fmt.Errorf("legacy tally: delete: %w", err)
+	}
+
+	// Insert exactly the seated council members. DIDs come from
+	// cr_proposal_reviews for the term's on-duty window; map them to
+	// cr_members to get CID + nickname. Rank is assigned deterministically
+	// by first-review-block so the order is at least historically meaningful
+	// (earliest active member first).
+	rows, err := a.db.Syncer.Query(ctx, `
+		WITH term_reviewers AS (
+			SELECT pr.did, MIN(pr.review_height) AS first_review_h
+			FROM cr_proposal_reviews pr
+			WHERE pr.review_height >= $2 AND pr.review_height < $3
+			GROUP BY pr.did
+		)
+		SELECT cm.cid, COALESCE(cm.nickname, '') AS nickname, tr.first_review_h
+		FROM term_reviewers tr
+		JOIN cr_members cm ON cm.did = tr.did
+		ORDER BY tr.first_review_h`,
+		term, termStart, nextTermStart,
+	)
+	if err != nil {
+		return fmt.Errorf("legacy tally: query reviewers: %w", err)
+	}
+	defer rows.Close()
+
+	type member struct {
+		cid      string
+		nickname string
+	}
+	var members []member
+	for rows.Next() {
+		var m member
+		var firstH int64
+		if err := rows.Scan(&m.cid, &m.nickname, &firstH); err != nil {
+			continue
+		}
+		members = append(members, m)
+	}
+	rows.Close()
+
+	if len(members) == 0 {
+		slog.Warn("legacy tally: no proposal reviewers found for term — no rows inserted",
+			"term", term, "termStart", termStart, "nextTermStart", nextTermStart)
+		return nil
+	}
+
+	for i, m := range members {
+		_, err := a.db.Syncer.Exec(ctx, `
+			INSERT INTO cr_election_tallies (
+				term, candidate_cid, nickname, final_votes_sela, voter_count,
+				voting_start_height, voting_end_height, rank, elected, computed_at
+			) VALUES ($1, $2, $3, 0, 0, 0, 0, $4, TRUE, EXTRACT(EPOCH FROM NOW())::BIGINT)`,
+			term, m.cid, m.nickname, i+1,
+		)
+		if err != nil {
+			return fmt.Errorf("legacy tally: insert member %d: %w", i, err)
+		}
+	}
+
+	slog.Info("legacy election tally inserted (names-only)",
+		"term", term, "members", len(members),
+		"note", "pre-DPoSv2 era; vote counts not shown due to reconstruction limits")
 	return nil
 }
 

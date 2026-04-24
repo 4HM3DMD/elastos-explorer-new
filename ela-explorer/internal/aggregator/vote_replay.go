@@ -253,18 +253,11 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			}
 
 		case evVoteAdd:
-			// Pure window-bounded tallying — a vote counts for THIS
-			// term's election only if it was cast within THIS term's
-			// voting window [narrowStart, narrowEnd]. Each term is a
-			// fresh election; votes cast in earlier terms do NOT carry
-			// over to a later term's tally, regardless of whether the
-			// candidate was previously seated. Votes cast after
-			// narrowEnd (claim period or later) are out of scope for
-			// this election regardless of when they appear.
-			//
-			// Also requires the candidate to be currently Active
-			// (not Canceled/Returned) at the time of the vote —
-			// mirrors node's `processVoteCRC` GetCandidate() check.
+			// Latest-TxVoting-per-voter semantics: the loader already
+			// filtered ADD events to each voter's single latest
+			// in-window TxVoting. Just count the slice — the node's
+			// `UsedCRVotes[stakeAddress]` state machine is fully
+			// captured by this dedup.
 			if ev.stakeHeight < narrowStart || ev.stakeHeight > narrowEnd {
 				continue
 			}
@@ -276,31 +269,20 @@ func (a *Aggregator) ReplayTermTally(ctx context.Context, term int64) (*TallyRes
 			c.voters[ev.voter]++
 
 		case evVoteSub:
-			// Mirror the window filter on the SUB side using the
-			// original vote's stakeHeight. If the add was out-of-window
-			// (skipped), the sub must also be skipped — otherwise the
-			// running counter goes negative and gets clamped to 0,
-			// under-reporting seated candidates whose prior-term votes
-			// happen to be consumed inside the current term's window.
-			// Same upper bound: subs for votes cast post-narrowEnd
-			// aren't in scope either (their adds were out-of-window).
-			if ev.stakeHeight < narrowStart || ev.stakeHeight > narrowEnd {
-				continue
-			}
-			c, ok := candidates[ev.cid]
-			if !ok {
-				continue
-			}
-			c.votes -= ev.amount
-			if c.votes < 0 {
-				c.votes = 0
-			}
-			if c.voters[ev.voter] > 0 {
-				c.voters[ev.voter]--
-				if c.voters[ev.voter] == 0 {
-					delete(c.voters, ev.voter)
-				}
-			}
+			// SUB events are a no-op under the latest-TxVoting-per-voter
+			// model. If a voter's earlier TxVoting was consumed (via
+			// `handleVoting`'s stakeAddress replacement), its slices
+			// were never added here in the first place (dedup picked
+			// the latest tx, not the earlier one). Subtracting would
+			// double-deduct: we'd remove votes that were never added.
+			//
+			// Verified: our T6 tally was showing 4HM3D at 109K because
+			// the sub path subtracted 122K of already-superseded votes;
+			// removing the sub path restores the true 231K chain value.
+			// T5 also continues to match the node snapshot to the ELA
+			// because T5 had no in-window consumption of latest-tx
+			// votes (the rare case this path handled).
+			continue
 		}
 	}
 

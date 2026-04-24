@@ -842,6 +842,31 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 		}
 	}
 
+	// Re-rank: elected members get ranks 1..N (by votes desc), non-elected
+	// follow at N+1.. The node's election isn't strictly top-12 by the
+	// raw votes we compute (it applies additional filters — minimum
+	// deposit, DID timing, impeachment, etc.), so sorting purely by
+	// votes would put some non-elected candidates above real council
+	// members. Users find that confusing. The stored vote counts are
+	// the real chain data; only the DISPLAY order is adjusted so the
+	// seated 12 come first.
+	if _, err := a.db.Syncer.Exec(ctx, `
+		UPDATE cr_election_tallies et SET rank = sub.new_rank
+		FROM (
+			SELECT candidate_cid,
+				ROW_NUMBER() OVER (
+					ORDER BY elected DESC, final_votes_sela DESC, candidate_cid ASC
+				) AS new_rank
+			FROM cr_election_tallies
+			WHERE term = $1
+		) sub
+		WHERE et.term = $1 AND et.candidate_cid = sub.candidate_cid`,
+		term,
+	); err != nil {
+		slog.Warn("election tally: re-rank by elected-first failed",
+			"term", term, "error", err)
+	}
+
 	slog.Info("election tally computed via replay",
 		"term", term,
 		"candidates", result.TotalCandidates,

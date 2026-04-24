@@ -907,14 +907,14 @@ func (a *Aggregator) computeLegacyTermTally(ctx context.Context, term, termStart
 		WITH term_reviewers AS (
 			SELECT pr.did, MIN(pr.review_height) AS first_review_h
 			FROM cr_proposal_reviews pr
-			WHERE pr.review_height >= $2 AND pr.review_height < $3
+			WHERE pr.review_height >= $1 AND pr.review_height < $2
 			GROUP BY pr.did
 		)
 		SELECT cm.cid, COALESCE(cm.nickname, '') AS nickname, tr.first_review_h
 		FROM term_reviewers tr
 		JOIN cr_members cm ON cm.did = tr.did
 		ORDER BY tr.first_review_h`,
-		term, termStart, nextTermStart,
+		termStart, nextTermStart,
 	)
 	if err != nil {
 		return fmt.Errorf("legacy tally: query reviewers: %w", err)

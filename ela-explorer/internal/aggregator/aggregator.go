@@ -893,70 +893,54 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 func (a *Aggregator) computeLegacyTermTally(ctx context.Context, term, termStart int64) error {
 	nextTermStart := termStart + CRTermLength
 
-	// Clear any prior rows for this term.
+	// Clear any prior rows for this term, then insert one row per seated
+	// council member in a single INSERT FROM SELECT. Single-statement
+	// approach avoids any connection-pool weirdness from iterating rows
+	// and then Exec'ing inside the loop. Rank is assigned via ROW_NUMBER
+	// ordered by first_review_block so the display order reflects when
+	// each member first became active.
 	if _, err := a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies WHERE term = $1`, term); err != nil {
 		return fmt.Errorf("legacy tally: delete: %w", err)
 	}
 
-	// Insert exactly the seated council members. DIDs come from
-	// cr_proposal_reviews for the term's on-duty window; map them to
-	// cr_members to get CID + nickname. Rank is assigned deterministically
-	// by first-review-block so the order is at least historically meaningful
-	// (earliest active member first).
-	rows, err := a.db.Syncer.Query(ctx, `
-		WITH term_reviewers AS (
+	tag, err := a.db.Syncer.Exec(ctx, `
+		INSERT INTO cr_election_tallies (
+			term, candidate_cid, nickname, final_votes_sela, voter_count,
+			voting_start_height, voting_end_height, rank, elected, computed_at
+		)
+		SELECT
+			$1 AS term,
+			cm.cid AS candidate_cid,
+			COALESCE(cm.nickname, '') AS nickname,
+			0 AS final_votes_sela,
+			0 AS voter_count,
+			0 AS voting_start_height,
+			0 AS voting_end_height,
+			ROW_NUMBER() OVER (ORDER BY tr.first_review_h)::int AS rank,
+			TRUE AS elected,
+			EXTRACT(EPOCH FROM NOW())::BIGINT AS computed_at
+		FROM (
 			SELECT pr.did, MIN(pr.review_height) AS first_review_h
 			FROM cr_proposal_reviews pr
-			WHERE pr.review_height >= $1 AND pr.review_height < $2
+			WHERE pr.review_height >= $2 AND pr.review_height < $3
 			GROUP BY pr.did
-		)
-		SELECT cm.cid, COALESCE(cm.nickname, '') AS nickname, tr.first_review_h
-		FROM term_reviewers tr
-		JOIN cr_members cm ON cm.did = tr.did
-		ORDER BY tr.first_review_h`,
-		termStart, nextTermStart,
+		) tr
+		JOIN cr_members cm ON cm.did = tr.did`,
+		term, termStart, nextTermStart,
 	)
 	if err != nil {
-		return fmt.Errorf("legacy tally: query reviewers: %w", err)
+		return fmt.Errorf("legacy tally: insert-from-select: %w", err)
 	}
-	defer rows.Close()
 
-	type member struct {
-		cid      string
-		nickname string
-	}
-	var members []member
-	for rows.Next() {
-		var m member
-		var firstH int64
-		if err := rows.Scan(&m.cid, &m.nickname, &firstH); err != nil {
-			continue
-		}
-		members = append(members, m)
-	}
-	rows.Close()
-
-	if len(members) == 0 {
+	inserted := tag.RowsAffected()
+	if inserted == 0 {
 		slog.Warn("legacy tally: no proposal reviewers found for term — no rows inserted",
 			"term", term, "termStart", termStart, "nextTermStart", nextTermStart)
 		return nil
 	}
 
-	for i, m := range members {
-		_, err := a.db.Syncer.Exec(ctx, `
-			INSERT INTO cr_election_tallies (
-				term, candidate_cid, nickname, final_votes_sela, voter_count,
-				voting_start_height, voting_end_height, rank, elected, computed_at
-			) VALUES ($1, $2, $3, 0, 0, 0, 0, $4, TRUE, EXTRACT(EPOCH FROM NOW())::BIGINT)`,
-			term, m.cid, m.nickname, i+1,
-		)
-		if err != nil {
-			return fmt.Errorf("legacy tally: insert member %d: %w", i, err)
-		}
-	}
-
 	slog.Info("legacy election tally inserted (names-only)",
-		"term", term, "members", len(members),
+		"term", term, "members", inserted,
 		"note", "pre-DPoSv2 era; vote counts not shown due to reconstruction limits")
 	return nil
 }

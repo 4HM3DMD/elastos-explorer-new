@@ -844,6 +844,31 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 				"term", term, "error", err,
 				"note", "falling back to rank-based top-12 from replay")
 		}
+
+		// Ensure every proposal-review reviewer appears in the tally.
+		// The replay's candidate filter may exclude some seated
+		// members (e.g. empty-DID at snapshot, unusual state
+		// transitions). The reviewer list is authoritative ground
+		// truth for "who held a seat this term" — inject any that
+		// didn't make it via the replay with elected=TRUE and 0 votes.
+		if _, err := a.db.Syncer.Exec(ctx, `
+			INSERT INTO cr_election_tallies (
+				term, candidate_cid, nickname, final_votes_sela, voter_count,
+				voting_start_height, voting_end_height, rank, elected, computed_at
+			)
+			SELECT $1, cm.cid, COALESCE(cm.nickname, ''),
+			       0, 0, 0, 0, 0, TRUE, EXTRACT(EPOCH FROM NOW())::BIGINT
+			FROM (
+				SELECT DISTINCT pr.did FROM cr_proposal_reviews pr
+				WHERE pr.review_height >= $2 AND pr.review_height < $3
+			) reviewers
+			JOIN cr_members cm ON cm.did = reviewers.did
+			ON CONFLICT (term, candidate_cid) DO NOTHING`,
+			term, termStart, nextTermStart,
+		); err != nil {
+			slog.Warn("election tally: seat-missing-reviewers failed",
+				"term", term, "error", err)
+		}
 	}
 
 	// Re-rank: elected members get ranks 1..N (by votes desc), non-elected

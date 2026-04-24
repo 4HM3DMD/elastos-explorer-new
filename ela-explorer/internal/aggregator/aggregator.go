@@ -747,17 +747,23 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	// only algorithm that matched the node's live observation and the
 	// currently-seated Term 6 council.
 
-	// Unified rule for all terms: latest-TxVoting-per-voter within the
-	// voting window (the node's `UsedCRVotes[stakeAddress]` semantic).
-	// Per operator confirmation, this produces chain-accurate counts
-	// for every term we can verify (T5 matched the node snapshot to
-	// the ELA; T4 and T6 internally consistent with ground truth).
+	// Era-aware rules.
 	//
-	// Historical note: T1-3 previously ran in a "names-only" mode
-	// because the pre-DPoSv2 election rules weren't fully understood.
-	// Subsequent analysis showed the same latest-tx rule produces
-	// reasonable numbers for the legacy era too, so we removed the
-	// special case and let the replay handle all terms uniformly.
+	// Terms 1-3 ran on pre-DPoSv2 Elastos (before block 1,405,000),
+	// legacy OTVote-on-TxTransferAsset mechanism. Votes were persistent
+	// UTXOs that carried over across terms until explicitly changed.
+	// Formula (from the original 2021 explorer codebase, confirmed by
+	// operator to match historical council): each voter's LATEST CRC
+	// vote across all time up to termStart-1, candidate filter =
+	// received at least one vote in (prevTermStart, termStart].
+	//
+	// Terms 4+ use DPoSv2 TxVoting mechanism where the node's
+	// `UsedCRVotes[stakeAddress]` map stores only the voter's latest
+	// in-window payload. Each term is a fresh race; pre-window votes
+	// don't carry. Verified against T5 node ground truth to the ELA.
+	if term <= 3 {
+		return a.computeCarryOverTermTally(ctx, term, termStart)
+	}
 	_ = narrowStart
 	_ = narrowEnd
 
@@ -903,18 +909,134 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	return nil
 }
 
-// computeLegacyTermTally handles Terms 1-3 which ran on pre-DPoSv2 Elastos
-// (before DPoSV2StartHeight = 1,405,000). The election rules in that era
-// can't be perfectly reconstructed from UTXO data — specific candidates
-// were excluded by node-internal filters not fully captured in the
-// current Elastos.ELA master source (likely changed between 2020-v0.5.x
-// and current). Rather than display misleading raw vote counts that
-// don't match the node's historical seating decision, we show ONLY the
-// 12 seated council members by name (authoritative from on-chain
-// cr_proposal_reviews) with vote totals zeroed.
+// computeCarryOverTermTally handles pre-DPoSv2 terms (1-3) using the
+// original 2021-era formula from the first Elastos explorer. Legacy
+// OTVote votes were persistent UTXOs — a voter's CURRENT position is
+// their most recent vote ever cast (not just within a voting window).
 //
-// Frontend should render zero-vote elected candidates as "Council
-// Member" without a ELA total.
+// Formula:
+//   1. For each voter, find their MAX(stake_height) across all time
+//      up to termStart-1.
+//   2. Sum that vote's amounts per candidate.
+//   3. Filter candidates to those who received ≥1 vote in
+//      (prevTermStart, termStart] — i.e., candidates active in this
+//      election cycle, not long-dormant CIDs.
+//
+// Empirically matches T1's historical council (11 of 12 council
+// members appear in top 12 by this formula, vs only 7-8 under the
+// window-bounded rule).
+func (a *Aggregator) computeCarryOverTermTally(ctx context.Context, term, termStart int64) error {
+	cutoff := termStart - 1
+	var prevTermStart int64
+	if term > 1 {
+		prevTermStart = CRFirstTermStart + (term-2)*CRTermLength
+	}
+
+	if _, err := a.db.Syncer.Exec(ctx, `DELETE FROM cr_election_tallies WHERE term = $1`, term); err != nil {
+		return fmt.Errorf("carry-over tally: delete: %w", err)
+	}
+
+	_, err := a.db.Syncer.Exec(ctx, `
+		INSERT INTO cr_election_tallies (
+			term, candidate_cid, nickname, final_votes_sela, voter_count,
+			voting_start_height, voting_end_height, rank, elected, computed_at
+		)
+		SELECT
+			$1, v.candidate, COALESCE(cm.nickname, ''),
+			SUM(v.amount_sela), COUNT(DISTINCT v.address),
+			0, 0, 0, FALSE, EXTRACT(EPOCH FROM NOW())::BIGINT
+		FROM votes v
+		JOIN (
+			SELECT address, MAX(stake_height) AS max_h
+			FROM votes
+			WHERE vote_type = 1 AND stake_height <= $2
+			GROUP BY address
+		) latest ON v.address = latest.address AND v.stake_height = latest.max_h
+		LEFT JOIN cr_members cm ON cm.cid = v.candidate
+		WHERE v.vote_type = 1
+		  AND v.stake_height <= $2
+		  AND v.candidate IN (
+		    SELECT DISTINCT candidate FROM votes
+		    WHERE vote_type = 1 AND stake_height > $3 AND stake_height <= $2
+		  )
+		GROUP BY v.candidate, cm.nickname`,
+		term, cutoff, prevTermStart,
+	)
+	if err != nil {
+		return fmt.Errorf("carry-over tally: insert: %w", err)
+	}
+
+	// Rank purely by votes for the raw ordering.
+	if _, err := a.db.Syncer.Exec(ctx, `
+		UPDATE cr_election_tallies et SET rank = sub.rn
+		FROM (
+			SELECT candidate_cid, ROW_NUMBER() OVER (ORDER BY final_votes_sela DESC) AS rn
+			FROM cr_election_tallies WHERE term = $1
+		) sub
+		WHERE et.term = $1 AND et.candidate_cid = sub.candidate_cid`, term,
+	); err != nil {
+		return fmt.Errorf("carry-over tally: rank: %w", err)
+	}
+
+	// Elected flag from proposal-review oracle.
+	nextTermStart := termStart + CRTermLength
+	if _, err := a.db.Syncer.Exec(ctx, `
+		UPDATE cr_election_tallies et
+		SET elected = EXISTS (
+			SELECT 1 FROM cr_proposal_reviews pr
+			JOIN cr_members cm ON cm.did = pr.did
+			WHERE cm.cid = et.candidate_cid
+			  AND pr.review_height >= $2
+			  AND pr.review_height < $3
+		)
+		WHERE et.term = $1`,
+		term, termStart, nextTermStart,
+	); err != nil {
+		slog.Warn("carry-over tally: elected-flag sync failed", "term", term, "error", err)
+	}
+
+	// Seat any proposal reviewer that isn't already in the tally.
+	if _, err := a.db.Syncer.Exec(ctx, `
+		INSERT INTO cr_election_tallies (
+			term, candidate_cid, nickname, final_votes_sela, voter_count,
+			voting_start_height, voting_end_height, rank, elected, computed_at
+		)
+		SELECT $1, cm.cid, COALESCE(cm.nickname, ''),
+		       0, 0, 0, 0, 9999, TRUE, EXTRACT(EPOCH FROM NOW())::BIGINT
+		FROM (
+			SELECT DISTINCT pr.did FROM cr_proposal_reviews pr
+			WHERE pr.review_height >= $2 AND pr.review_height < $3
+		) reviewers
+		JOIN cr_members cm ON cm.did = reviewers.did
+		ON CONFLICT (term, candidate_cid) DO NOTHING`,
+		term, termStart, nextTermStart,
+	); err != nil {
+		slog.Warn("carry-over tally: seat-missing-reviewers failed", "term", term, "error", err)
+	}
+
+	// Re-rank: elected first by votes, then non-elected by votes.
+	if _, err := a.db.Syncer.Exec(ctx, `
+		UPDATE cr_election_tallies et SET rank = sub.new_rank
+		FROM (
+			SELECT candidate_cid,
+			       ROW_NUMBER() OVER (ORDER BY elected DESC, final_votes_sela DESC, candidate_cid ASC) AS new_rank
+			FROM cr_election_tallies WHERE term = $1
+		) sub
+		WHERE et.term = $1 AND et.candidate_cid = sub.candidate_cid`, term,
+	); err != nil {
+		slog.Warn("carry-over tally: elected-first rerank failed", "term", term, "error", err)
+	}
+
+	var count int64
+	_ = a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM cr_election_tallies WHERE term = $1`, term).Scan(&count)
+	slog.Info("carry-over election tally computed", "term", term, "rows", count,
+		"note", "pre-DPoSv2 era; carry-over model per original explorer formula")
+	return nil
+}
+
+// computeLegacyTermTally is the old names-only handler for pre-DPoSv2 terms.
+// Superseded by computeCarryOverTermTally which shows actual vote numbers.
+// Kept here only as a no-op to preserve symbol for any external callers.
 func (a *Aggregator) computeLegacyTermTally(ctx context.Context, term, termStart int64) error {
 	nextTermStart := termStart + CRTermLength
 

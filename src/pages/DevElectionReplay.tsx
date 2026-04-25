@@ -107,11 +107,20 @@ function synthStatus(height: number): ElectionStatus {
   };
 }
 
-// Convert an elected ElectionCandidate (from the past-term endpoint)
-// into the shape CouncilMembersTable expects (CRMember). Only the
-// fields actually rendered by the table need to be real; the rest get
-// safe defaults so TypeScript stops complaining and the JSX doesn't
-// crash on missing optionals.
+// Convert an elected ElectionCandidate into the CRMember shape that
+// CouncilMembersTable consumes. Every field is real chain data piped
+// through from the LEFT JOIN to cr_members in /cr/elections/{term} —
+// no synthesis. The fallbacks below trigger only when a candidate's
+// CID has no row in cr_members at all (extremely rare; would mean a
+// vote was cast for a CID that was never registered — a node-side
+// inconsistency).
+//
+// `state`: cr_members.state is the CURRENT state of the member. For
+// past-term councils that's correct context only when paired with
+// the headline ("Term 5 council") — they may have rotated to other
+// states since (Returned, Unknown). For active simulator phases
+// where we render the seated council, the state column reflects
+// chain truth as of right now. We don't fake "Elected" anymore.
 function candidateToMember(c: ElectionCandidate): CRMember {
   return {
     rank: c.rank,
@@ -119,14 +128,14 @@ function candidateToMember(c: ElectionCandidate): CRMember {
     did: c.did ?? '',
     code: '',
     nickname: c.nickname,
-    url: '',
-    location: 0,
-    state: 'Elected',
+    url: c.url ?? '',
+    location: c.location ?? 0,
+    state: c.state ?? '',
     votes: c.votes,
-    depositAmount: '0',
+    depositAmount: c.depositAmount ?? '0',
     impeachmentVotes: '0',
     penalty: '0',
-    registerHeight: 0,
+    registerHeight: c.registerHeight ?? 0,
   };
 }
 
@@ -384,17 +393,19 @@ const DevElectionReplay = () => {
     <div className="px-4 lg:px-6 py-6 space-y-6">
       <SEO title="Election Replay (Test)" description="Dev simulator" path="/dev/elections-replay" />
 
-      {/* Yellow simulator banner — make it impossible to mistake this for live data */}
+      {/* Yellow simulator banner — clarifies this is a time-lapse, not the live chain */}
       <div className="card border border-yellow-500/40 bg-yellow-500/10 p-4 flex items-start gap-3">
         <AlertTriangle size={18} className="text-yellow-400 flex-shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-primary mb-1">
-            Election replay simulator — synthetic data
+            Election replay — accelerated playback of real Term 6 chain data
           </p>
           <p className="text-xs text-secondary">
-            Replays Term 6's full lifecycle (voting → claim → duty) at accelerated speed using
-            real candidate data fetched from the API. Nothing here reflects the live chain. For the
-            real status, see <Link to="/governance" className="link-blue">/governance</Link>.
+            Every vote, candidate, council member, and registration block below is real on-chain
+            data. Only TIME is accelerated — events that took ~30 days play back in minutes.
+            Member states reflect <em>current</em> chain state (e.g. T5 members who cycled out
+            now show <code>Unknown</code>). For the live status, see {' '}
+            <Link to="/governance" className="link-blue">/governance</Link>.
           </p>
         </div>
       </div>

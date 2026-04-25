@@ -454,6 +454,11 @@ export interface ElectionCandidate {
   elected: boolean;
   /** Block height of the candidate's most recent register/update event. 0 if unknown. */
   registerHeight?: number;
+  /** Real fields from cr_members LEFT JOIN — only present when the row exists in cr_members. */
+  url?: string;
+  state?: string;
+  location?: number;
+  depositAmount?: string;
 }
 
 // Full response from GET /api/v1/cr/elections/{term}.

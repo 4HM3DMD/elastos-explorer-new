@@ -154,7 +154,11 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			et.final_votes_sela, et.voter_count,
 			et.rank, et.elected, et.voting_start_height, et.voting_end_height, et.computed_at,
 			COALESCE(cm.did, '') AS did,
-			COALESCE(cm.register_height, 0) AS register_height
+			COALESCE(cm.register_height, 0) AS register_height,
+			COALESCE(cm.url, '') AS url,
+			COALESCE(cm.state, '') AS state,
+			COALESCE(cm.location, 0) AS location,
+			COALESCE(cm.deposit_amount, 0) AS deposit_amount
 		FROM cr_election_tallies et
 		LEFT JOIN cr_members cm ON cm.cid = et.candidate_cid
 		WHERE et.term = $1
@@ -170,12 +174,12 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	var results []map[string]any
 	var firstVotingStart, firstVotingEnd int64
 	for rows.Next() {
-		var cid, nickname, did string
-		var votesSela int64
+		var cid, nickname, did, url, state string
+		var votesSela, depositSela int64
 		var voterCount, rank int
 		var elected bool
-		var votingStart, votingEnd, computedAt, registerHeight int64
-		if err := rows.Scan(&cid, &nickname, &votesSela, &voterCount, &rank, &elected, &votingStart, &votingEnd, &computedAt, &did, &registerHeight); err != nil {
+		var votingStart, votingEnd, computedAt, registerHeight, location int64
+		if err := rows.Scan(&cid, &nickname, &votesSela, &voterCount, &rank, &elected, &votingStart, &votingEnd, &computedAt, &did, &registerHeight, &url, &state, &location, &depositSela); err != nil {
 			continue
 		}
 		if len(results) == 0 {
@@ -193,6 +197,21 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		}
 		if did != "" {
 			r["did"] = did
+		}
+		// Real cr_members fields — surfaced so callers (e.g. the dev
+		// simulator) can render full member detail without mocking.
+		// Empty/zero values are dropped to keep payload tight.
+		if url != "" {
+			r["url"] = url
+		}
+		if state != "" {
+			r["state"] = state
+		}
+		if location != 0 {
+			r["location"] = location
+		}
+		if depositSela != 0 {
+			r["depositAmount"] = selaToELA(depositSela)
 		}
 		results = append(results, r)
 	}

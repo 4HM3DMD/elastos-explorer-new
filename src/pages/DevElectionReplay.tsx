@@ -415,13 +415,14 @@ const DevElectionReplay = () => {
             Election replay — accelerated playback of real Term 6 chain data
           </p>
           <p className="text-xs text-secondary">
-            Votes, voter addresses, registration blocks, candidate URLs, and council members are
-            all real on-chain data. The active council&apos;s state is derived from the simulated
-            block (Term 5 = Elected during pre-T6 frame; Term 6 = Elected after handover).
-            Only TIME is accelerated. Per-block claim-event tracking (which incoming councilor
-            has activated their node at block H during the claim window) is not yet indexed —
-            until then the claim phase shows &quot;awaiting takeover&quot; collectively. For the
-            live status, see <Link to="/governance" className="link-blue">/governance</Link>.
+            Votes, voter addresses, registration blocks, candidate URLs, council members, and
+            per-member claimed-node blocks are all real on-chain data. The active council&apos;s
+            state is derived from the simulated block (Term 5 = Elected during pre-T6 frame;
+            Term 6 = Elected after handover). During the claim period, &quot;Node claimed&quot;
+            status comes from each member&apos;s real <code>cr_members.register_height</code> —
+            the block of their most recent TxRegisterCR/TxUpdateCR (which is the transaction
+            that sets <code>claimed_node</code>). Only TIME is accelerated. For the live
+            status, see <Link to="/governance" className="link-blue">/governance</Link>.
           </p>
         </div>
       </div>
@@ -526,21 +527,22 @@ const DevElectionReplay = () => {
           {/* Incoming council during the CRClaimPeriod. They've won
               the election (elected=true) but are NOT yet on duty —
               takeover happens at status.newCouncilTakeoverHeight.
-              Headline carries the awaiting-handover semantics so the
-              "Elected" badges below mean "won the election", not
-              "currently on duty".
 
-              Per-block claim-event tracking — i.e. "at simHeight H,
-              has councilor X activated their node yet?" — would need
-              a TxUpdateCR / TxRegisterProducer event log scoped to
-              the claim window. We don't currently index those as
-              discrete events (cr_members.register_height is most-
-              recent only, and for T6 they all updated during voting,
-              not the claim window). Flagged in CLAUDE.md as a
-              follow-up for true per-block claim simulation. */}
+              "Node claimed" tracking: cr_members.register_height is
+              the block of each member's most recent TxRegisterCR /
+              TxUpdateCR — which is the transaction that sets
+              claimed_node. So register_height IS effectively "node
+              claimed at block X". A member is "ready to take office"
+              once register_height ≤ simHeight AND they have a
+              non-zero registerHeight from the API. */}
+          <ClaimNodeTracker
+            claimBody={claimBody}
+            simHeight={simHeight}
+            takeoverHeight={status.newCouncilTakeoverHeight}
+          />
           <CandidatesList
             candidates={claimBody}
-            title={`Incoming Term ${status.targetTerm} council — awaiting takeover at block ${status.newCouncilTakeoverHeight.toLocaleString()}`}
+            title={`Incoming Term ${status.targetTerm} council — final tally`}
             emptyLabel="No incoming-council data"
           />
           <CouncilMembersTable
@@ -563,6 +565,93 @@ const DevElectionReplay = () => {
     </div>
   );
 };
+
+/**
+ * ClaimNodeTracker — during the CRClaimPeriod, shows for each elected
+ * councilor whether their on-chain node info has been set and at
+ * which block. Driven by real `cr_members.register_height` data —
+ * the block of each member's most recent TxRegisterCR / TxUpdateCR,
+ * which is the transaction that establishes their claimed_node.
+ *
+ * For most terms (T4-T6 retrospectively) every member's
+ * register_height falls during the voting window or earlier — they
+ * came into the claim period already "claimed" and are just waiting
+ * for takeover. The tracker shows that truthfully: "Node ready since
+ * block X" with X always ≤ voting close.
+ *
+ * For terms where a member updates DURING the claim window (rare),
+ * register_height would land in [votingEnd+1, termStart) and the
+ * tracker would correctly show "Pending" until simHeight passes that
+ * registerHeight, then flip to "Ready since block X".
+ */
+function ClaimNodeTracker({
+  claimBody,
+  simHeight,
+  takeoverHeight,
+}: {
+  claimBody: ElectionCandidate[];
+  simHeight: number;
+  takeoverHeight: number;
+}) {
+  const ready = claimBody.filter(
+    (c) => (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight,
+  );
+  const pending = claimBody.filter(
+    (c) => !c.registerHeight || c.registerHeight > simHeight,
+  );
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium text-primary">
+          Node-claim status &middot; {ready.length} / {claimBody.length} ready
+        </span>
+        <span className="text-xs text-muted">
+          Handover at block <span className="font-mono text-secondary">{takeoverHeight.toLocaleString()}</span>
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="table-clean w-full">
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left' }}>Councilor</th>
+              <th style={{ textAlign: 'left' }}>Status</th>
+              <th style={{ textAlign: 'right' }}>Node ready since</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...ready, ...pending].map((c) => {
+              const isReady = (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight;
+              return (
+                <tr key={c.cid}>
+                  <td style={{ textAlign: 'left' }}>
+                    <span className="font-semibold text-primary text-xs">{c.nickname}</span>
+                  </td>
+                  <td style={{ textAlign: 'left' }}>
+                    {isReady ? (
+                      <span className="badge bg-green-500/20 text-green-400">Node claimed</span>
+                    ) : (
+                      <span className="badge bg-yellow-500/20 text-yellow-400">Pending claim</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    {c.registerHeight && c.registerHeight > 0 ? (
+                      <span className="font-mono text-xs text-secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        block {c.registerHeight.toLocaleString()}
+                      </span>
+                    ) : (
+                      <span className="text-muted text-xs">—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function JumpButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (

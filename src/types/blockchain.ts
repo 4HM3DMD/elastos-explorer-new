@@ -502,12 +502,17 @@ export interface ElectionVoter {
 }
 
 // One voter row from GET /api/v1/cr/elections/{term}/voters/{cid}.
-// The amount is THIS voter's allocation to THIS specific candidate.
+// The amount is THIS voter's allocation to THIS specific candidate
+// per their LATEST TxVoting (others superseded). `txCount` is the
+// total number of TxVotings this voter cast for this candidate
+// during the voting window — > 1 means they changed their mind
+// mid-window and the prior attempts didn't count.
 export interface CandidateVoter {
   address: string;
   ela: string;
   voteHeight: number;
   txid: string;
+  txCount?: number;
 }
 
 // One per-term entry from GET /api/v1/address/{address}/cr-votes.
@@ -523,6 +528,70 @@ export interface AddressCRVoteTerm {
     voteHeight: number;
     txid: string;
   }[];
+}
+
+// /api/v1/cr/members/{cid}/profile — single roll-up of every chain
+// fact about a CR member: metadata, every term they ran in, full
+// proposal-review record.
+export interface CandidateProfileMember {
+  cid: string;
+  did: string;
+  nickname: string;
+  url: string;
+  state: string;
+  dposPubkey: string;
+  claimedNode?: string;
+  depositAddress: string;
+  votes: string;
+  depositAmount: string;
+  impeachmentVotes: string;
+  penalty: string;
+  registerHeight: number;
+  lastUpdated: number;
+  location: number;
+}
+
+export interface CandidateProfileTerm {
+  term: number;
+  rank: number;
+  votes: string;
+  voterCount: number;
+  elected: boolean;
+}
+
+export interface CandidateRecentReview {
+  proposalHash: string;
+  title: string;
+  opinion: 'approve' | 'reject' | 'abstain' | string;
+  reviewHeight: number;
+  txid: string;
+}
+
+export interface CandidateProfileGovernance {
+  totalReviews: number;
+  approve: number;
+  reject: number;
+  abstain: number;
+  firstReviewHeight: number;
+  lastReviewHeight: number;
+  recentReviews: CandidateRecentReview[];
+}
+
+export interface CandidateProfile {
+  member: CandidateProfileMember;
+  terms: CandidateProfileTerm[];
+  governance: CandidateProfileGovernance;
+}
+
+// One TxVoting attempt from GET /cr/elections/{term}/voters/{cid}/{address}/history.
+// `counted: true` marks the entry that survived the UsedCRVotes
+// replacement rule. Earlier entries with `counted: false` show the
+// voter's superseded attempts.
+export interface VoterTxHistoryEntry {
+  ela: string;
+  voteHeight: number;
+  txid: string;
+  counted: boolean;
 }
 
 export interface ProposalBudgetItem {

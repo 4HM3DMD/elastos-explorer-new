@@ -9,6 +9,7 @@ import type {
   ElectionStatus, ElectionSummary, ElectionTermDetail,
   ElectionReplayEventsResponse,
   ElectionVoter, CandidateVoter, AddressCRVoteTerm,
+  CandidateProfile, VoterTxHistoryEntry,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
 
@@ -244,6 +245,26 @@ export const blockchainApi = {
   // address has at least one CRC vote.
   getAddressCRVotes: async (address: string): Promise<AddressCRVoteTerm[]> => {
     return unwrap<AddressCRVoteTerm[]>(await api.get(`/address/${address}/cr-votes`));
+  },
+
+  // Single roll-up of every chain fact about a CR member: metadata,
+  // every term they ran in, full proposal-review record. Powers the
+  // rich CandidateDetail page.
+  getCandidateProfile: async (cid: string): Promise<CandidateProfile> => {
+    return unwrap<CandidateProfile>(await api.get(`/cr/members/${cid}/profile`));
+  },
+
+  // All TxVotings a single voter cast for one candidate in a term's
+  // voting window. Frontend uses this to expand a voter row showing
+  // their full attempt history. Last entry has `counted: true`.
+  getVoterTxHistory: async (
+    term: number,
+    cid: string,
+    address: string,
+  ): Promise<VoterTxHistoryEntry[]> => {
+    return unwrap<VoterTxHistoryEntry[]>(
+      await api.get(`/cr/elections/${term}/voters/${cid}/${address}/history`),
+    );
   },
 
   // Current phase of the DAO (voting / claim / duty / failed_restart /

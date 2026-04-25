@@ -327,12 +327,15 @@ function CandidateRow({
       <td className="align-top" style={{ textAlign: 'left' }}>
         <div className="flex items-center gap-2">
           {candidate.elected && <Trophy size={11} className="text-brand shrink-0" />}
-          <span className={cn(
-            'text-xs',
-            candidate.elected ? 'font-semibold text-primary' : 'text-secondary',
-          )}>
+          <Link
+            to={`/governance/elections/${term}/candidate/${candidate.cid}`}
+            className={cn(
+              'text-xs hover:text-brand transition-colors',
+              candidate.elected ? 'font-semibold text-primary' : 'text-secondary',
+            )}
+          >
             {candidate.nickname || 'Unnamed'}
-          </span>
+          </Link>
         </div>
         {/* CID column hides on phone — surface a short copy under the
             name so it's still inspectable without horizontal scroll. */}

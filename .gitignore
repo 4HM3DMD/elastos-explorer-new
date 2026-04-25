@@ -156,9 +156,12 @@ playwright/.cache/
 # yarn.lock
 # pnpm-lock.yaml
 
-# Claude Code — local-only memory (server IPs, passwords, tokens, etc.)
-# CLAUDE.md is committed and contains only generic architecture info.
-# CLAUDE.local.md is auto-loaded by Claude Code but stays out of git.
+# Claude Code — ALL project memory and chat context stays local.
+# Claude Code auto-loads these files when working in this repo, but
+# they should never reach GitHub. They contain server IPs, passwords,
+# tokens, chat transcripts, and project notes that are only useful to
+# the maintainer's local sessions.
+CLAUDE.md
 CLAUDE.local.md
 CHAT-CONTEXT-DUMP*.md
 .claude/sessions/

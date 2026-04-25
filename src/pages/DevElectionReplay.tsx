@@ -206,12 +206,51 @@ const DevElectionReplay = () => {
   // - duty (height >= takeover) → Term 6 elected are now seated.
   const liveMembers = simHeight >= T6_TAKEOVER ? t6ElectedAsMembers : t5ElectedAsMembers;
 
-  // Candidate count drives the voting hero subtitle.
-  const targetCandidateCount = t6Candidates.length;
+  // For the voting body we synthesise a live tally that scales the
+  // final vote totals down to what they "would have been" at this
+  // simulated height. Without this, the voting view shows final
+  // numbers from block 0 and feels static.
+  //
+  // Per-candidate easing curve makes the leaderboard reorder over
+  // time — some candidates start strong and plateau, others surge
+  // late. Curve exponent k ∈ [0.6, 1.8] is derived deterministically
+  // from the CID so the same simulation run always plays the same
+  // way (helpful for screen recording / reproducible bug reports).
+  const votingBody = useMemo(() => {
+    if (phase !== 'voting' || t6Candidates.length === 0) return t6Candidates;
+    const progress =
+      (simHeight - T6_VOTING_START) / Math.max(1, T6_VOTING_END - T6_VOTING_START);
+    const clamped = Math.max(0, Math.min(1, progress));
+    const scaled = t6Candidates.map((c) => {
+      // Deterministic hash of CID → exponent k in [0.6, 1.8].
+      let h = 0;
+      for (let i = 0; i < c.cid.length; i++) h = (h * 31 + c.cid.charCodeAt(i)) >>> 0;
+      const k = 0.6 + (h % 1000) / 1000 * 1.2;
+      const fraction = Math.pow(clamped, k);
+      const finalVotes = Number(c.votes) || 0;
+      const scaledVotes = finalVotes * fraction;
+      const scaledVoterCount = Math.round(c.voterCount * fraction);
+      return {
+        ...c,
+        votes: scaledVotes.toFixed(8),
+        voterCount: scaledVoterCount,
+        // Elected status isn't decided until voting closes. During
+        // the voting window every row shows its current rank but no
+        // "Elected" badge — matches the node's real semantics.
+        elected: false,
+      };
+    });
+    // Re-rank by current scaled votes so the leaderboard reorders
+    // visibly as the simulation plays.
+    scaled.sort((a, b) => Number(b.votes) - Number(a.votes));
+    return scaled.map((c, i) => ({ ...c, rank: i + 1 }));
+  }, [phase, t6Candidates, simHeight]);
 
-  // For the voting body we want all candidates; for claim we want only
-  // elected (the incoming council).
-  const votingBody = t6Candidates;
+  // Candidate count drives the voting hero subtitle.
+  const targetCandidateCount = votingBody.length;
+
+  // Claim phase shows only the elected 12 (incoming council) with
+  // their final tallies — by claim phase votes are locked in.
   const claimBody = useMemo(() => t6Candidates.filter((c) => c.elected), [t6Candidates]);
 
   const handleJump = useCallback((target: number) => {

@@ -78,6 +78,7 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/address/{address}/balance-history", s.getAddressBalanceHistory)
 		r.Get("/address/{address}/vote-history", s.getAddressVoteHistory)
 		r.Get("/address/{address}/governance", s.getAddressGovernanceActivity)
+		r.Get("/address/{address}/cr-votes", s.getAddressCRVotes)
 
 		r.Get("/richlist", s.getRichList)
 		r.Get("/stats", s.getStats)
@@ -94,6 +95,8 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/cr/elections", s.getCRElections)
 		r.Get("/cr/elections/{term}", s.getCRElectionByTerm)
 		r.Get("/cr/elections/{term}/replay-events", s.getCRElectionReplayEvents)
+		r.Get("/cr/elections/{term}/voters", s.getCRElectionVoters)
+		r.Get("/cr/elections/{term}/voters/{cid}", s.getCRCandidateVoters)
 		r.Get("/cr/election/status", s.getCRElectionStatus)
 		r.Get("/cr/proposals", s.getCRProposals)
 		r.Get("/cr/proposal/{hash}", s.getCRProposalDetail)

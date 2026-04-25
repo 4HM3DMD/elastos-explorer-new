@@ -347,6 +347,288 @@ func (s *Server) getCRElectionReplayEvents(w http.ResponseWriter, r *http.Reques
 	}})
 }
 
+// crElectionWindow computes the (narrowStart, narrowEnd, termStart)
+// block heights for an arbitrary term using the same formula the
+// node + aggregator + status endpoint use. Term-agnostic — works
+// for T1, T6, T8, T42 without code changes. See aggregator.go's
+// electionVotingPeriod for the canonical implementation.
+func crElectionWindow(term int64) (narrowStart, narrowEnd, termStart int64) {
+	const crFirstTermStart = int64(658930)
+	const crTermLength = int64(262800)
+	const crVotingPeriod = int64(21600)
+	const crClaimPeriod = int64(10080)
+	termStart = crFirstTermStart + (term-1)*crTermLength
+	narrowEnd = termStart - 1 - crClaimPeriod
+	narrowStart = narrowEnd - crVotingPeriod + 1
+	if narrowStart < 0 {
+		narrowStart = 0
+	}
+	return
+}
+
+// getCRElectionVoters returns a paginated list of every voter in a
+// term's voting window, ranked by total ELA contributed. Applies the
+// node's UsedCRVotes[stakeAddress] semantic — each voter's MOST
+// RECENT TxVoting is what counts; earlier in-window TxVotings are
+// dropped (the node replaces, not aggregates).
+//
+// Term-agnostic: any term parameter is accepted. The window math is
+// pure formula via crElectionWindow(). When T8 happens in 2028 this
+// endpoint serves it without modification.
+//
+// Pre-BPoS terms (T1-T3) return an empty list since the votes table
+// doesn't have parseable rows for that era.
+func (s *Server) getCRElectionVoters(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	page := parseInt(r.URL.Query().Get("page"), 1)
+	pageSize := clampPageSize(parseInt(r.URL.Query().Get("pageSize"), 25), 200)
+	offset := (page - 1) * pageSize
+
+	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
+
+	// Total distinct voters for this term — used by frontend pagination.
+	var total int64
+	if err := s.db.API.QueryRow(r.Context(), `
+		SELECT COUNT(DISTINCT address)
+		FROM votes
+		WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2`,
+		narrowStart, narrowEnd).Scan(&total); err != nil {
+		slog.Warn("getCRElectionVoters: count query failed", "term", term, "error", err)
+	}
+
+	// The CTE applies the latest-TxVoting-per-voter rule. Each voter's
+	// only-counted vote is their latest in the window; the JOIN back
+	// to votes brings in all candidate slices from that single tx.
+	rows, err := s.db.API.Query(r.Context(), `
+		WITH latest_per_voter AS (
+			SELECT address, MAX(stake_height) AS h
+			FROM votes
+			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
+		),
+		voter_breakdown AS (
+			SELECT v.address,
+			       SUM(v.amount_sela) AS total_sela,
+			       COUNT(DISTINCT v.candidate) AS candidates_voted_for,
+			       MIN(v.stake_height) AS first_h,
+			       MAX(v.stake_height) AS last_h,
+			       MIN(v.txid) AS sample_txid
+			FROM votes v
+			JOIN latest_per_voter lpv
+			  ON lpv.address = v.address AND lpv.h = v.stake_height
+			WHERE v.vote_type = 1
+			GROUP BY v.address
+		)
+		SELECT address, total_sela, candidates_voted_for, first_h, last_h, sample_txid
+		FROM voter_breakdown
+		ORDER BY total_sela DESC, address ASC
+		LIMIT $3 OFFSET $4`,
+		narrowStart, narrowEnd, pageSize, offset)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	var voters []map[string]any
+	for rows.Next() {
+		var address, sampleTxid string
+		var totalSela, firstH, lastH int64
+		var candidatesVotedFor int
+		if err := rows.Scan(&address, &totalSela, &candidatesVotedFor, &firstH, &lastH, &sampleTxid); err != nil {
+			continue
+		}
+		voters = append(voters, map[string]any{
+			"address":            address,
+			"totalEla":           selaToELA(totalSela),
+			"candidatesVotedFor": candidatesVotedFor,
+			"firstVoteHeight":    firstH,
+			"lastVoteHeight":     lastH,
+			"sampleTxid":         strings.TrimSpace(sampleTxid),
+		})
+	}
+
+	writeJSON(w, 200, APIResponse{
+		Data:  voters,
+		Total: total,
+		Page:  page,
+		Size:  pageSize,
+	})
+}
+
+// getCRCandidateVoters returns every voter who allocated ELA to a
+// specific candidate in a term, sorted by amount DESC. Same
+// UsedCRVotes semantic as getCRElectionVoters — only the voter's
+// most recent TxVoting counts.
+func (s *Server) getCRCandidateVoters(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	cid := chi.URLParam(r, "cid")
+	if cid == "" {
+		writeError(w, 400, "candidate cid required")
+		return
+	}
+	page := parseInt(r.URL.Query().Get("page"), 1)
+	pageSize := clampPageSize(parseInt(r.URL.Query().Get("pageSize"), 25), 200)
+	offset := (page - 1) * pageSize
+
+	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
+
+	// Total voters for this candidate (latest-TxVoting basis) —
+	// used for pagination.
+	var total int64
+	if err := s.db.API.QueryRow(r.Context(), `
+		WITH latest_per_voter AS (
+			SELECT address, MAX(stake_height) AS h
+			FROM votes
+			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
+		)
+		SELECT COUNT(DISTINCT v.address)
+		FROM votes v
+		JOIN latest_per_voter lpv ON lpv.address = v.address AND lpv.h = v.stake_height
+		WHERE v.vote_type = 1 AND v.candidate = $3 AND v.stake_height BETWEEN $1 AND $2`,
+		narrowStart, narrowEnd, cid).Scan(&total); err != nil {
+		slog.Warn("getCRCandidateVoters: count query failed", "term", term, "cid", cid, "error", err)
+	}
+
+	rows, err := s.db.API.Query(r.Context(), `
+		WITH latest_per_voter AS (
+			SELECT address, MAX(stake_height) AS h
+			FROM votes
+			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
+		)
+		SELECT v.address, v.amount_sela, v.stake_height, v.txid
+		FROM votes v
+		JOIN latest_per_voter lpv ON lpv.address = v.address AND lpv.h = v.stake_height
+		WHERE v.vote_type = 1 AND v.candidate = $3 AND v.stake_height BETWEEN $1 AND $2
+		ORDER BY v.amount_sela DESC, v.address ASC
+		LIMIT $4 OFFSET $5`,
+		narrowStart, narrowEnd, cid, pageSize, offset)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	var voters []map[string]any
+	for rows.Next() {
+		var address, txid string
+		var amountSela, voteHeight int64
+		if err := rows.Scan(&address, &amountSela, &voteHeight, &txid); err != nil {
+			continue
+		}
+		voters = append(voters, map[string]any{
+			"address":     address,
+			"ela":         selaToELA(amountSela),
+			"voteHeight":  voteHeight,
+			"txid":        strings.TrimSpace(txid),
+		})
+	}
+
+	writeJSON(w, 200, APIResponse{
+		Data:  voters,
+		Total: total,
+		Page:  page,
+		Size:  pageSize,
+	})
+}
+
+// getAddressCRVotes returns the per-term CR voting history of a
+// single address — every term they participated in, plus the
+// candidates + amounts in their final TxVoting per term.
+//
+// Term-agnostic: scans across every term where the address has at
+// least one CRC vote row. New terms appear automatically.
+func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
+	address := chi.URLParam(r, "address")
+	if address == "" {
+		writeError(w, 400, "address required")
+		return
+	}
+
+	// Find the set of terms this address voted in by computing the
+	// term containing each vote's stake_height. This is pure formula
+	// — `(stake_height - CRFirstTermStart) / CRTermLength + 1`.
+	rows, err := s.db.API.Query(r.Context(), `
+		WITH addr_votes AS (
+			SELECT v.candidate, v.amount_sela, v.stake_height, v.txid,
+			       FLOOR((v.stake_height - 658930) / 262800.0) + 1 AS term
+			FROM votes v
+			WHERE v.vote_type = 1 AND v.address = $1
+			  AND v.stake_height >= 658930
+		),
+		latest_per_term AS (
+			SELECT term, MAX(stake_height) AS h
+			FROM addr_votes
+			GROUP BY term
+		)
+		SELECT av.term, av.candidate, av.amount_sela, av.stake_height, av.txid,
+		       COALESCE(cm.nickname, '') AS nickname
+		FROM addr_votes av
+		JOIN latest_per_term lpt ON lpt.term = av.term AND lpt.h = av.stake_height
+		LEFT JOIN cr_members cm ON cm.cid = av.candidate
+		ORDER BY av.term DESC, av.amount_sela DESC`, address)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	// Group rows by term — each term has multiple candidate slices
+	// from the address's single latest TxVoting.
+	type voteSlice struct {
+		Candidate  string `json:"candidate"`
+		Nickname   string `json:"nickname,omitempty"`
+		AmountEla  string `json:"ela"`
+		Height     int64  `json:"voteHeight"`
+		Txid       string `json:"txid"`
+	}
+	type termGroup struct {
+		Term      int64       `json:"term"`
+		TotalEla  string      `json:"totalEla"`
+		Slices    []voteSlice `json:"slices"`
+	}
+	groups := []termGroup{}
+	totalSelaPerTerm := map[int64]int64{}
+	groupIndex := map[int64]int{}
+
+	for rows.Next() {
+		var term, amountSela, height int64
+		var candidate, txid, nickname string
+		if err := rows.Scan(&term, &candidate, &amountSela, &height, &txid, &nickname); err != nil {
+			continue
+		}
+		idx, ok := groupIndex[term]
+		if !ok {
+			groups = append(groups, termGroup{Term: term})
+			idx = len(groups) - 1
+			groupIndex[term] = idx
+		}
+		groups[idx].Slices = append(groups[idx].Slices, voteSlice{
+			Candidate: candidate,
+			Nickname:  nickname,
+			AmountEla: selaToELA(amountSela),
+			Height:    height,
+			Txid:      strings.TrimSpace(txid),
+		})
+		totalSelaPerTerm[term] += amountSela
+	}
+	for i := range groups {
+		groups[i].TotalEla = selaToELA(totalSelaPerTerm[groups[i].Term])
+	}
+
+	writeJSON(w, 200, APIResponse{Data: groups})
+}
+
 // getCRElectionStatus returns the current election phase of the DAO:
 // whether we're in a live voting window, a claiming window, or a regular
 // duty period; what the surrounding block-height boundaries are; and the

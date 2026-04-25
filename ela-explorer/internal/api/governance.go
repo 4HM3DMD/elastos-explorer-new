@@ -717,12 +717,18 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Per-term participation. Every cr_election_tallies row for
-	// this CID, ordered chronologically. Includes the full set of
-	// terms they ran in — operators can pivot between them.
+	// this CID where they had REAL participation — same filter the
+	// public elections endpoints apply (with-votes OR elected).
+	// Without this, prior-term registrations leave 0-vote / not-
+	// elected ghost rows that surface as "T5 #50" or "T6 #58" in
+	// the multi-term strip — they were never on those terms'
+	// ballots in any meaningful sense.
 	termRows, err := s.db.API.Query(r.Context(), `
 		SELECT term, rank, final_votes_sela, voter_count, elected
 		FROM cr_election_tallies
-		WHERE candidate_cid = $1 AND candidate_cid != '__sentinel__'
+		WHERE candidate_cid = $1
+		  AND candidate_cid != '__sentinel__'
+		  AND (final_votes_sela > 0 OR elected = TRUE)
 		ORDER BY term ASC`, cid)
 	if err != nil {
 		writeError(w, 500, "database error: terms")

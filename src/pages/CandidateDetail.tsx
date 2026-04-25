@@ -215,6 +215,24 @@ const CandidateDetail = () => {
         </div>
       </div>
 
+      {/* If the URL term has no real participation row after the
+          noise-filter (e.g., a 0-vote / not-elected ghost row that
+          got filtered out), surface that explicitly so the empty
+          stats don't read as "we lost the data". */}
+      {!thisTerm && profile.terms.length > 0 && (
+        <div className="card p-3 text-xs text-secondary flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-muted">
+            No on-chain participation for this candidate in Term {term}.
+          </span>
+          <Link
+            to={`/governance/elections/${profile.terms[profile.terms.length - 1].term}/candidate/${cid}`}
+            className="text-brand hover:underline"
+          >
+            View their most recent term →
+          </Link>
+        </div>
+      )}
+
       {/* 2. MULTI-TERM PARTICIPATION STRIP */}
       {profile.terms.length > 1 && (
         <TermPills cid={cid!} terms={profile.terms} activeTerm={term} />
@@ -271,9 +289,7 @@ const CandidateDetail = () => {
             </span>
           </IdentityRow>
           <IdentityRow label="Last updated">
-            <span className="text-xs text-secondary">
-              {m.lastUpdated > 0 ? new Date(m.lastUpdated * 1000).toUTCString().slice(5, 22) : '—'}
-            </span>
+            <LastUpdatedValue value={m.lastUpdated} />
           </IdentityRow>
         </div>
       </div>
@@ -355,6 +371,49 @@ function Muted({ children }: { children: React.ReactNode }) {
   return <span className="text-xs text-muted">{children}</span>;
 }
 
+// Convert a block-height span into a human-friendly tenure label.
+// Returns empty string when span is 0 (single review, no real tenure
+// to summarize) so the caller can omit the chip entirely.
+function formatTenureSpan(blockSpan: number): string {
+  if (blockSpan <= 0) return '';
+  const days = (blockSpan * ELASTOS_BLOCK_SECONDS) / 86400;
+  if (days < 1) return '< 1 day tenure';
+  if (days < 7) {
+    const d = Math.round(days);
+    return `~${d} day${d === 1 ? '' : 's'} tenure`;
+  }
+  if (days < 30) return `~${Math.round(days / 7)} weeks tenure`;
+  if (days < 365) return `~${Math.round(days / 30)} months tenure`;
+  const years = days / 365;
+  return `~${years.toFixed(1)} year${years >= 1.5 ? 's' : ''} tenure`;
+}
+
+// `cr_members.last_updated` is dual-purpose in the indexer:
+//   - tx_processor.go writes the registration block height
+//   - aggregator.go overwrites with `EXTRACT(EPOCH FROM NOW())`
+// Block heights are always well below 1e9; Unix epochs are ≥ 1e9.
+// Render whichever the value actually is rather than blindly multiplying
+// a height by 1000 and getting "Jan 1970".
+function LastUpdatedValue({ value }: { value: number }) {
+  if (!value || value <= 0) return <Muted>—</Muted>;
+  if (value < 1_000_000_000) {
+    return (
+      <span
+        className="text-xs text-secondary font-mono"
+        style={{ fontVariantNumeric: 'tabular-nums' }}
+        title="Indexer wrote registration block height; this row hasn't been refreshed by the aggregator since."
+      >
+        Block #{value.toLocaleString()}
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs text-secondary">
+      {new Date(value * 1000).toUTCString().slice(5, 22)}
+    </span>
+  );
+}
+
 function MiniStat({
   icon: Icon,
   label,
@@ -411,16 +470,21 @@ function TermPills({
   terms: CandidateProfileTerm[];
   activeTerm: number;
 }) {
-  const electedCount = terms.filter((t) => t.elected).length;
-  const earliestTerm = terms[0]?.term;
+  const electedTerms = terms.filter((t) => t.elected);
+  const electedCount = electedTerms.length;
+  // "Council since" must be the first ELECTED term, not the first
+  // term they ran. A nominee who lost T2 then was elected T3 joined
+  // council at T3 — saying "since T2" would be wrong.
+  const firstElectedTerm = electedTerms[0]?.term;
+  const labelText = firstElectedTerm
+    ? `Council since Term ${firstElectedTerm} · ${electedCount} term${electedCount === 1 ? '' : 's'} elected`
+    : `Ran in ${terms.length} term${terms.length === 1 ? '' : 's'} · Never elected`;
+
   return (
     <div className="card p-3 sm:p-4 relative overflow-hidden">
       <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
       <div className="pl-2 space-y-2.5">
-        <p className="text-[11px] text-muted tracking-[0.04em]">
-          {earliestTerm && `Council since Term ${earliestTerm} · `}
-          {electedCount} {electedCount === 1 ? 'term' : 'terms'} elected
-        </p>
+        <p className="text-[11px] text-muted tracking-[0.04em]">{labelText}</p>
         <div className="flex flex-wrap gap-2">
           {terms.map((t) => {
             const isActive = t.term === activeTerm;
@@ -434,11 +498,19 @@ function TermPills({
                     ? 'bg-brand/15 text-brand border-brand/40'
                     : 'text-secondary border-[var(--color-border)] hover:text-primary hover:border-[var(--color-border-strong)]',
                 )}
+                title={
+                  t.elected
+                    ? `Term ${t.term} · Rank #${t.rank} · Elected`
+                    : `Term ${t.term} · Rank #${t.rank} · Not elected`
+                }
               >
                 <span className="font-semibold tracking-wider">T{t.term}</span>
-                <span className="text-[10px] mt-0.5 text-muted group-hover:text-secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                <span
+                  className="text-[10px] mt-0.5 text-muted group-hover:text-secondary inline-flex items-center gap-1"
+                  style={{ fontVariantNumeric: 'tabular-nums' }}
+                >
                   #{t.rank}
-                  {t.elected ? ' · ★' : ''}
+                  {t.elected && <Trophy size={9} className="text-brand" />}
                 </span>
               </Link>
             );
@@ -499,21 +571,19 @@ function GovernanceCard({
     );
   }
 
-  const span = governance.lastReviewHeight - governance.firstReviewHeight;
-  const approxYears = (span * ELASTOS_BLOCK_SECONDS) / (60 * 60 * 24 * 365);
-  const tenureNote =
-    approxYears >= 0.5
-      ? `~${approxYears.toFixed(1)} year${approxYears >= 1.5 ? 's' : ''}`
-      : `~${Math.max(1, Math.round(approxYears * 12))} months`;
+  const span = Math.max(0, governance.lastReviewHeight - governance.firstReviewHeight);
+  const tenureNote = formatTenureSpan(span);
 
   return (
     <section className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-[var(--color-border)] flex flex-wrap items-center gap-2">
         <ScrollText size={14} className="text-brand" />
         <h2 className="text-sm font-medium text-primary">Governance record</h2>
-        <span className="text-[10px] uppercase tracking-wider text-muted ml-auto">
-          {tenureNote} tenure
-        </span>
+        {tenureNote && (
+          <span className="text-[10px] uppercase tracking-wider text-muted ml-auto">
+            {tenureNote}
+          </span>
+        )}
       </div>
 
       <div className="p-4 sm:p-5 space-y-4">

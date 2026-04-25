@@ -11,6 +11,7 @@
     "dev:custom": "node scripts/setup-remote-debug.js custom && vite",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "check:term-hardcodes": "node scripts/check-term-hardcodes.mjs",
     "preview": "vite preview",
     "setup-remote": "node scripts/setup-remote-debug.js"
   },

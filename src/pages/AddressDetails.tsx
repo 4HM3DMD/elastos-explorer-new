@@ -24,6 +24,7 @@ import { truncateHash } from '../utils/seo';
 const BalanceHistoryChart = lazy(() => import('../components/BalanceHistoryChart'));
 const VoteHistoryTimeline = lazy(() => import('../components/VoteHistoryTimeline'));
 const GovernanceTimeline = lazy(() => import('../components/GovernanceTimeline'));
+const CRVotesSummary = lazy(() => import('../components/CRVotesSummary'));
 
 type TabId = 'overview' | 'balance' | 'staking' | 'governance';
 
@@ -233,7 +234,10 @@ const AddressDetails = () => {
       )}
       {activeTab === 'governance' && address && (
         <Suspense fallback={<TabSkeleton />}>
-          <GovernanceTimeline address={address} />
+          <div className="space-y-4">
+            <CRVotesSummary address={address} />
+            <GovernanceTimeline address={address} />
+          </div>
         </Suspense>
       )}
     </div>

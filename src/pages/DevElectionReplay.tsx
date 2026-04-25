@@ -26,7 +26,7 @@
 // "simulated, not live" framing impossible to miss.
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Pause, Play, RotateCcw, FastForward, AlertTriangle } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import type {
@@ -40,22 +40,42 @@ import { CouncilMembersTable, CandidatesList, StatusHero } from './Elections';
 import SEO from '../components/SEO';
 import { cn } from '../lib/cn';
 
-// Term 6's real chain boundaries (from CRFirstTermStart=658930,
-// CRTermLength=262800, CRVotingPeriod=21600, CRClaimPeriod=10080).
-const T6_TERM = 6;
-const T6_TERM_START = 658_930 + (T6_TERM - 1) * 262_800;            // 1972930
-const T6_VOTING_END = T6_TERM_START - 1 - 10_080;                   // 1962849
-const T6_VOTING_START = T6_VOTING_END - 21_600 + 1;                 // 1941250
-const T6_CLAIM_START = T6_VOTING_END + 1;                           // 1962850
-const T6_CLAIM_END = T6_TERM_START - 1;                             // 1972929
-const T6_TAKEOVER = T6_TERM_START;                                  // 1972930
-const T6_ON_DUTY_END = T6_TERM_START + 262_800;                     // 2235730
+// Term-agnostic chain constants — the same ones the backend uses.
+// Source: aggregator.go's CRFirstTermStart / CRTermLength / etc.,
+// which mirror Elastos.ELA mainnet config.
+const CR_FIRST_TERM_START = 658_930;
+const CR_TERM_LENGTH = 262_800;
+const CR_VOTING_PERIOD = 21_600;
+const CR_CLAIM_PERIOD = 10_080;
 
-// We always simulate Term 6's window, regardless of where mainnet is
-// today. Pre-voting starts ~1000 blocks before voting open so the
-// "duty (Term 5 still seated)" frame is visible first.
-const SIM_START = T6_VOTING_START - 500;
-const SIM_END = Math.min(T6_TAKEOVER + 2_000, T6_ON_DUTY_END);
+// Compute every relevant boundary for an arbitrary term. Pure
+// function of `term` — works for T4, T6, T8 in 2028, T42 in 2055,
+// without code changes. Mirrors the backend's crElectionWindow().
+interface TermBoundaries {
+  termStart: number;        // first block of N's duty period
+  votingStart: number;      // first block of N's voting window
+  votingEnd: number;        // last block of N's voting window (INCLUSIVE)
+  claimStart: number;       // first block of N's claim period
+  claimEnd: number;         // last block of N's claim period (INCLUSIVE)
+  takeover: number;         // == termStart, the handover block
+  onDutyEnd: number;        // first block AFTER N's duty (== T_{N+1} termStart)
+}
+function computeTermBoundaries(term: number): TermBoundaries {
+  const termStart = CR_FIRST_TERM_START + (term - 1) * CR_TERM_LENGTH;
+  const votingEnd = termStart - 1 - CR_CLAIM_PERIOD;
+  const votingStart = votingEnd - CR_VOTING_PERIOD + 1;
+  const claimStart = votingEnd + 1;
+  const claimEnd = termStart - 1;
+  return {
+    termStart,
+    votingStart,
+    votingEnd,
+    claimStart,
+    claimEnd,
+    takeover: termStart,
+    onDutyEnd: termStart + CR_TERM_LENGTH,
+  };
+}
 
 const SPEED_PRESETS = [
   { bps: 1,    label: '1×',     hint: '1 block/sec — real-time feel' },
@@ -65,41 +85,42 @@ const SPEED_PRESETS = [
 ];
 
 // Synthesise an ElectionStatus mirroring what the backend would emit
-// at the given simulated chain tip. Phase boundaries match the same
-// math the backend uses in api/governance.go:getCRElectionStatus().
-function synthStatus(height: number): ElectionStatus {
+// at the given simulated chain tip, for any chosen replay term.
+// Phase boundaries match the same math the backend uses in
+// api/governance.go:getCRElectionStatus(). Term-agnostic.
+function synthStatus(height: number, b: TermBoundaries, term: number): ElectionStatus {
+  const next = computeTermBoundaries(term + 1);
+
   let phase: ElectionPhase = 'duty';
-  if (height >= T6_VOTING_START && height <= T6_VOTING_END) phase = 'voting';
-  else if (height >= T6_CLAIM_START && height <= T6_CLAIM_END) phase = 'claim';
-  else if (height >= T6_TAKEOVER) phase = 'duty';
-  else phase = 'duty'; // pre-voting: still in Term 5 duty
+  if (height >= b.votingStart && height <= b.votingEnd) phase = 'voting';
+  else if (height >= b.claimStart && height <= b.claimEnd) phase = 'claim';
+  else if (height >= b.takeover) phase = 'duty';
+  else phase = 'duty'; // pre-voting: still in T_{term-1} duty
 
-  // While in voting/claim, the seated council is Term 5 ("currentCouncilTerm").
-  // Once height crosses T6_TAKEOVER, Term 6 takes over.
-  const currentCouncilTerm = phase === 'duty' && height >= T6_TAKEOVER ? 6 : 5;
-  const targetTerm = phase === 'duty' && height >= T6_TAKEOVER ? 7 : 6;
+  // Before takeover the seated council is term-1; after takeover it's `term`.
+  const seatedTerm = phase === 'duty' && height >= b.takeover ? term : term - 1;
+  const targetTerm = phase === 'duty' && height >= b.takeover ? term + 1 : term;
 
-  // For Term 5 duty (pre-voting), nextVoting* points at Term 6's voting window.
-  // For Term 6 duty (post-takeover), point at a fictional Term 7 window.
-  const nextVotingStartHeight =
-    currentCouncilTerm === 5 ? T6_VOTING_START : T6_TAKEOVER + 262_800 - 10_080 - 21_600;
-  const nextVotingEndHeight =
-    currentCouncilTerm === 5 ? T6_VOTING_END : T6_TAKEOVER + 262_800 - 10_080 - 1;
+  // nextVoting* depends on whose duty period contains `height`.
+  // If still in T_{term-1} duty pre-voting → next window is T_term's.
+  // If in T_term duty post-takeover → next window is T_{term+1}'s.
+  const nextVotingStartHeight = seatedTerm === term - 1 ? b.votingStart : next.votingStart;
+  const nextVotingEndHeight   = seatedTerm === term - 1 ? b.votingEnd   : next.votingEnd;
 
   return {
     phase,
     currentHeight: height,
-    currentCouncilTerm,
+    currentCouncilTerm: seatedTerm,
     targetTerm,
     inVoting: phase === 'voting',
     onDuty: true,
-    votingStartHeight: phase === 'voting' || phase === 'claim' ? T6_VOTING_START : 0,
-    votingEndHeight: phase === 'voting' || phase === 'claim' ? T6_VOTING_END : 0,
-    onDutyStartHeight: phase === 'duty' && height >= T6_TAKEOVER ? T6_TAKEOVER : 0,
-    onDutyEndHeight: phase === 'duty' && height >= T6_TAKEOVER ? T6_ON_DUTY_END : 0,
-    claimStartHeight: T6_CLAIM_START,
-    claimEndHeight: T6_CLAIM_END,
-    newCouncilTakeoverHeight: T6_TAKEOVER,
+    votingStartHeight: phase === 'voting' || phase === 'claim' ? b.votingStart : 0,
+    votingEndHeight:   phase === 'voting' || phase === 'claim' ? b.votingEnd   : 0,
+    onDutyStartHeight: phase === 'duty' && height >= b.takeover ? b.takeover  : 0,
+    onDutyEndHeight:   phase === 'duty' && height >= b.takeover ? b.onDutyEnd : 0,
+    claimStartHeight: b.claimStart,
+    claimEndHeight: b.claimEnd,
+    newCouncilTakeoverHeight: b.takeover,
     nextVotingStartHeight,
     nextVotingEndHeight,
     failedRestart: false,
@@ -140,49 +161,112 @@ function candidateToMember(c: ElectionCandidate): CRMember {
 }
 
 const DevElectionReplay = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Term to replay — driven by ?term=N URL query. Defaults to the
+  // most-recently-completed term (currently T6, will be T7 after May
+  // 2026, T8 in 2028, etc.) auto-detected from /cr/elections.
+  const urlTerm = Number(searchParams.get('term'));
+  const [resolvedTerm, setResolvedTerm] = useState<number | null>(
+    Number.isFinite(urlTerm) && urlTerm >= 4 ? urlTerm : null,
+  );
+  const [availableTerms, setAvailableTerms] = useState<number[]>([]);
+
+  // Auto-pick the most recently completed BPoS-era term if no URL hint.
+  useEffect(() => {
+    let cancelled = false;
+    blockchainApi
+      .getCRElections()
+      .then((all) => {
+        if (cancelled) return;
+        // Only BPoS-era terms (4+) have parseable replay events.
+        const bposTerms = all
+          .map((e) => e.term)
+          .filter((t) => t >= 4)
+          .sort((a, b) => b - a);
+        setAvailableTerms(bposTerms);
+        if (resolvedTerm === null && bposTerms.length > 0) {
+          setResolvedTerm(bposTerms[0]);
+        }
+      })
+      .catch(() => {
+        // Fallback: hardcoded T6 only if the network is fully down at
+        // first paint. Once API recovers the picker repopulates.
+        if (!cancelled && resolvedTerm === null) setResolvedTerm(6);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedTerm]);
+
+  // Boundaries for the resolved term — pure formula, no hardcoded
+  // term numbers. Derived once per term change. Falls back to T6 only
+  // for the very first render before resolvedTerm is set.
+  const term = resolvedTerm ?? 6;
+  const b = useMemo(() => computeTermBoundaries(term), [term]);
+  const SIM_START = b.votingStart - 500;
+  const SIM_END = Math.min(b.takeover + 2000, b.onDutyEnd);
+
   const [simHeight, setSimHeight] = useState(SIM_START);
   const [speed, setSpeed] = useState<number>(50);
   const [playing, setPlaying] = useState(false);
-  const [t6Candidates, setT6Candidates] = useState<ElectionCandidate[]>([]);
-  const [t5ElectedAsMembers, setT5ElectedAsMembers] = useState<CRMember[]>([]);
-  const [t6ElectedAsMembers, setT6ElectedAsMembers] = useState<CRMember[]>([]);
+  const [targetCandidates, setTargetCandidates] = useState<ElectionCandidate[]>([]);
+  const [prevElectedAsMembers, setPrevElectedAsMembers] = useState<CRMember[]>([]);
+  const [targetElectedAsMembers, setTargetElectedAsMembers] = useState<CRMember[]>([]);
   const [replayEvents, setReplayEvents] = useState<ElectionReplayEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Reset simHeight when the chosen term changes — without this the
+  // counter stays at the old term's offset and shows nonsense.
+  useEffect(() => {
+    setSimHeight(SIM_START);
+    setPlaying(false);
+  }, [SIM_START]);
+
+  const handleTermChange = useCallback(
+    (newTerm: number) => {
+      setResolvedTerm(newTerm);
+      const next = new URLSearchParams(searchParams);
+      next.set('term', String(newTerm));
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   // Use ref for the interval so the speed slider can re-arm cleanly
   // without losing simHeight across renders.
   const intervalRef = useRef<number | null>(null);
 
   // Initial fetch — three calls in parallel via allSettled so a
-  // partial failure doesn't break the whole simulator. Each set is
-  // wired independently:
-  //   1. Term 5 detail → seed Term 5 elected as the "still-on-duty"
-  //      council during the simulator's pre-voting and voting phases.
-  //   2. Term 6 detail → final candidate list (cid, did, nickname),
-  //      identifies the 12 elected for claim/duty rendering.
-  //   3. Term 6 replay events → the real per-block vote stream we
-  //      replay through to reconstruct live tallies.
-  // We only surface a fatal error when ALL three fail; otherwise the
-  // simulator renders whatever data did arrive.
+  // partial failure doesn't break the whole simulator:
+  //   1. Term `term-1` detail → seed previous-term elected as the
+  //      "still-on-duty" council during pre-voting and voting phases.
+  //   2. Term `term` detail → final candidate list (cid, did,
+  //      nickname), identifies the 12 elected for claim/duty.
+  //   3. Term `term` replay events → real per-block vote stream
+  //      we replay through to reconstruct live tallies.
+  //
+  // Term-agnostic: refetches on every term change.
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     Promise.allSettled([
-      blockchainApi.getCRElectionByTerm(5),
-      blockchainApi.getCRElectionByTerm(6),
-      blockchainApi.getCRElectionReplayEvents(6),
+      blockchainApi.getCRElectionByTerm(term - 1),
+      blockchainApi.getCRElectionByTerm(term),
+      blockchainApi.getCRElectionReplayEvents(term),
     ])
-      .then(([t5Res, t6Res, eventsRes]) => {
+      .then(([prevRes, targetRes, eventsRes]) => {
         if (cancelled) return;
-        if (t6Res.status === 'fulfilled') {
-          setT6Candidates(t6Res.value.candidates);
-          setT6ElectedAsMembers(
-            t6Res.value.candidates.filter((c) => c.elected).map(candidateToMember),
+        if (targetRes.status === 'fulfilled') {
+          setTargetCandidates(targetRes.value.candidates);
+          setTargetElectedAsMembers(
+            targetRes.value.candidates.filter((c) => c.elected).map(candidateToMember),
           );
         }
-        if (t5Res.status === 'fulfilled') {
-          setT5ElectedAsMembers(
-            t5Res.value.candidates.filter((c) => c.elected).map(candidateToMember),
+        if (prevRes.status === 'fulfilled') {
+          setPrevElectedAsMembers(
+            prevRes.value.candidates.filter((c) => c.elected).map(candidateToMember),
           );
         }
         if (eventsRes.status === 'fulfilled') {
@@ -209,11 +293,11 @@ const DevElectionReplay = () => {
           }
         }
         const allFailed =
-          t5Res.status === 'rejected' &&
-          t6Res.status === 'rejected' &&
+          prevRes.status === 'rejected' &&
+          targetRes.status === 'rejected' &&
           eventsRes.status === 'rejected';
         if (allFailed) {
-          setFetchError('Failed to load Term 5/6 data from API');
+          setFetchError(`Failed to load Term ${term - 1}/${term} data from API`);
         }
       })
       .finally(() => {
@@ -222,7 +306,7 @@ const DevElectionReplay = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [term]);
 
   // Tick the simulator. We advance one block per interval, so the
   // interval delay = 1000 / speed. For very high speeds we batch
@@ -254,7 +338,7 @@ const DevElectionReplay = () => {
     };
   }, [playing, speed]);
 
-  const status = useMemo(() => synthStatus(simHeight), [simHeight]);
+  const status = useMemo(() => synthStatus(simHeight, b, term), [simHeight, b, term]);
   const phase = status.phase;
 
   // Pick the right "live council members" array for the current
@@ -265,17 +349,17 @@ const DevElectionReplay = () => {
   // 'Elected' during T5's duty period).
   //
   // Rules:
-  //   - simHeight < T6_TAKEOVER → T5 council is on duty. State = Elected.
-  //   - simHeight >= T6_TAKEOVER → T6 council is on duty. State = Elected.
+  //   - simHeight < b.takeover → T5 council is on duty. State = Elected.
+  //   - simHeight >= b.takeover → T6 council is on duty. State = Elected.
   //
   // Per-member impeachment / inactive transitions during a term
   // would require a `cr_member_state_history` table we don't have.
   // For T5 and T6 specifically, no impeachments occurred during
   // the simulated window, so flat 'Elected' is accurate.
   const liveMembers = useMemo(() => {
-    const source = simHeight >= T6_TAKEOVER ? t6ElectedAsMembers : t5ElectedAsMembers;
+    const source = simHeight >= b.takeover ? targetElectedAsMembers : prevElectedAsMembers;
     return source.map((m) => ({ ...m, state: 'Elected' }));
-  }, [simHeight, t5ElectedAsMembers, t6ElectedAsMembers]);
+  }, [simHeight, prevElectedAsMembers, targetElectedAsMembers]);
 
   // Real event replay. Walk every TxVoting event up to simHeight,
   // applying the node's `UsedCRVotes[stakeAddress]` semantic: each
@@ -339,7 +423,7 @@ const DevElectionReplay = () => {
   //
   // Candidates with no events in the window simply never appear in
   // this map; they're filtered out of the voting view anyway.
-  const t6FirstVoteHeight = useMemo(() => {
+  const firstVoteHeightByCid = useMemo(() => {
     const m = new Map<string, number>();
     for (const ev of replayEvents) {
       for (const v of ev.votes) {
@@ -356,14 +440,14 @@ const DevElectionReplay = () => {
   // sorted by first-vote-height for stable presentation order.
   const eligibleVotingCandidates = useMemo(
     () =>
-      t6Candidates
-        .filter((c) => t6FirstVoteHeight.has(c.cid))
+      targetCandidates
+        .filter((c) => firstVoteHeightByCid.has(c.cid))
         .sort((a, b) => {
-          const ah = t6FirstVoteHeight.get(a.cid)!;
-          const bh = t6FirstVoteHeight.get(b.cid)!;
+          const ah = firstVoteHeightByCid.get(a.cid)!;
+          const bh = firstVoteHeightByCid.get(b.cid)!;
           return ah - bh;
         }),
-    [t6Candidates, t6FirstVoteHeight],
+    [targetCandidates, firstVoteHeightByCid],
   );
 
   // Build the voting-body candidate list — a candidate is on the
@@ -377,7 +461,7 @@ const DevElectionReplay = () => {
     }
     const SELA_PER_ELA = 1e8;
     const visible = eligibleVotingCandidates.filter((c) => {
-      const fv = t6FirstVoteHeight.get(c.cid);
+      const fv = firstVoteHeightByCid.get(c.cid);
       return fv !== undefined && fv <= simHeight;
     });
     const enriched = visible.map((c) => {
@@ -398,25 +482,25 @@ const DevElectionReplay = () => {
       return a.cid.localeCompare(b.cid);
     });
     return enriched.map((c, i) => ({ ...c, rank: i + 1 }));
-  }, [phase, eligibleVotingCandidates, t6FirstVoteHeight, liveTally, simHeight]);
+  }, [phase, eligibleVotingCandidates, firstVoteHeightByCid, liveTally, simHeight]);
 
   // Counts for the header readout: how many candidates have made
   // their debut on the live tally so far, out of the eventual total.
   const registeredCount = useMemo(() => {
     let count = 0;
     for (const c of eligibleVotingCandidates) {
-      const fv = t6FirstVoteHeight.get(c.cid);
+      const fv = firstVoteHeightByCid.get(c.cid);
       if (fv !== undefined && fv <= simHeight) count++;
     }
     return count;
-  }, [eligibleVotingCandidates, t6FirstVoteHeight, simHeight]);
+  }, [eligibleVotingCandidates, firstVoteHeightByCid, simHeight]);
 
   // Candidate count drives the voting hero subtitle.
   const targetCandidateCount = votingBody.length;
 
   // Claim phase shows only the elected 12 (incoming council) with
   // their final tallies — by claim phase votes are locked in.
-  const claimBody = useMemo(() => t6Candidates.filter((c) => c.elected), [t6Candidates]);
+  const claimBody = useMemo(() => targetCandidates.filter((c) => c.elected), [targetCandidates]);
 
   const handleJump = useCallback((target: number) => {
     setPlaying(false);
@@ -433,9 +517,9 @@ const DevElectionReplay = () => {
     ? 'VOTING'
     : phase === 'claim'
     ? 'CLAIM (CRClaimPeriod)'
-    : phase === 'duty' && simHeight >= T6_TAKEOVER
-    ? 'DUTY (Term 6 seated)'
-    : 'DUTY (Term 5 seated, pre-voting)';
+    : phase === 'duty' && simHeight >= b.takeover
+    ? `DUTY (Term ${term} seated)`
+    : `DUTY (Term ${term - 1} seated, pre-voting)`;
 
   return (
     <div className="px-4 lg:px-6 py-6 space-y-6">
@@ -446,13 +530,13 @@ const DevElectionReplay = () => {
         <AlertTriangle size={18} className="text-yellow-400 flex-shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-primary mb-1">
-            Election replay — accelerated playback of real Term 6 chain data
+            Election replay — accelerated playback of real Term {term} chain data
           </p>
           <p className="text-xs text-secondary">
             Votes, voter addresses, registration blocks, candidate URLs, and council members
             are all real on-chain data. The active council&apos;s state is derived from the
-            simulated block (Term 5 = Elected during pre-T6 frame; Term 6 = Elected after
-            handover). Only TIME is accelerated. For the live status, see {' '}
+            simulated block (Term {term - 1} = Elected during pre-takeover frame; Term {term} =
+            Elected after handover). Only TIME is accelerated. For the live status, see {' '}
             <Link to="/governance" className="link-blue">/governance</Link>.
           </p>
         </div>
@@ -470,10 +554,10 @@ const DevElectionReplay = () => {
             </p>
             <p className="text-xs text-secondary mt-1 font-mono" style={{ fontVariantNumeric: 'tabular-nums' }}>
               Block {simHeight.toLocaleString()} ·{' '}
-              {phase === 'voting' && `${T6_VOTING_END - simHeight} blocks until voting close`}
-              {phase === 'claim' && `${T6_TAKEOVER - simHeight} blocks until handover`}
-              {phase === 'duty' && simHeight >= T6_TAKEOVER && `${T6_ON_DUTY_END - simHeight} blocks until next election cycle`}
-              {phase === 'duty' && simHeight < T6_TAKEOVER && `${T6_VOTING_START - simHeight} blocks until voting opens`}
+              {phase === 'voting' && `${b.votingEnd - simHeight} blocks until voting close`}
+              {phase === 'claim' && `${b.takeover - simHeight} blocks until handover`}
+              {phase === 'duty' && simHeight >= b.takeover && `${b.onDutyEnd - simHeight} blocks until next election cycle`}
+              {phase === 'duty' && simHeight < b.takeover && `${b.votingStart - simHeight} blocks until voting opens`}
               {phase === 'voting' && replayEvents.length > 0 && (
                 <span> · {registeredCount} / {eligibleVotingCandidates.length} on ballot · {liveTally.eventCount} / {replayEvents.length} votes applied</span>
               )}
@@ -501,6 +585,29 @@ const DevElectionReplay = () => {
           </div>
         </div>
 
+        {/* Term selector — choose which past term to replay. List
+            populated from /cr/elections (BPoS-era only). New terms
+            appear automatically as the chain progresses. */}
+        {availableTerms.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em]">Term</span>
+            {availableTerms.map((t) => (
+              <button
+                key={t}
+                onClick={() => handleTermChange(t)}
+                className={cn(
+                  'px-3 py-1 rounded-md text-xs font-medium transition-colors border',
+                  t === term
+                    ? 'bg-brand/15 text-brand border-brand/40'
+                    : 'text-secondary border-[var(--color-border)] hover:text-primary hover:border-[var(--color-border-strong)]',
+                )}
+              >
+                T{t}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Speed selector */}
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em]">Speed</span>
@@ -525,12 +632,12 @@ const DevElectionReplay = () => {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em]">Jump to</span>
           <JumpButton label="Pre-voting" onClick={() => handleJump(SIM_START)} />
-          <JumpButton label="Voting open" onClick={() => handleJump(T6_VOTING_START)} />
-          <JumpButton label="Voting close" onClick={() => handleJump(T6_VOTING_END - 50)} />
-          <JumpButton label="Claim window" onClick={() => handleJump(T6_CLAIM_START + 100)} />
-          <JumpButton label="Handover − 100" onClick={() => handleJump(T6_TAKEOVER - 100)} />
-          <JumpButton label="Handover" onClick={() => handleJump(T6_TAKEOVER)} />
-          <JumpButton label="Mid-duty" onClick={() => handleJump(T6_TAKEOVER + 50_000)} />
+          <JumpButton label="Voting open" onClick={() => handleJump(b.votingStart)} />
+          <JumpButton label="Voting close" onClick={() => handleJump(b.votingEnd - 50)} />
+          <JumpButton label="Claim window" onClick={() => handleJump(b.claimStart + 100)} />
+          <JumpButton label="Handover − 100" onClick={() => handleJump(b.takeover - 100)} />
+          <JumpButton label="Handover" onClick={() => handleJump(b.takeover)} />
+          <JumpButton label="Mid-duty" onClick={() => handleJump(b.takeover + 50_000)} />
         </div>
       </div>
 
@@ -579,8 +686,8 @@ const DevElectionReplay = () => {
 
       {/* Footer hint */}
       <p className="text-[11px] text-muted text-center pt-2">
-        Tip: <FastForward size={10} className="inline" /> 2000× → full Term 6 cycle (voting + claim
-        + duty) plays in about 2½ minutes. Use jump buttons to skip ahead.
+        Tip: <FastForward size={10} className="inline" /> 2000× → full Term {term} cycle (voting +
+        claim + duty) plays in about 2½ minutes. Use jump buttons to skip ahead.
       </p>
     </div>
   );

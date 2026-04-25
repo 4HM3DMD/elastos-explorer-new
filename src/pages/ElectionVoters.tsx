@@ -21,7 +21,6 @@ import type {
   CandidateVoter,
   ElectionTermDetail,
 } from '../types/blockchain';
-import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
@@ -311,7 +310,7 @@ function VoterRow({ voter, candidateMode }: { voter: TermVoter; candidateMode: b
               className="font-mono text-xs text-muted"
               style={{ fontVariantNumeric: 'tabular-nums' }}
             >
-              {cn((voter as ElectionVoter).lastVoteHeight.toLocaleString())}
+              {(voter as ElectionVoter).lastVoteHeight.toLocaleString()}
             </span>
           </td>
         </>

@@ -19,6 +19,7 @@ const CRProposals = lazy(() => import('./pages/CRProposals.js'));
 const ProposalDetail = lazy(() => import('./pages/ProposalDetail.js'));
 const Elections = lazy(() => import('./pages/Elections.js'));
 const ElectionDetail = lazy(() => import('./pages/ElectionDetail.js'));
+const DevElectionReplay = lazy(() => import('./pages/DevElectionReplay.js'));
 const Charts = lazy(() => import('./pages/Charts.js'));
 const Mempool = lazy(() => import('./pages/Mempool.js'));
 const Ranking = lazy(() => import('./pages/Ranking.js'));
@@ -120,6 +121,7 @@ function AnimatedRoutes() {
           <Route path="/governance/proposal/:hash" element={<ProposalDetail />} />
           <Route path="/governance/elections" element={<Navigate to="/governance" replace />} />
           <Route path="/governance/elections/:term" element={<ElectionDetail />} />
+          <Route path="/dev/elections-replay" element={<DevElectionReplay />} />
 
           <Route path="/charts" element={<Charts />} />
           <Route path="/mempool" element={<Mempool />} />

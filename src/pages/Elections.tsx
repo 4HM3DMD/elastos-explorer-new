@@ -68,7 +68,11 @@ const HEADER_ICON = {
 
 // Normalise older "claiming" emission to "claim" so downstream
 // conditionals only need to handle one spelling.
-function normalisePhase(phase: ElectionPhase): Exclude<ElectionPhase, 'claiming'> {
+//
+// Exported so the dev election-replay simulator (and any future
+// consumer) can apply the same backend-compat normalisation when
+// synthesising a status object.
+export function normalisePhase(phase: ElectionPhase): Exclude<ElectionPhase, 'claiming'> {
   return phase === 'claiming' ? 'claim' : phase;
 }
 
@@ -315,7 +319,7 @@ const Elections = () => {
  * rendered for duty (which uses the members table as its body) or
  * pre-genesis.
  */
-function StatusHero({
+export function StatusHero({
   status,
   targetCandidateCount,
 }: {
@@ -477,7 +481,7 @@ function StatusHero({
  * CouncilMembersTable — the live council roster. Reused in duty phase
  * (body) and claim/failed_restart phase (context panel).
  */
-function CouncilMembersTable({
+export function CouncilMembersTable({
   members,
   loading,
   headline,
@@ -580,7 +584,7 @@ function CouncilMembersTable({
  * incoming elected council for claim phase. Vote column stays
  * visible (non-legacy terms always have real counts).
  */
-function CandidatesList({
+export function CandidatesList({
   candidates,
   title,
   emptyLabel,

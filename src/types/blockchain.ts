@@ -583,6 +583,20 @@ export interface CandidateProfile {
   governance: CandidateProfileGovernance;
 }
 
+// /cr/members/{cid}/reviews — paginated full review log for a CR
+// member. Each entry has the proposal title, opinion, the review
+// block height + timestamp, the txid, and the proposal's current
+// status (e.g. Notification, Finished, Terminated).
+export interface CandidateReview {
+  proposalHash: string;
+  title: string;
+  opinion: 'approve' | 'reject' | 'abstain' | string;
+  reviewHeight: number;
+  reviewTimestamp: number;
+  txid: string;
+  proposalStatus: string;
+}
+
 // One TxVoting attempt from GET /cr/elections/{term}/voters/{cid}/{address}/history.
 // `counted: true` marks the entry that survived the UsedCRVotes
 // replacement rule. Earlier entries with `counted: false` show the

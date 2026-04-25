@@ -19,14 +19,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Activity, ArrowLeft, Coins, ChevronDown, ChevronRight,
-  ExternalLink, Globe, Hash, Landmark, ScrollText, ShieldCheck,
-  ThumbsUp, ThumbsDown, Scale, Trophy, Users,
+  Copy, Check, ExternalLink, Hash, Landmark, ScrollText, ShieldCheck,
+  ThumbsUp, ThumbsDown, Scale, Trophy, Users, X,
 } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import type {
   CandidateProfile,
   CandidateProfileTerm,
   CandidateRecentReview,
+  CandidateReview,
   CandidateVoter,
   VoterTxHistoryEntry,
 } from '../types/blockchain';
@@ -36,11 +37,17 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
 import Pagination from '../components/Pagination';
-import GovernanceNav from '../components/GovernanceNav';
 import OpinionBar from '../components/OpinionBar';
 import { formatVotes, safeExternalUrl, getLocation } from '../utils/format';
+import { copyToClipboard } from '../utils/clipboard';
 
 const PAGE_SIZE = 25;
+
+// Elastos mainnet block time. Used to convert block-height spans
+// into approximate wall-clock duration (tenure summary). If the
+// chain ever changes block time this needs to update — keep it
+// here and not inline in formulas.
+const ELASTOS_BLOCK_SECONDS = 120;
 
 const CandidateDetail = () => {
   const { term: termParam, cid } = useParams<{ term: string; cid: string }>();
@@ -141,7 +148,7 @@ const CandidateDetail = () => {
       <SEO
         title={`${m.nickname || 'Candidate'} · Term ${term}`}
         description={`Council member ${m.nickname} — Term ${term} stats, governance record, and voter list.`}
-        path={`/governance/elections/${term}/voters/${cid}`}
+        path={`/governance/elections/${term}/candidate/${cid}`}
       />
 
       {/* 1. HERO */}
@@ -316,7 +323,7 @@ const CandidateDetail = () => {
       </div>
 
       {/* 5. GOVERNANCE RECORD */}
-      <GovernanceCard governance={profile.governance} term={term} />
+      <GovernanceCard governance={profile.governance} cid={cid!} />
 
       {/* 6. VOTERS TABLE — this term */}
       <VotersCard
@@ -443,16 +450,41 @@ function TermPills({
 }
 
 /**
- * GovernanceCard — proposal-review record. Renders tenure +
- * OpinionBar + a recent-reviews list. Empty state if no reviews.
+ * GovernanceCard — proposal-review record. Tenure summary +
+ * OpinionBar + recent reviews + "View all N reviews" expandable
+ * paginated full list. Empty state if no reviews.
  */
 function GovernanceCard({
   governance,
-  term,
+  cid,
 }: {
   governance: CandidateProfile['governance'];
-  term: number;
+  cid: string;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const [allReviews, setAllReviews] = useState<CandidateReview[]>([]);
+  const [allTotal, setAllTotal] = useState(0);
+  const [allPage, setAllPage] = useState(1);
+  const [allLoading, setAllLoading] = useState(false);
+  const ALL_PAGE_SIZE = 25;
+
+  useEffect(() => {
+    if (!showAll) return;
+    setAllLoading(true);
+    blockchainApi
+      .getCandidateReviews(cid, allPage, ALL_PAGE_SIZE)
+      .then((res) => {
+        setAllReviews(res.data);
+        setAllTotal(res.total);
+      })
+      .catch(() => {
+        setAllReviews([]);
+      })
+      .finally(() => setAllLoading(false));
+  }, [showAll, cid, allPage]);
+
+  const allTotalPages = Math.max(1, Math.ceil(allTotal / ALL_PAGE_SIZE));
+
   if (governance.totalReviews === 0) {
     return (
       <div className="card p-4 sm:p-5 relative overflow-hidden">
@@ -468,7 +500,7 @@ function GovernanceCard({
   }
 
   const span = governance.lastReviewHeight - governance.firstReviewHeight;
-  const approxYears = (span * 120) / (60 * 60 * 24 * 365); // 120s blocks
+  const approxYears = (span * ELASTOS_BLOCK_SECONDS) / (60 * 60 * 24 * 365);
   const tenureNote =
     approxYears >= 0.5
       ? `~${approxYears.toFixed(1)} year${approxYears >= 1.5 ? 's' : ''}`
@@ -501,20 +533,57 @@ function GovernanceCard({
         />
 
         {governance.recentReviews.length > 0 && (
-          <div className="pt-3 border-t border-[var(--color-border)]/40">
-            <p className="text-[10px] uppercase tracking-wider text-muted mb-2">
-              Most recent reviews
-            </p>
+          <div className="pt-3 border-t border-[var(--color-border)]/40 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                {showAll ? `All ${governance.totalReviews} reviews` : 'Most recent reviews'}
+              </p>
+              {governance.totalReviews > governance.recentReviews.length && (
+                <button
+                  onClick={() => setShowAll((v) => !v)}
+                  className="text-[11px] text-brand hover:underline"
+                >
+                  {showAll
+                    ? 'show recent only'
+                    : `view all ${governance.totalReviews} reviews →`}
+                </button>
+              )}
+            </div>
             <ul className="space-y-1.5">
-              {governance.recentReviews.map((rv) => (
-                <ReviewRow key={rv.proposalHash + rv.reviewHeight} review={rv} />
-              ))}
+              {showAll && allReviews.length > 0
+                ? allReviews.map((rv) => (
+                    <ReviewRow
+                      key={rv.proposalHash + rv.reviewHeight}
+                      review={{
+                        proposalHash: rv.proposalHash,
+                        title: rv.title,
+                        opinion: rv.opinion,
+                        reviewHeight: rv.reviewHeight,
+                        txid: rv.txid,
+                      }}
+                    />
+                  ))
+                : governance.recentReviews.map((rv) => (
+                    <ReviewRow key={rv.proposalHash + rv.reviewHeight} review={rv} />
+                  ))}
             </ul>
+            {showAll && allLoading && (
+              <p className="text-[11px] text-muted text-center py-2">Loading…</p>
+            )}
+            {showAll && allTotalPages > 1 && (
+              <Pagination
+                page={allPage}
+                totalPages={allTotalPages}
+                total={allTotal}
+                label="reviews"
+                onPageChange={(p) => {
+                  if (p >= 1 && p <= allTotalPages) setAllPage(p);
+                }}
+              />
+            )}
           </div>
         )}
       </div>
-      {/* eslint-disable-next-line @typescript-eslint/no-unused-vars */}
-      {void term}
     </section>
   );
 }
@@ -588,7 +657,7 @@ function VotersCard({
             'radial-gradient(ellipse 40% 100% at 15% 0%, rgba(246,146,26,0.15) 0%, transparent 100%)',
         }}
       />
-      <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2">
+      <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)] flex items-center justify-between gap-2">
         <h2 className="text-sm md:text-base font-medium text-primary flex items-center gap-2">
           <Activity size={15} className="text-brand" /> Voters this term
           <span
@@ -598,7 +667,12 @@ function VotersCard({
             {total.toLocaleString()}
           </span>
         </h2>
-        <GovernanceNav activePath="/governance" />
+        <Link
+          to={`/governance/elections/${term}/voters`}
+          className="text-[11px] text-muted hover:text-brand transition-colors inline-flex items-center gap-1"
+        >
+          all term voters →
+        </Link>
       </div>
       <div className="overflow-x-auto">
         <table className="table-clean w-full">
@@ -745,7 +819,12 @@ function VoterRow({
                     className="flex items-baseline justify-between gap-2 text-[11px]"
                   >
                     <span className={cn('inline-flex items-center gap-1', h.counted ? 'text-emerald-400' : 'text-muted')}>
-                      {h.counted ? '✓ Counted' : '✗ Superseded'}
+                      {h.counted ? (
+                        <Check size={11} className="text-emerald-400" />
+                      ) : (
+                        <X size={11} className="text-muted" />
+                      )}
+                      {h.counted ? 'Counted' : 'Superseded'}
                       <span className="font-mono ml-2" style={{ fontVariantNumeric: 'tabular-nums' }}>
                         block {h.voteHeight.toLocaleString()}
                       </span>
@@ -775,24 +854,38 @@ function VoterRow({
   );
 }
 
+/**
+ * CopyAddressButton — standalone copy icon next to a HashDisplay
+ * (where the hash itself is wrapped in a Link to the address page,
+ * so the link covers the hash text and copy is a separate action).
+ *
+ * Uses the same Copy / Check icons + colour treatment as
+ * HashDisplay (`src/components/HashDisplay.tsx:65-77`) so the
+ * platform's copy affordance is visually consistent everywhere.
+ */
 function CopyAddressButton({ address }: { address: string }) {
   const [copied, setCopied] = useState(false);
-  const onClick = (e: React.MouseEvent) => {
+  const onClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    navigator.clipboard.writeText(address).then(() => {
+    const ok = await copyToClipboard(address);
+    if (ok) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
   return (
     <button
       onClick={onClick}
-      className="text-muted hover:text-brand transition-colors p-0.5 shrink-0"
-      title={copied ? 'Copied!' : 'Copy address'}
-      aria-label="Copy voter address"
+      className="p-1 rounded-md hover:bg-hover transition-colors shrink-0"
+      title={copied ? 'Copied!' : 'Copy to clipboard'}
+      aria-label={copied ? 'Copied' : 'Copy address to clipboard'}
     >
-      {copied ? '✓' : '📋'}
+      {copied ? (
+        <Check size={13} className="text-accent-green" />
+      ) : (
+        <Copy size={13} className="text-muted hover:text-secondary" />
+      )}
     </button>
   );
 }

@@ -360,7 +360,7 @@ function CandidateRow({
         <td className="align-top" style={{ textAlign: 'right' }}>
           {candidate.voterCount > 0 ? (
             <Link
-              to={`/governance/elections/${term}/voters/${candidate.cid}`}
+              to={`/governance/elections/${term}/candidate/${candidate.cid}`}
               className="font-mono text-xs text-secondary hover:text-brand transition-colors"
               style={{ fontVariantNumeric: 'tabular-nums' }}
             >

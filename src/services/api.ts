@@ -9,7 +9,7 @@ import type {
   ElectionStatus, ElectionSummary, ElectionTermDetail,
   ElectionReplayEventsResponse,
   ElectionVoter, CandidateVoter, AddressCRVoteTerm,
-  CandidateProfile, VoterTxHistoryEntry,
+  CandidateProfile, VoterTxHistoryEntry, CandidateReview,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
 
@@ -252,6 +252,15 @@ export const blockchainApi = {
   // rich CandidateDetail page.
   getCandidateProfile: async (cid: string): Promise<CandidateProfile> => {
     return unwrap<CandidateProfile>(await api.get(`/cr/members/${cid}/profile`));
+  },
+
+  // Paginated full review log for a CR member — every proposal
+  // they've reviewed across all terms. Used by the "view all
+  // reviews" expansion on CandidateDetail.
+  getCandidateReviews: async (cid: string, page = 1, pageSize = 25) => {
+    return unwrapPaginated<CandidateReview[]>(
+      await api.get(`/cr/members/${cid}/reviews`, { params: { page, pageSize } }),
+    );
   },
 
   // All TxVotings a single voter cast for one candidate in a term's

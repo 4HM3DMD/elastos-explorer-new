@@ -816,6 +816,80 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+// getCandidateReviews returns paginated full list of proposal
+// reviews this candidate has filed (across every term they were
+// elected — keyed by DID under the hood).
+//
+// Mirrors getCRProposals pagination shape. Sorted DESC by
+// review_height so newest reviews come first. Useful for the
+// CandidateDetail "view all reviews" expansion when a member has
+// done dozens / hundreds of reviews (Sash has 136 in T6 alone).
+func (s *Server) getCandidateReviews(w http.ResponseWriter, r *http.Request) {
+	cid := chi.URLParam(r, "cid")
+	if cid == "" {
+		writeError(w, 400, "candidate cid required")
+		return
+	}
+	page := parseInt(r.URL.Query().Get("page"), 1)
+	pageSize := clampPageSize(parseInt(r.URL.Query().Get("pageSize"), 25), 200)
+	offset := (page - 1) * pageSize
+
+	// First resolve the DID — proposal reviews are keyed by DID.
+	var did string
+	err := s.db.API.QueryRow(r.Context(), `SELECT did FROM cr_members WHERE cid = $1`, cid).Scan(&did)
+	if err != nil || did == "" {
+		writeError(w, 404, "candidate not found or has no DID")
+		return
+	}
+
+	var total int64
+	if err := s.db.API.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM cr_proposal_reviews WHERE did = $1`, did).Scan(&total); err != nil {
+		slog.Warn("getCandidateReviews: count failed", "cid", cid, "error", err)
+	}
+
+	rows, err := s.db.API.Query(r.Context(), `
+		SELECT pr.proposal_hash,
+		       COALESCE(NULLIF(pr.title, ''), p.title, '') AS title,
+		       pr.opinion, pr.review_height, pr.review_timestamp, pr.txid,
+		       COALESCE(p.status, '') AS proposal_status
+		FROM cr_proposal_reviews pr
+		LEFT JOIN cr_proposals p ON p.proposal_hash = pr.proposal_hash
+		WHERE pr.did = $1
+		ORDER BY pr.review_height DESC
+		LIMIT $2 OFFSET $3`, did, pageSize, offset)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	var reviews []map[string]any
+	for rows.Next() {
+		var pHash, title, opinion, txid, pStatus string
+		var reviewH, reviewTs int64
+		if err := rows.Scan(&pHash, &title, &opinion, &reviewH, &reviewTs, &txid, &pStatus); err != nil {
+			continue
+		}
+		reviews = append(reviews, map[string]any{
+			"proposalHash":    pHash,
+			"title":           title,
+			"opinion":         opinion,
+			"reviewHeight":    reviewH,
+			"reviewTimestamp": reviewTs,
+			"txid":            strings.TrimSpace(txid),
+			"proposalStatus":  pStatus,
+		})
+	}
+
+	writeJSON(w, 200, APIResponse{
+		Data:  reviews,
+		Total: total,
+		Page:  page,
+		Size:  pageSize,
+	})
+}
+
 // getVoterTxHistory returns every TxVoting a single voter cast for
 // a single candidate within a term's voting window, ordered by
 // stake_height ASC. The frontend uses this to expand a voter row

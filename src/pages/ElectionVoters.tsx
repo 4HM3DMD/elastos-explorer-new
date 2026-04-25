@@ -236,7 +236,7 @@ function Header({
 
       <div>
         <Link
-          to={cid ? `/governance/elections/${term}` : `/governance/elections/${term}`}
+          to={`/governance/elections/${term}`}
           className="inline-flex items-center gap-1 text-xs text-secondary hover:text-brand transition-colors"
         >
           <ChevronLeft size={12} />

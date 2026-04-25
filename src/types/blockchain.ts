@@ -459,14 +459,6 @@ export interface ElectionCandidate {
   state?: string;
   location?: number;
   depositAmount?: string;
-  /**
-   * First block at which this elected member's DPoS pubkey appeared
-   * in the active CR arbiter rotation (arbiter_turns) after voting
-   * closed. Effectively "their consensus server first came online
-   * for this term". NULL/undefined if their node never joined the
-   * rotation during this term.
-   */
-  firstActiveHeight?: number;
 }
 
 // Full response from GET /api/v1/cr/elections/{term}.

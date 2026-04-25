@@ -415,14 +415,11 @@ const DevElectionReplay = () => {
             Election replay — accelerated playback of real Term 6 chain data
           </p>
           <p className="text-xs text-secondary">
-            Votes, voter addresses, registration blocks, candidate URLs, council members, and
-            per-member claimed-node blocks are all real on-chain data. The active council&apos;s
-            state is derived from the simulated block (Term 5 = Elected during pre-T6 frame;
-            Term 6 = Elected after handover). During the claim period, &quot;Node claimed&quot;
-            status comes from each member&apos;s real <code>cr_members.register_height</code> —
-            the block of their most recent TxRegisterCR/TxUpdateCR (which is the transaction
-            that sets <code>claimed_node</code>). Only TIME is accelerated. For the live
-            status, see <Link to="/governance" className="link-blue">/governance</Link>.
+            Votes, voter addresses, registration blocks, candidate URLs, and council members
+            are all real on-chain data. The active council&apos;s state is derived from the
+            simulated block (Term 5 = Elected during pre-T6 frame; Term 6 = Elected after
+            handover). Only TIME is accelerated. For the live status, see {' '}
+            <Link to="/governance" className="link-blue">/governance</Link>.
           </p>
         </div>
       </div>
@@ -527,22 +524,11 @@ const DevElectionReplay = () => {
           {/* Incoming council during the CRClaimPeriod. They've won
               the election (elected=true) but are NOT yet on duty —
               takeover happens at status.newCouncilTakeoverHeight.
-
-              "Node claimed" tracking: cr_members.register_height is
-              the block of each member's most recent TxRegisterCR /
-              TxUpdateCR — which is the transaction that sets
-              claimed_node. So register_height IS effectively "node
-              claimed at block X". A member is "ready to take office"
-              once register_height ≤ simHeight AND they have a
-              non-zero registerHeight from the API. */}
-          <ClaimNodeTracker
-            claimBody={claimBody}
-            simHeight={simHeight}
-            takeoverHeight={status.newCouncilTakeoverHeight}
-          />
+              The current Term N council remains seated below until
+              that block is crossed. */}
           <CandidatesList
             candidates={claimBody}
-            title={`Incoming Term ${status.targetTerm} council — final tally`}
+            title={`Incoming Term ${status.targetTerm} council — awaiting takeover at block ${status.newCouncilTakeoverHeight.toLocaleString()}`}
             emptyLabel="No incoming-council data"
           />
           <CouncilMembersTable
@@ -565,139 +551,6 @@ const DevElectionReplay = () => {
     </div>
   );
 };
-
-/**
- * ClaimNodeTracker — shows per-councilor node operational status
- * derived from real chain data:
- *
- *   - "Claimed" timestamp = `cr_members.register_height`. Block of
- *     the most recent TxRegisterCR/TxUpdateCR, which sets
- *     claimed_node. Tells us when the member declared which DPoS
- *     pubkey they'll run.
- *
- *   - "Online" timestamp = `firstActiveHeight`. First block at
- *     which their pubkey appeared in arbiter_turns.cr_pubkeys
- *     after voting closed. Tells us when their server actually
- *     came online and joined the consensus rotation.
- *
- * Status at simHeight:
- *   - simHeight < registerHeight  → Pending claim (rare; usually
- *                                    declared during voting)
- *   - registerHeight ≤ simHeight < firstActiveHeight (or no online
- *                                    yet) → Claimed but server offline
- *   - simHeight ≥ firstActiveHeight → Server live (in rotation)
- *
- * For T6: at simHeight = takeover, only ~2 of 12 are server-live;
- * the rest take days/weeks to come online (real chain history,
- * not approximation).
- */
-function ClaimNodeTracker({
-  claimBody,
-  simHeight,
-  takeoverHeight,
-}: {
-  claimBody: ElectionCandidate[];
-  simHeight: number;
-  takeoverHeight: number;
-}) {
-  const onlineCount = claimBody.filter(
-    (c) => c.firstActiveHeight && c.firstActiveHeight <= simHeight,
-  ).length;
-  const claimedCount = claimBody.filter(
-    (c) => (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight,
-  ).length;
-
-  // Sort by online-first then claimed-first so the "what's ready
-  // now" rows surface to the top.
-  const sorted = [...claimBody].sort((a, b) => {
-    const aOn = a.firstActiveHeight && a.firstActiveHeight <= simHeight ? 0 : 1;
-    const bOn = b.firstActiveHeight && b.firstActiveHeight <= simHeight ? 0 : 1;
-    if (aOn !== bOn) return aOn - bOn;
-    return (a.firstActiveHeight ?? Infinity) - (b.firstActiveHeight ?? Infinity);
-  });
-
-  return (
-    <div className="card overflow-hidden">
-      <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium text-primary">
-          Node operational status &middot; {onlineCount} live / {claimedCount} claimed / {claimBody.length} elected
-        </span>
-        <span className="text-xs text-muted">
-          Handover at block <span className="font-mono text-secondary">{takeoverHeight.toLocaleString()}</span>
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="table-clean w-full">
-          <thead>
-            <tr>
-              <th style={{ textAlign: 'left' }}>Councilor</th>
-              <th style={{ textAlign: 'left' }}>Status</th>
-              <th style={{ textAlign: 'right' }}>Claimed at</th>
-              <th style={{ textAlign: 'right' }}>Server online at</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((c) => {
-              const claimed =
-                (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight;
-              const online =
-                c.firstActiveHeight !== undefined && c.firstActiveHeight <= simHeight;
-              let statusBadge: { label: string; cls: string };
-              if (online) {
-                statusBadge = { label: 'Server live', cls: 'bg-green-500/20 text-green-400' };
-              } else if (claimed) {
-                statusBadge = {
-                  label: 'Claimed · server offline',
-                  cls: 'bg-yellow-500/20 text-yellow-400',
-                };
-              } else {
-                statusBadge = { label: 'Not yet claimed', cls: 'bg-muted/20 text-muted' };
-              }
-              return (
-                <tr key={c.cid}>
-                  <td style={{ textAlign: 'left' }}>
-                    <span className="font-semibold text-primary text-xs">{c.nickname}</span>
-                  </td>
-                  <td style={{ textAlign: 'left' }}>
-                    <span className={`badge whitespace-nowrap ${statusBadge.cls}`}>
-                      {statusBadge.label}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    {(c.registerHeight ?? 0) > 0 ? (
-                      <span
-                        className="font-mono text-xs text-secondary"
-                        style={{ fontVariantNumeric: 'tabular-nums' }}
-                      >
-                        block {(c.registerHeight ?? 0).toLocaleString()}
-                      </span>
-                    ) : (
-                      <span className="text-muted text-xs">—</span>
-                    )}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    {c.firstActiveHeight ? (
-                      <span
-                        className={`font-mono text-xs ${
-                          online ? 'text-green-400' : 'text-muted'
-                        }`}
-                        style={{ fontVariantNumeric: 'tabular-nums' }}
-                      >
-                        block {c.firstActiveHeight.toLocaleString()}
-                      </span>
-                    ) : (
-                      <span className="text-muted text-xs">never</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
 
 function JumpButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (

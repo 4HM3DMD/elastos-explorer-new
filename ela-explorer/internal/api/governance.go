@@ -535,14 +535,19 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 	var args []any
 	var query string
 
-	// Stable global proposal number: rank every proposal in the
+	// Stable GLOBAL proposal number: rank every proposal in the
 	// table by chronological order so #1 is the very first proposal
-	// ever, #2 the second, etc. We compute this once via a window
-	// function in a CTE, then JOIN on proposal_hash. Previously we
-	// used a correlated subquery (`SELECT COUNT(*) WHERE ...`) which
-	// was O(N²) at page-render time — the new CTE evaluates the
-	// window once over all proposals (linear) and the JOIN is fast
-	// on the proposal_hash primary key.
+	// ever, #2 the second, etc. NOT per-status filtered ranking — a
+	// "Veto Proposals" filter will show e.g. #5, #12, #28 (the global
+	// IDs of proposals that happen to be in veto), not #1, #2, #3.
+	// Frontend treats proposal_number as a permanent identifier, not
+	// a per-page index.
+	//
+	// Computed once via a window function in a CTE, then JOINed on
+	// proposal_hash. Previously a correlated subquery — O(N²) per
+	// page; CTE evaluates the window once over all proposals
+	// (linear) and the JOIN is fast on the proposal_hash primary
+	// key.
 	const rankedCTE = `WITH ranked_proposals AS (
 		SELECT proposal_hash,
 		       ROW_NUMBER() OVER (ORDER BY register_height ASC, proposal_hash ASC) AS proposal_number

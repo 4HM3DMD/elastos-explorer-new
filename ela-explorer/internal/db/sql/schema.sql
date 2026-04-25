@@ -226,6 +226,14 @@ CREATE INDEX IF NOT EXISTS idx_votes_type ON votes (vote_type);
 -- queries: WHERE vote_type=1 AND stake_height BETWEEN $1 AND $2.
 -- Without this composite, Postgres has to bitmap-AND two separate
 -- indexes, which costs ~2-3x compared to a single index walk.
+--
+-- Order matters: vote_type FIRST is correct for queries that filter
+-- by a specific vote_type and then range over heights. For the
+-- current codebase that's exclusively vote_type=1 (CRC votes). If
+-- future queries filter by a wider set of vote_types or by
+-- stake_height alone, this index won't help — at that point either
+-- add `idx_votes_height` (already exists, line 221) variant or
+-- consider switching the column order.
 CREATE INDEX IF NOT EXISTS idx_votes_type_height ON votes (vote_type, stake_height);
 
 CREATE TABLE IF NOT EXISTS bpos_stakes (

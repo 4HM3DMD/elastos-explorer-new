@@ -72,6 +72,11 @@ type Aggregator struct {
 // reference RPCs reliably still have the block.
 const forkProbeDepth = 6
 
+// bootTime captures process-start so time-bounded heuristics (like the
+// voter_rights cold-start guard in computeElectionTally) can fire only
+// during a short window after launch. Set once in package init.
+var bootTime = time.Now()
+
 func New(database *db.DB, nodeClient *node.Client, hub *ws.Hub, referenceClients []*node.Client) *Aggregator {
 	return &Aggregator{
 		db:                 database,
@@ -777,16 +782,19 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	// the bug we hit on T5 after the v17 heal. Skip and let the next
 	// 60s tick try again, by which time voter_rights is warm.
 	//
-	// The check is cheap (~1ms COUNT on a small table) and only
-	// applies when voter_rights has zero rows, which is only true
-	// during the first ~30s after a fresh schema. Once it has any
-	// rows the guard is a no-op forever.
-	var voterRightsCount int64
-	if err := a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM voter_rights`).Scan(&voterRightsCount); err == nil && voterRightsCount == 0 {
-		slog.Warn("election tally: skipping replay — voter_rights cold (boot race)",
-			"term", term,
-			"note", "next 60s tick will retry after voter_rights refresher warms")
-		return nil
+	// Time-bounded: the guard only applies for the first 5 minutes
+	// after process start. After that, an empty voter_rights table is
+	// a real condition (e.g. mass-unstake on a private testnet) and
+	// shouldn't silently skip tally computation forever. We track
+	// startup time once at boot via the package-level `bootTime`.
+	if time.Since(bootTime) < 5*time.Minute {
+		var voterRightsCount int64
+		if err := a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM voter_rights`).Scan(&voterRightsCount); err == nil && voterRightsCount == 0 {
+			slog.Warn("election tally: skipping replay — voter_rights cold (boot race)",
+				"term", term,
+				"note", "next 60s tick will retry after voter_rights refresher warms")
+			return nil
+		}
 	}
 
 	result, err := a.ReplayTermTally(ctx, term)

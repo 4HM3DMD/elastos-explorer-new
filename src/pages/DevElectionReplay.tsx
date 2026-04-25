@@ -186,7 +186,27 @@ const DevElectionReplay = () => {
           );
         }
         if (eventsRes.status === 'fulfilled') {
-          setReplayEvents(eventsRes.value.events);
+          // Defensive: validate shape before trusting. The backend
+          // ORDER BY guarantees chronological + tie-broken order, but
+          // if the response is somehow missing or malformed (network
+          // truncation, mid-deploy schema mismatch), we'd silently
+          // crash deep in the replay loop. Reject obviously-bad data.
+          const raw = eventsRes.value?.events;
+          if (Array.isArray(raw)) {
+            // Belt-and-braces: re-sort by (height, address) so the
+            // UsedCRVotes-replacement semantic stays correct even if
+            // the SQL ORDER BY were ever changed or a future caching
+            // layer reshuffled rows. Sort is stable on already-sorted
+            // arrays (V8 TimSort) — costs ~0 in the common path.
+            const sorted = [...raw].sort((a, b) => {
+              if (a.height !== b.height) return a.height - b.height;
+              return a.address.localeCompare(b.address);
+            });
+            setReplayEvents(sorted);
+          } else if (import.meta.env.DEV) {
+            // eslint-disable-next-line no-console
+            console.warn('DevElectionReplay: replay events response missing or malformed', eventsRes.value);
+          }
         }
         const allFailed =
           t5Res.status === 'rejected' &&

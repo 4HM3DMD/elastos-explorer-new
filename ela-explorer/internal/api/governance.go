@@ -555,16 +555,25 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the set of terms this address voted in by computing the
-	// term containing each vote's stake_height. This is pure formula
-	// — `(stake_height - CRFirstTermStart) / CRTermLength + 1`.
+	// Find the set of terms this address voted in by computing
+	// which term's VOTING WINDOW contains each vote's stake_height.
+	//
+	// CRC votes for term N are cast in [narrowStart_N, narrowEnd_N]
+	// where narrowEnd_N = CRFirstTermStart + (N-1)*CRTermLength
+	//                   - 1 - CRClaimPeriod.
+	//
+	// Solving for N given height H: N = CEIL((H - 648849)/262800) + 1
+	// where 648849 = narrowEnd_1 = CRFirstTermStart - 1 - CRClaimPeriod.
+	// This correctly identifies the term being voted FOR (not the
+	// currently-on-duty term). For H=1962849 (T6 narrowEnd) it
+	// returns 6, not 5. Pure formula — works for any future term.
 	rows, err := s.db.API.Query(r.Context(), `
 		WITH addr_votes AS (
 			SELECT v.candidate, v.amount_sela, v.stake_height, v.txid,
-			       FLOOR((v.stake_height - 658930) / 262800.0) + 1 AS term
+			       CEIL((v.stake_height - 648849.0) / 262800.0)::bigint + 1 AS term
 			FROM votes v
 			WHERE v.vote_type = 1 AND v.address = $1
-			  AND v.stake_height >= 658930
+			  AND v.stake_height >= 627250
 		),
 		latest_per_term AS (
 			SELECT term, MAX(stake_height) AS h

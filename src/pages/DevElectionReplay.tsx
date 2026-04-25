@@ -223,11 +223,25 @@ const DevElectionReplay = () => {
   const status = useMemo(() => synthStatus(simHeight), [simHeight]);
   const phase = status.phase;
 
-  // Pick the right "live council members" array for the current phase:
-  // - voting / claim / pre-voting (height < takeover) → Term 5 elected
-  //   are still on duty.
-  // - duty (height >= takeover) → Term 6 elected are now seated.
-  const liveMembers = simHeight >= T6_TAKEOVER ? t6ElectedAsMembers : t5ElectedAsMembers;
+  // Pick the right "live council members" array for the current
+  // simulated frame, and derive each member's state from simulated
+  // context rather than cr_members.state (which is CURRENT chain
+  // state and gives wrong answers during historical replay — e.g.
+  // T5 members who've cycled out now show 'Unknown' but were
+  // 'Elected' during T5's duty period).
+  //
+  // Rules:
+  //   - simHeight < T6_TAKEOVER → T5 council is on duty. State = Elected.
+  //   - simHeight >= T6_TAKEOVER → T6 council is on duty. State = Elected.
+  //
+  // Per-member impeachment / inactive transitions during a term
+  // would require a `cr_member_state_history` table we don't have.
+  // For T5 and T6 specifically, no impeachments occurred during
+  // the simulated window, so flat 'Elected' is accurate.
+  const liveMembers = useMemo(() => {
+    const source = simHeight >= T6_TAKEOVER ? t6ElectedAsMembers : t5ElectedAsMembers;
+    return source.map((m) => ({ ...m, state: 'Elected' }));
+  }, [simHeight, t5ElectedAsMembers, t6ElectedAsMembers]);
 
   // Real event replay. Walk every TxVoting event up to simHeight,
   // applying the node's `UsedCRVotes[stakeAddress]` semantic: each
@@ -401,11 +415,13 @@ const DevElectionReplay = () => {
             Election replay — accelerated playback of real Term 6 chain data
           </p>
           <p className="text-xs text-secondary">
-            Every vote, candidate, council member, and registration block below is real on-chain
-            data. Only TIME is accelerated — events that took ~30 days play back in minutes.
-            Member states reflect <em>current</em> chain state (e.g. T5 members who cycled out
-            now show <code>Unknown</code>). For the live status, see {' '}
-            <Link to="/governance" className="link-blue">/governance</Link>.
+            Votes, voter addresses, registration blocks, candidate URLs, and council members are
+            all real on-chain data. The active council&apos;s state is derived from the simulated
+            block (Term 5 = Elected during pre-T6 frame; Term 6 = Elected after handover).
+            Only TIME is accelerated. Per-block claim-event tracking (which incoming councilor
+            has activated their node at block H during the claim window) is not yet indexed —
+            until then the claim phase shows &quot;awaiting takeover&quot; collectively. For the
+            live status, see <Link to="/governance" className="link-blue">/governance</Link>.
           </p>
         </div>
       </div>
@@ -507,15 +523,30 @@ const DevElectionReplay = () => {
 
       {!loading && phase === 'claim' && (
         <>
+          {/* Incoming council during the CRClaimPeriod. They've won
+              the election (elected=true) but are NOT yet on duty —
+              takeover happens at status.newCouncilTakeoverHeight.
+              Headline carries the awaiting-handover semantics so the
+              "Elected" badges below mean "won the election", not
+              "currently on duty".
+
+              Per-block claim-event tracking — i.e. "at simHeight H,
+              has councilor X activated their node yet?" — would need
+              a TxUpdateCR / TxRegisterProducer event log scoped to
+              the claim window. We don't currently index those as
+              discrete events (cr_members.register_height is most-
+              recent only, and for T6 they all updated during voting,
+              not the claim window). Flagged in CLAUDE.md as a
+              follow-up for true per-block claim simulation. */}
           <CandidatesList
             candidates={claimBody}
-            title={`Incoming Term ${status.targetTerm} council`}
+            title={`Incoming Term ${status.targetTerm} council — awaiting takeover at block ${status.newCouncilTakeoverHeight.toLocaleString()}`}
             emptyLabel="No incoming-council data"
           />
           <CouncilMembersTable
             members={liveMembers}
             loading={false}
-            headline={`Current Term ${status.currentCouncilTerm} council (active until handover)`}
+            headline={`Current Term ${status.currentCouncilTerm} council (still on duty until handover)`}
           />
         </>
       )}

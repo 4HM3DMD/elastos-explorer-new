@@ -153,7 +153,8 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			COALESCE(NULLIF(et.nickname, ''), cm.nickname, '') AS nickname,
 			et.final_votes_sela, et.voter_count,
 			et.rank, et.elected, et.voting_start_height, et.voting_end_height, et.computed_at,
-			COALESCE(cm.did, '') AS did
+			COALESCE(cm.did, '') AS did,
+			COALESCE(cm.register_height, 0) AS register_height
 		FROM cr_election_tallies et
 		LEFT JOIN cr_members cm ON cm.cid = et.candidate_cid
 		WHERE et.term = $1
@@ -173,8 +174,8 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		var votesSela int64
 		var voterCount, rank int
 		var elected bool
-		var votingStart, votingEnd, computedAt int64
-		if err := rows.Scan(&cid, &nickname, &votesSela, &voterCount, &rank, &elected, &votingStart, &votingEnd, &computedAt, &did); err != nil {
+		var votingStart, votingEnd, computedAt, registerHeight int64
+		if err := rows.Scan(&cid, &nickname, &votesSela, &voterCount, &rank, &elected, &votingStart, &votingEnd, &computedAt, &did, &registerHeight); err != nil {
 			continue
 		}
 		if len(results) == 0 {
@@ -182,12 +183,13 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			firstVotingEnd = votingEnd
 		}
 		r := map[string]any{
-			"rank":       rank,
-			"cid":        cid,
-			"nickname":   nickname,
-			"votes":      selaToELA(votesSela),
-			"voterCount": voterCount,
-			"elected":    elected,
+			"rank":           rank,
+			"cid":            cid,
+			"nickname":       nickname,
+			"votes":          selaToELA(votesSela),
+			"voterCount":     voterCount,
+			"elected":        elected,
+			"registerHeight": registerHeight,
 		}
 		if did != "" {
 			r["did"] = did

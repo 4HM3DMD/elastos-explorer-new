@@ -452,6 +452,8 @@ export interface ElectionCandidate {
   votes: string;
   voterCount: number;
   elected: boolean;
+  /** Block height of the candidate's most recent register/update event. 0 if unknown. */
+  registerHeight?: number;
 }
 
 // Full response from GET /api/v1/cr/elections/{term}.

@@ -267,14 +267,12 @@ const DevElectionReplay = () => {
     return { totals, voters, eventCount: appliedCount };
   }, [replayEvents, simHeight]);
 
-  // Filter to the REAL Term 6 ballot. The backend's cr_election_tallies
-  // table contains noise from prior-term registrations whose state
-  // lingered into the T6 replay snapshot — candidates who weren't
-  // actually running in T6 but show up with 0 votes. The authoritative
-  // T6 ballot = candidates that received at least one vote in the
-  // voting window (proven by replayEvents) ∪ candidates that ended up
-  // elected (proposal-review oracle). Anyone outside both sets wasn't
-  // a T6 candidate in any meaningful sense.
+  // Filter to the REAL Term 6 ballot. Backend already returns only
+  // candidates that received votes or got elected, but for the
+  // simulator's voting view we further restrict to those that
+  // received any vote (proven by replayEvents). Elected-but-never-
+  // voted-for entrants (rare; usually claim-period DID-update
+  // reviewers) appear later under "Incoming council" instead.
   const t6CidsWithVotes = useMemo(() => {
     const set = new Set<string>();
     for (const ev of replayEvents) {
@@ -283,23 +281,32 @@ const DevElectionReplay = () => {
     return set;
   }, [replayEvents]);
 
-  // For the voting display we want ONLY those who received votes —
-  // this is the live ballot as voters saw it. Elected-but-never-
-  // voted-for candidates (rare; inserted via claim-period DID update)
-  // wouldn't have appeared on the voting ballot, so we exclude them
-  // here even though they show up under "Incoming council" later.
-  const votingCandidates = useMemo(
+  // Static eligible-ballot list for T6: vote-getting candidates only,
+  // not yet height-filtered. Height filtering happens in votingBody
+  // so the candidate count reacts as registrations come in.
+  const eligibleVotingCandidates = useMemo(
     () => t6Candidates.filter((c) => t6CidsWithVotes.has(c.cid)),
     [t6Candidates, t6CidsWithVotes],
   );
 
-  // Build the voting-body candidate list with real numbers from the
-  // tally above. No "Elected" badges during voting — the node only
-  // locks elected status when the voting window closes.
+  // Build the voting-body candidate list with real numbers + real
+  // registration timing. A candidate is on the ballot at simHeight
+  // only if their cr_members.register_height <= simHeight. This
+  // makes the leaderboard grow over time as candidates register —
+  // matching how the live page would have looked on election day.
+  //
+  // For candidates whose registerHeight is 0 (unknown), we treat
+  // them as registered from voting open so they don't go missing.
   const votingBody = useMemo(() => {
-    if (phase !== 'voting' || votingCandidates.length === 0) return votingCandidates;
+    if (phase !== 'voting' || eligibleVotingCandidates.length === 0) {
+      return eligibleVotingCandidates;
+    }
     const SELA_PER_ELA = 1e8;
-    const enriched = votingCandidates.map((c) => {
+    const registered = eligibleVotingCandidates.filter((c) => {
+      const reg = c.registerHeight || T6_VOTING_START;
+      return reg <= simHeight;
+    });
+    const enriched = registered.map((c) => {
       const sela = liveTally.totals.get(c.cid) || 0;
       const ela = sela / SELA_PER_ELA;
       const voterCount = liveTally.voters.get(c.cid)?.size || 0;
@@ -310,9 +317,6 @@ const DevElectionReplay = () => {
         elected: false,
       };
     });
-    // Re-rank by current votes — the leaderboard reorders as
-    // events arrive. Candidates with 0 votes drop to the bottom by
-    // CID ASC tie-break.
     enriched.sort((a, b) => {
       const av = Number(a.votes);
       const bv = Number(b.votes);
@@ -320,7 +324,16 @@ const DevElectionReplay = () => {
       return a.cid.localeCompare(b.cid);
     });
     return enriched.map((c, i) => ({ ...c, rank: i + 1 }));
-  }, [phase, votingCandidates, liveTally]);
+  }, [phase, eligibleVotingCandidates, liveTally, simHeight]);
+
+  // Counts for the header readout: how many candidates are registered
+  // (and visible in the body), out of the eventual total.
+  const registeredCount = useMemo(() => {
+    return eligibleVotingCandidates.filter((c) => {
+      const reg = c.registerHeight || T6_VOTING_START;
+      return reg <= simHeight;
+    }).length;
+  }, [eligibleVotingCandidates, simHeight]);
 
   // Candidate count drives the voting hero subtitle.
   const targetCandidateCount = votingBody.length;
@@ -384,7 +397,7 @@ const DevElectionReplay = () => {
               {phase === 'duty' && simHeight >= T6_TAKEOVER && `${T6_ON_DUTY_END - simHeight} blocks until next election cycle`}
               {phase === 'duty' && simHeight < T6_TAKEOVER && `${T6_VOTING_START - simHeight} blocks until voting opens`}
               {phase === 'voting' && replayEvents.length > 0 && (
-                <span> · {liveTally.eventCount} / {replayEvents.length} TxVoting events applied</span>
+                <span> · {registeredCount} / {eligibleVotingCandidates.length} registered · {liveTally.eventCount} / {replayEvents.length} votes applied</span>
               )}
             </p>
           </div>

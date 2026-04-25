@@ -499,16 +499,28 @@ func (s *Server) getCRCandidateVoters(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("getCRCandidateVoters: count query failed", "term", term, "cid", cid, "error", err)
 	}
 
+	// CTE adds tx_count: how many TxVotings this voter cast for this
+	// candidate during the voting window. txCount > 1 means the voter
+	// changed their mind mid-window — the LATEST one counted (this
+	// row), prior attempts were superseded under UsedCRVotes.
 	rows, err := s.db.API.Query(r.Context(), `
 		WITH latest_per_voter AS (
 			SELECT address, MAX(stake_height) AS h
 			FROM votes
 			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
 			GROUP BY address
+		),
+		tx_counts AS (
+			SELECT address, COUNT(*) AS c
+			FROM votes
+			WHERE vote_type = 1 AND candidate = $3 AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
 		)
-		SELECT v.address, v.amount_sela, v.stake_height, v.txid
+		SELECT v.address, v.amount_sela, v.stake_height, v.txid,
+		       COALESCE(tc.c, 1) AS tx_count
 		FROM votes v
 		JOIN latest_per_voter lpv ON lpv.address = v.address AND lpv.h = v.stake_height
+		LEFT JOIN tx_counts tc ON tc.address = v.address
 		WHERE v.vote_type = 1 AND v.candidate = $3 AND v.stake_height BETWEEN $1 AND $2
 		ORDER BY v.amount_sela DESC, v.address ASC
 		LIMIT $4 OFFSET $5`,
@@ -523,14 +535,16 @@ func (s *Server) getCRCandidateVoters(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var address, txid string
 		var amountSela, voteHeight int64
-		if err := rows.Scan(&address, &amountSela, &voteHeight, &txid); err != nil {
+		var txCount int
+		if err := rows.Scan(&address, &amountSela, &voteHeight, &txid, &txCount); err != nil {
 			continue
 		}
 		voters = append(voters, map[string]any{
-			"address":     address,
-			"ela":         selaToELA(amountSela),
-			"voteHeight":  voteHeight,
-			"txid":        strings.TrimSpace(txid),
+			"address":    address,
+			"ela":        selaToELA(amountSela),
+			"voteHeight": voteHeight,
+			"txid":       strings.TrimSpace(txid),
+			"txCount":    txCount,
 		})
 	}
 
@@ -636,6 +650,234 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, 200, APIResponse{Data: groups})
+}
+
+// getCandidateProfile returns a single roll-up of every chain fact
+// we have about a CR member: their cr_members metadata, every term
+// they participated in (with rank/votes/elected per term), and
+// their full proposal-review record (counts + recent 10).
+//
+// Term-agnostic: the per-term and governance queries operate on
+// any term the candidate appears in. T7/T8/T42 entries auto-show.
+//
+// Lookup by CID. The DID join keeps `cr_proposal_reviews` reachable
+// since reviews are keyed by DID, not CID.
+func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
+	cid := chi.URLParam(r, "cid")
+	if cid == "" {
+		writeError(w, 400, "candidate cid required")
+		return
+	}
+
+	// 1. Member metadata. The single row of cr_members keyed by CID.
+	var (
+		did, nickname, url, state, dposPubkey, depositAddress string
+		claimedNode                                           *string
+		votesSela, depositSela, impeachmentVotes, penalty     int64
+		registerHeight, lastUpdated, location                 int64
+	)
+	err := s.db.API.QueryRow(r.Context(), `
+		SELECT did, COALESCE(nickname, ''), COALESCE(url, ''),
+		       COALESCE(state, ''), COALESCE(dpos_pubkey, ''),
+		       COALESCE(deposit_address, ''), claimed_node,
+		       COALESCE(votes_sela, 0), COALESCE(deposit_amount, 0),
+		       COALESCE(impeachment_votes, 0), COALESCE(penalty, 0),
+		       COALESCE(register_height, 0), COALESCE(last_updated, 0),
+		       COALESCE(location, 0)
+		FROM cr_members
+		WHERE cid = $1`, cid).Scan(
+		&did, &nickname, &url, &state, &dposPubkey,
+		&depositAddress, &claimedNode,
+		&votesSela, &depositSela, &impeachmentVotes, &penalty,
+		&registerHeight, &lastUpdated, &location,
+	)
+	if err != nil {
+		writeError(w, 404, "candidate not found")
+		return
+	}
+
+	member := map[string]any{
+		"cid":              cid,
+		"did":              did,
+		"nickname":         nickname,
+		"url":              url,
+		"state":            state,
+		"dposPubkey":       dposPubkey,
+		"depositAddress":   depositAddress,
+		"votes":            selaToELA(votesSela),
+		"depositAmount":    selaToELA(depositSela),
+		"impeachmentVotes": selaToELA(impeachmentVotes),
+		"penalty":          selaToELA(penalty),
+		"registerHeight":   registerHeight,
+		"lastUpdated":      lastUpdated,
+		"location":         location,
+	}
+	if claimedNode != nil && *claimedNode != "" {
+		member["claimedNode"] = *claimedNode
+	}
+
+	// 2. Per-term participation. Every cr_election_tallies row for
+	// this CID, ordered chronologically. Includes the full set of
+	// terms they ran in — operators can pivot between them.
+	termRows, err := s.db.API.Query(r.Context(), `
+		SELECT term, rank, final_votes_sela, voter_count, elected
+		FROM cr_election_tallies
+		WHERE candidate_cid = $1 AND candidate_cid != '__sentinel__'
+		ORDER BY term ASC`, cid)
+	if err != nil {
+		writeError(w, 500, "database error: terms")
+		return
+	}
+	defer termRows.Close()
+
+	type termRow struct {
+		Term       int    `json:"term"`
+		Rank       int    `json:"rank"`
+		Votes      string `json:"votes"`
+		VoterCount int    `json:"voterCount"`
+		Elected    bool   `json:"elected"`
+	}
+	var terms []termRow
+	for termRows.Next() {
+		var t termRow
+		var votesSela int64
+		if err := termRows.Scan(&t.Term, &t.Rank, &votesSela, &t.VoterCount, &t.Elected); err != nil {
+			continue
+		}
+		t.Votes = selaToELA(votesSela)
+		terms = append(terms, t)
+	}
+
+	// 3. Governance record. Aggregated counts + recent reviews.
+	// Reviews are keyed by DID, not CID — so we use the DID we
+	// pulled above. Proposal title comes from cr_proposals via JOIN.
+	governance := map[string]any{
+		"totalReviews":      0,
+		"approve":           0,
+		"reject":            0,
+		"abstain":           0,
+		"firstReviewHeight": 0,
+		"lastReviewHeight":  0,
+		"recentReviews":     []map[string]any{},
+	}
+	if did != "" {
+		var totalReviews, approve, reject, abstain int
+		var firstH, lastH int64
+		_ = s.db.API.QueryRow(r.Context(), `
+			SELECT COUNT(*) AS total,
+			       COUNT(*) FILTER (WHERE opinion = 'approve') AS approve,
+			       COUNT(*) FILTER (WHERE opinion = 'reject') AS reject,
+			       COUNT(*) FILTER (WHERE opinion = 'abstain') AS abstain,
+			       COALESCE(MIN(review_height), 0) AS first_h,
+			       COALESCE(MAX(review_height), 0) AS last_h
+			FROM cr_proposal_reviews
+			WHERE did = $1`, did).Scan(&totalReviews, &approve, &reject, &abstain, &firstH, &lastH)
+
+		governance["totalReviews"] = totalReviews
+		governance["approve"] = approve
+		governance["reject"] = reject
+		governance["abstain"] = abstain
+		governance["firstReviewHeight"] = firstH
+		governance["lastReviewHeight"] = lastH
+
+		recentRows, err := s.db.API.Query(r.Context(), `
+			SELECT pr.proposal_hash, COALESCE(NULLIF(pr.title, ''), p.title, '') AS title,
+			       pr.opinion, pr.review_height, pr.txid
+			FROM cr_proposal_reviews pr
+			LEFT JOIN cr_proposals p ON p.proposal_hash = pr.proposal_hash
+			WHERE pr.did = $1
+			ORDER BY pr.review_height DESC
+			LIMIT 10`, did)
+		if err == nil {
+			defer recentRows.Close()
+			recent := make([]map[string]any, 0, 10)
+			for recentRows.Next() {
+				var pHash, title, opinion, txid string
+				var reviewH int64
+				if err := recentRows.Scan(&pHash, &title, &opinion, &reviewH, &txid); err != nil {
+					continue
+				}
+				recent = append(recent, map[string]any{
+					"proposalHash": pHash,
+					"title":        title,
+					"opinion":      opinion,
+					"reviewHeight": reviewH,
+					"txid":         strings.TrimSpace(txid),
+				})
+			}
+			governance["recentReviews"] = recent
+		}
+	}
+
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
+		"member":     member,
+		"terms":      terms,
+		"governance": governance,
+	}})
+}
+
+// getVoterTxHistory returns every TxVoting a single voter cast for
+// a single candidate within a term's voting window, ordered by
+// stake_height ASC. The frontend uses this to expand a voter row
+// in CandidateDetail's voters table when the voter cast >1
+// TxVotings — only the latest counts (UsedCRVotes semantic) but
+// operators want to see the full attempt history for transparency.
+func (s *Server) getVoterTxHistory(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	cid := chi.URLParam(r, "cid")
+	address := chi.URLParam(r, "address")
+	if cid == "" || address == "" {
+		writeError(w, 400, "cid and address required")
+		return
+	}
+
+	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
+
+	rows, err := s.db.API.Query(r.Context(), `
+		SELECT v.amount_sela, v.stake_height, v.txid
+		FROM votes v
+		WHERE v.vote_type = 1
+		  AND v.candidate = $1
+		  AND v.address = $2
+		  AND v.stake_height BETWEEN $3 AND $4
+		ORDER BY v.stake_height ASC, v.txid ASC`,
+		cid, address, narrowStart, narrowEnd)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	type entry struct {
+		Ela        string `json:"ela"`
+		VoteHeight int64  `json:"voteHeight"`
+		Txid       string `json:"txid"`
+		Counted    bool   `json:"counted"`
+	}
+	var history []entry
+	for rows.Next() {
+		var amountSela, h int64
+		var txid string
+		if err := rows.Scan(&amountSela, &h, &txid); err != nil {
+			continue
+		}
+		history = append(history, entry{
+			Ela:        selaToELA(amountSela),
+			VoteHeight: h,
+			Txid:       strings.TrimSpace(txid),
+		})
+	}
+	// The LAST entry (highest stake_height) is the one that counted
+	// under UsedCRVotes. Mark it.
+	if len(history) > 0 {
+		history[len(history)-1].Counted = true
+	}
+
+	writeJSON(w, 200, APIResponse{Data: history})
 }
 
 // getCRElectionStatus returns the current election phase of the DAO:

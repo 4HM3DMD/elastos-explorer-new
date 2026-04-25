@@ -97,6 +97,8 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/cr/elections/{term}/replay-events", s.getCRElectionReplayEvents)
 		r.Get("/cr/elections/{term}/voters", s.getCRElectionVoters)
 		r.Get("/cr/elections/{term}/voters/{cid}", s.getCRCandidateVoters)
+		r.Get("/cr/elections/{term}/voters/{cid}/{address}/history", s.getVoterTxHistory)
+		r.Get("/cr/members/{cid}/profile", s.getCandidateProfile)
 		r.Get("/cr/election/status", s.getCRElectionStatus)
 		r.Get("/cr/proposals", s.getCRProposals)
 		r.Get("/cr/proposal/{hash}", s.getCRProposalDetail)

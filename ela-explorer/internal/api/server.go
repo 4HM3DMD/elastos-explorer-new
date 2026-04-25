@@ -117,13 +117,21 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	metricsGroup.Get("/metrics", metrics.Handler())
 	metricsGroup.Post("/cr/proposal/{hash}/resync", s.resyncProposalDraft)
 
+	// Defense-in-depth: rate-limit admin endpoints even with bearer
+	// auth. A single replay call costs ~5–15s of CPU (full event scan
+	// + state machine across all CR events for a term). A leaked
+	// METRICS_AUTH_TOKEN must not enable trivial CPU DoS — cap at
+	// 2 req/s with burst 5 across all admin verbs combined.
+	adminLimiter := rateLimitMiddleware(rate.Limit(2), 5)
+	adminGroup := metricsGroup.With(adminLimiter)
+
 	// Election-tally replay diagnostics — R1/R2 of the CR election plan.
 	// Bearer-auth gated because these are operator tools during validation
 	// and calibration, not public endpoints. They're read-only: they run
 	// the replay engine and return the computed tally, but they DO NOT
 	// write anything to cr_election_tallies (until R3 lands).
-	metricsGroup.Get("/api/v1/admin/replay/tally/{term}", s.replayTermTally)
-	metricsGroup.Get("/api/v1/admin/replay/validate/{term}", s.replayValidateTerm)
+	adminGroup.Get("/api/v1/admin/replay/tally/{term}", s.replayTermTally)
+	adminGroup.Get("/api/v1/admin/replay/validate/{term}", s.replayValidateTerm)
 
 	// Governance-data block refill — re-ingest a block range directly
 	// from the node. Use this to repair gaps in `transactions` /
@@ -131,9 +139,9 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	// Term 6's seated council didn't appear in top-12 of replay). All
 	// writes are idempotent; safe to re-run. POST is async (starts a
 	// goroutine); poll status via the GET endpoint.
-	metricsGroup.Post("/api/v1/admin/refill/governance", s.refillGovernanceRange)
-	metricsGroup.Get("/api/v1/admin/refill/status", s.refillStatus)
-	metricsGroup.Post("/api/v1/admin/refill/cancel", s.refillCancel)
+	adminGroup.Post("/api/v1/admin/refill/governance", s.refillGovernanceRange)
+	adminGroup.Get("/api/v1/admin/refill/status", s.refillStatus)
+	adminGroup.Post("/api/v1/admin/refill/cancel", s.refillCancel)
 	// NOTE: validator-logo admin upload endpoints were removed (2026-04)
 	// pending a redesign where the validator's own node operator can
 	// submit a logo via a signed message, instead of an operator-bearer-token
@@ -299,12 +307,28 @@ func metricsMiddleware(next http.Handler) http.Handler {
 }
 
 func corsMiddleware(origins []string) func(http.Handler) http.Handler {
+	// Defensive: a wildcard (`*`) in the configured origins list is
+	// almost never what we want. With our auth model (Bearer tokens
+	// in headers) `*` would let any origin issue authenticated calls
+	// from a victim's browser via Access-Control-Allow-Origin: *.
+	// Strip any wildcard entry at startup; logged so deployment
+	// catches the misconfiguration before it ships.
+	cleaned := origins[:0]
+	for _, o := range origins {
+		if o == "*" {
+			slog.Warn("corsMiddleware: ignoring wildcard origin '*' — unsafe with bearer auth; configure explicit origins")
+			continue
+		}
+		cleaned = append(cleaned, o)
+	}
+	origins = cleaned
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 			allowed := false
 			for _, o := range origins {
-				if o == origin || o == "*" {
+				if o == origin {
 					allowed = true
 					break
 				}

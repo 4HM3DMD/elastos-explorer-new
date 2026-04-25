@@ -66,12 +66,14 @@ const GovernanceNav: React.FC<GovernanceNavProps> = ({ activePath, phase: extern
 
   const tabs = useMemo(() => {
     const resolvedPhase: ElectionPhase = phase ?? 'duty';
+    // Defensive fallback: if a future backend emits an unknown phase
+    // string the typed map won't have a key for it. Default to the
+    // duty-style "Council Members" label so the tab renders something
+    // meaningful instead of `undefined`.
+    const label = LABEL_BY_PHASE[resolvedPhase] ?? 'Council Members';
+    const icon = ICON_BY_PHASE[resolvedPhase] ?? Users;
     return [
-      {
-        label: LABEL_BY_PHASE[resolvedPhase],
-        path: '/governance' as const,
-        icon: ICON_BY_PHASE[resolvedPhase],
-      },
+      { label, path: '/governance' as const, icon },
       { label: 'Proposals', path: '/governance/proposals' as const, icon: FileText },
     ];
   }, [phase]);

@@ -221,6 +221,12 @@ CREATE INDEX IF NOT EXISTS idx_votes_address ON votes (address, is_active);
 CREATE INDEX IF NOT EXISTS idx_votes_height ON votes (stake_height DESC);
 CREATE INDEX IF NOT EXISTS idx_votes_expiry ON votes (expiry_height) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_votes_type ON votes (vote_type);
+-- Composite index for the per-term vote-event range scans used by
+-- /cr/elections/{term}/replay-events and the legacy-term tally
+-- queries: WHERE vote_type=1 AND stake_height BETWEEN $1 AND $2.
+-- Without this composite, Postgres has to bitmap-AND two separate
+-- indexes, which costs ~2-3x compared to a single index walk.
+CREATE INDEX IF NOT EXISTS idx_votes_type_height ON votes (vote_type, stake_height);
 
 CREATE TABLE IF NOT EXISTS bpos_stakes (
     refer_key         TEXT PRIMARY KEY,

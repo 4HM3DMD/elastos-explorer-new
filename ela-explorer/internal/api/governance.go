@@ -131,7 +131,7 @@ func (s *Server) getCRElections(w http.ResponseWriter, r *http.Request) {
 			"legacyEra": term <= 3,
 		})
 	}
-	writeJSON(w, 200, elections)
+	writeJSON(w, 200, APIResponse{Data: elections})
 }
 
 func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
@@ -219,13 +219,13 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "no election data for this term")
 		return
 	}
-	writeJSON(w, 200, map[string]any{
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
 		"term":              term,
 		"votingStartHeight": firstVotingStart,
 		"votingEndHeight":   firstVotingEnd,
 		"legacyEra":         term <= 3,
 		"candidates":        results,
-	})
+	}})
 }
 
 // getCRElectionReplayEvents returns the raw vote events for a term's
@@ -338,13 +338,13 @@ func (s *Server) getCRElectionReplayEvents(w http.ResponseWriter, r *http.Reques
 		events = append(events, *current)
 	}
 
-	writeJSON(w, 200, map[string]any{
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
 		"term":        term,
 		"narrowStart": narrowStart,
 		"narrowEnd":   narrowEnd,
 		"termStart":   termStart,
 		"events":      events,
-	})
+	}})
 }
 
 // getCRElectionStatus returns the current election phase of the DAO:
@@ -396,7 +396,7 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	// Cheap path: recent cache hit, no node RPC at all.
 	if cached, ok := s.cache.Get(cacheKey); ok {
 		if resp, ok := cached.(map[string]any); ok {
-			writeJSON(w, 200, resp)
+			writeJSON(w, 200, APIResponse{Data: resp})
 			return
 		}
 	}
@@ -416,13 +416,18 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	// Phase. "claim" is the Elastos canonical name for the post-voting
 	// window (CRClaimPeriod); we used to emit "claiming" but the
 	// frontend now expects "claim" to match the config constant.
+	//
+	// stage.VotingEndHeight is INCLUSIVE — the last block of the
+	// voting window. The claim window starts the block AFTER. We
+	// therefore use strict `>` here, not `>=`, otherwise the phase
+	// flips to "claim" one block too early.
 	phase := "duty"
 	switch {
 	case stage.InVoting:
 		phase = "voting"
 	case !stage.OnDuty:
 		phase = "pre-genesis"
-	case currentHeight >= stage.VotingEndHeight && currentHeight < stage.OnDutyStartHeight:
+	case currentHeight > stage.VotingEndHeight && currentHeight < stage.OnDutyStartHeight:
 		phase = "claim"
 	}
 
@@ -517,7 +522,7 @@ func (s *Server) getCRElectionStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cache.Set(cacheKey, resp)
-	writeJSON(w, 200, resp)
+	writeJSON(w, 200, APIResponse{Data: resp})
 }
 
 func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
@@ -530,19 +535,31 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 	var args []any
 	var query string
 
-	proposalNumberSubquery := `(SELECT COUNT(*) FROM cr_proposals cp2
-		    WHERE cp2.register_height < p.register_height
-		       OR (cp2.register_height = p.register_height AND cp2.proposal_hash < p.proposal_hash)) + 1`
+	// Stable global proposal number: rank every proposal in the
+	// table by chronological order so #1 is the very first proposal
+	// ever, #2 the second, etc. We compute this once via a window
+	// function in a CTE, then JOIN on proposal_hash. Previously we
+	// used a correlated subquery (`SELECT COUNT(*) WHERE ...`) which
+	// was O(N²) at page-render time — the new CTE evaluates the
+	// window once over all proposals (linear) and the JOIN is fast
+	// on the proposal_hash primary key.
+	const rankedCTE = `WITH ranked_proposals AS (
+		SELECT proposal_hash,
+		       ROW_NUMBER() OVER (ORDER BY register_height ASC, proposal_hash ASC) AS proposal_number
+		FROM cr_proposals
+	)`
 
-	selectCols := `SELECT p.proposal_hash, p.tx_hash, p.proposal_type, p.status, p.category_data,
+	selectCols := rankedCTE + `
+		SELECT p.proposal_hash, p.tx_hash, p.proposal_type, p.status, p.category_data,
 		       p.owner_pubkey, p.draft_hash, p.recipient, p.budgets_json, p.cr_member_did,
 		       p.register_height, p.vote_count, p.reject_count, p.abstain_count, p.title,
 		       p.budget_total, p.tracking_count, p.current_stage, p.terminated_height,
 		       COALESCE(cm.nickname, '') AS cr_member_name,
 		       COALESCE(NULLIF(TRIM(pr.nickname), ''), NULLIF(TRIM(cm_o.nickname), ''), '') AS owner_name,
 		       p.abstract,
-		       ` + proposalNumberSubquery + ` AS proposal_number
+		       rp.proposal_number
 		FROM cr_proposals p
+		LEFT JOIN ranked_proposals rp ON rp.proposal_hash = p.proposal_hash
 		LEFT JOIN cr_members cm ON cm.did = p.cr_member_did
 		LEFT JOIN producers pr ON (pr.owner_pubkey = p.owner_pubkey OR (pr.node_pubkey != '' AND pr.node_pubkey = p.owner_pubkey))
 		LEFT JOIN cr_members cm_o ON cm_o.dpos_pubkey = p.owner_pubkey AND p.owner_pubkey != ''`
@@ -831,8 +848,31 @@ func (s *Server) getProposalImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject unsafe filename in the URL parameter early — no path
+	// separators, no traversal, no leading dot. The route param has
+	// already been URL-decoded by chi.
+	if strings.ContainsAny(filename, "/\\") || filename == ".." || strings.HasPrefix(filename, ".") {
+		writeError(w, 400, "invalid filename")
+		return
+	}
+
 	decodedFilename, _ := url.PathUnescape(filename)
 	for _, f := range zr.File {
+		// Defense against malicious ZIPs whose entry names contain
+		// path-traversal segments (`../foo`) or absolute paths
+		// (`/etc/passwd`). A safe entry's `filepath.Clean(f.Name)`
+		// equals `filepath.Base(f.Name)` — i.e. the cleaned form is
+		// just the basename, no directories. Anything else gets
+		// skipped before we open the entry.
+		cleaned := filepath.Clean(f.Name)
+		if cleaned != filepath.Base(cleaned) ||
+			strings.HasPrefix(cleaned, "..") ||
+			strings.HasPrefix(cleaned, "/") ||
+			strings.HasPrefix(cleaned, "\\") {
+			slog.Warn("getProposalImage: rejecting unsafe ZIP entry",
+				"name", f.Name, "cleaned", cleaned)
+			continue
+		}
 		base := filepath.Base(f.Name)
 		decodedBase, _ := url.PathUnescape(base)
 		if !strings.EqualFold(base, filename) &&

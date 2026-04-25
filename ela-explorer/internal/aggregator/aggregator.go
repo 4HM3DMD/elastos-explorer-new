@@ -769,6 +769,26 @@ func (a *Aggregator) computeElectionTally(ctx context.Context, term, narrowStart
 	_ = narrowStart
 	_ = narrowEnd
 
+	// Boot-race guard: at first tick after a Heal #9 / fresh deploy,
+	// the voter_rights table may still be empty (the voter_rights
+	// refresher runs on its own goroutine and might not have completed
+	// its first pass). Running ReplayTermTally with cold voter_rights
+	// produces a tally where many candidates have zero votes — exactly
+	// the bug we hit on T5 after the v17 heal. Skip and let the next
+	// 60s tick try again, by which time voter_rights is warm.
+	//
+	// The check is cheap (~1ms COUNT on a small table) and only
+	// applies when voter_rights has zero rows, which is only true
+	// during the first ~30s after a fresh schema. Once it has any
+	// rows the guard is a no-op forever.
+	var voterRightsCount int64
+	if err := a.db.Syncer.QueryRow(ctx, `SELECT COUNT(*) FROM voter_rights`).Scan(&voterRightsCount); err == nil && voterRightsCount == 0 {
+		slog.Warn("election tally: skipping replay — voter_rights cold (boot race)",
+			"term", term,
+			"note", "next 60s tick will retry after voter_rights refresher warms")
+		return nil
+	}
+
 	result, err := a.ReplayTermTally(ctx, term)
 	if err != nil {
 		return fmt.Errorf("replay term %d: %w", term, err)

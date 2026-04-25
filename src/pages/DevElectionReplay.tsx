@@ -154,33 +154,47 @@ const DevElectionReplay = () => {
   // without losing simHeight across renders.
   const intervalRef = useRef<number | null>(null);
 
-  // Initial fetch — three calls in parallel:
+  // Initial fetch — three calls in parallel via allSettled so a
+  // partial failure doesn't break the whole simulator. Each set is
+  // wired independently:
   //   1. Term 5 detail → seed Term 5 elected as the "still-on-duty"
   //      council during the simulator's pre-voting and voting phases.
   //   2. Term 6 detail → final candidate list (cid, did, nickname),
-  //      lets us identify the 12 elected for claim/duty rendering.
+  //      identifies the 12 elected for claim/duty rendering.
   //   3. Term 6 replay events → the real per-block vote stream we
   //      replay through to reconstruct live tallies.
+  // We only surface a fatal error when ALL three fail; otherwise the
+  // simulator renders whatever data did arrive.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
+    Promise.allSettled([
       blockchainApi.getCRElectionByTerm(5),
       blockchainApi.getCRElectionByTerm(6),
       blockchainApi.getCRElectionReplayEvents(6),
     ])
-      .then(([t5, t6, events]) => {
+      .then(([t5Res, t6Res, eventsRes]) => {
         if (cancelled) return;
-        setT6Candidates(t6.candidates);
-        setT5ElectedAsMembers(
-          t5.candidates.filter((c) => c.elected).map(candidateToMember),
-        );
-        setT6ElectedAsMembers(
-          t6.candidates.filter((c) => c.elected).map(candidateToMember),
-        );
-        setReplayEvents(events.events);
-      })
-      .catch(() => {
-        if (!cancelled) setFetchError('Failed to load Term 5/6 data from API');
+        if (t6Res.status === 'fulfilled') {
+          setT6Candidates(t6Res.value.candidates);
+          setT6ElectedAsMembers(
+            t6Res.value.candidates.filter((c) => c.elected).map(candidateToMember),
+          );
+        }
+        if (t5Res.status === 'fulfilled') {
+          setT5ElectedAsMembers(
+            t5Res.value.candidates.filter((c) => c.elected).map(candidateToMember),
+          );
+        }
+        if (eventsRes.status === 'fulfilled') {
+          setReplayEvents(eventsRes.value.events);
+        }
+        const allFailed =
+          t5Res.status === 'rejected' &&
+          t6Res.status === 'rejected' &&
+          eventsRes.status === 'rejected';
+        if (allFailed) {
+          setFetchError('Failed to load Term 5/6 data from API');
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

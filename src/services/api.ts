@@ -207,13 +207,11 @@ export const blockchainApi = {
   },
 
   getCRElections: async (): Promise<ElectionSummary[]> => {
-    const res = await api.get<ElectionSummary[]>('/cr/elections');
-    return res.data;
+    return unwrap<ElectionSummary[]>(await api.get('/cr/elections'));
   },
 
   getCRElectionByTerm: async (term: number): Promise<ElectionTermDetail> => {
-    const res = await api.get<ElectionTermDetail>(`/cr/elections/${term}`);
-    return res.data;
+    return unwrap<ElectionTermDetail>(await api.get(`/cr/elections/${term}`));
   },
 
   // Raw vote events for a term's voting window, used by the dev
@@ -221,17 +219,16 @@ export const blockchainApi = {
   // exactly as the node did. Each event represents one TxVoting
   // and replaces the voter's prior allocation in full.
   getCRElectionReplayEvents: async (term: number): Promise<ElectionReplayEventsResponse> => {
-    const res = await api.get<ElectionReplayEventsResponse>(`/cr/elections/${term}/replay-events`);
-    return res.data;
+    return unwrap<ElectionReplayEventsResponse>(await api.get(`/cr/elections/${term}/replay-events`));
   },
 
-  // Current phase of the DAO (voting / claiming / duty / pre-genesis) plus
-  // the block-height boundaries and chain tip. Backed by the node's
-  // getcrrelatedstage RPC, with a shared server-side cache (~30s).
-  // Safe to poll roughly every block (~120s) without overloading anything.
+  // Current phase of the DAO (voting / claim / duty / failed_restart /
+  // pre-genesis) plus the block-height boundaries and chain tip. Backed
+  // by the node's getcrrelatedstage RPC, with a shared server-side
+  // cache (~30s). Safe to poll roughly every block (~120s) without
+  // overloading anything.
   getElectionStatus: async (): Promise<ElectionStatus> => {
-    const res = await api.get<ElectionStatus>('/cr/election/status');
-    return res.data;
+    return unwrap<ElectionStatus>(await api.get('/cr/election/status'));
   },
 
   getCRProposals: async (page = 1, pageSize = 20, status?: string) => {

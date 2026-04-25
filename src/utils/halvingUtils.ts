@@ -3,9 +3,14 @@
  * Ported from https://github.com/4HM3DMD/HalvingElastos (server/blockchain.ts)
  */
 
+import { BLOCK_TIME_SECONDS } from '../constants/governance';
+
 export const HALVING_INTERVAL = 1_051_200;
 export const MAX_SUPPLY = 28_219_999;
-export const AVG_BLOCK_TIME_SECONDS = 120;
+// Re-exported for any caller that imported the legacy name. The
+// canonical constant lives in `src/constants/governance.ts`; using
+// two names for the same number caused drift risk during audits.
+export const AVG_BLOCK_TIME_SECONDS = BLOCK_TIME_SECONDS;
 
 const INITIAL_REWARD_SELA = 304_400_000;
 const SELA_PER_ELA = 100_000_000;

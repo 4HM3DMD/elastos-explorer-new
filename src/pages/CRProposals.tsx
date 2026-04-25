@@ -10,9 +10,13 @@ import { fmtEla, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
 import GovernanceNav from '../components/GovernanceNav';
+import { formatBlocksAsCountdown } from '../constants/governance';
 
-const CR_VOTING_PERIOD_BLOCKS = 5040;
-const VETO_PERIOD_BLOCKS = 5040;
+// Proposal review period (Council Vote phase): 7 days * 720 blocks/day.
+// Distinct from CR election VOTING_PERIOD; named so the constant
+// can't be confused at the call site.
+const PROPOSAL_REVIEW_PERIOD_BLOCKS = 5040;
+const PROPOSAL_VETO_PERIOD_BLOCKS = 5040;
 const PAGE_SIZE = 20;
 const PORTAL_BANNER_DISMISS_KEY = 'dao-portal-banner-dismissed';
 
@@ -117,23 +121,13 @@ const VoteBar = ({ approve, reject, abstain, status }: { approve: number; reject
   );
 };
 
-function formatBlocksRemaining(blocksLeft: number): string {
-  const totalMin = blocksLeft * 2;
-  const d = Math.floor(totalMin / 1440);
-  const h = Math.floor((totalMin % 1440) / 60);
-  const m = totalMin % 60;
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
 function getCountdown(status: string, registerHeight: number, currentHeight: number): { label: string; time: string; blocks: number; overdue: boolean; phase: 'review' | 'veto' } | null {
   if (!currentHeight || !registerHeight) return null;
 
   if (status === 'Registered') {
-    const blocksLeft = (registerHeight + CR_VOTING_PERIOD_BLOCKS) - currentHeight;
+    const blocksLeft = (registerHeight + PROPOSAL_REVIEW_PERIOD_BLOCKS) - currentHeight;
     if (blocksLeft <= 0) return { label: 'Council Vote', time: '', blocks: 0, overdue: true, phase: 'review' };
-    return { label: 'Council Vote', time: formatBlocksRemaining(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' };
+    return { label: 'Council Vote', time: formatBlocksAsCountdown(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' };
   }
 
   // CRAgreed and Notification both mean "council approved, veto window
@@ -141,10 +135,10 @@ function getCountdown(status: string, registerHeight: number, currentHeight: num
   // CRAgreed state also show the veto countdown instead of dropping to
   // a silent "Council Passed" with no time indicator.
   if (status === 'Notification' || status === 'CRAgreed') {
-    const vetoStart = registerHeight + CR_VOTING_PERIOD_BLOCKS;
-    const blocksLeft = (vetoStart + VETO_PERIOD_BLOCKS) - currentHeight;
+    const vetoStart = registerHeight + PROPOSAL_REVIEW_PERIOD_BLOCKS;
+    const blocksLeft = (vetoStart + PROPOSAL_VETO_PERIOD_BLOCKS) - currentHeight;
     if (blocksLeft <= 0) return { label: 'Veto Period', time: '', blocks: 0, overdue: true, phase: 'veto' };
-    return { label: 'Veto Period', time: formatBlocksRemaining(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'veto' };
+    return { label: 'Veto Period', time: formatBlocksAsCountdown(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'veto' };
   }
 
   return null;

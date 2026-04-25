@@ -561,6 +561,10 @@ export interface CandidateProfileTerm {
   votes: string;
   voterCount: number;
   elected: boolean;
+  // Pre-BPoS (T1-T3): rank is synthetic chronological order from
+  // legacy fallback, not a vote-based ranking. UI must not display
+  // "#N" for these terms.
+  legacyEra?: boolean;
 }
 
 export interface CandidateRecentReview {

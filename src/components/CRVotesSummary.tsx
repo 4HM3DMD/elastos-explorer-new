@@ -159,8 +159,12 @@ const CRVotesSummary = ({ address }: CRVotesSummaryProps) => {
                     ))}
                     {termGroup.slices.length > 0 && (
                       <div className="pt-2 border-t border-[var(--color-border)]/40 flex items-center justify-between text-[10px] text-muted">
+                        {/* Under UsedCRVotes a single TxVoting carries every
+                            candidate slice for the term, so all rows in this
+                            group share the same txid + height — that's THE
+                            casting tx, not "one of many sources". */}
                         <span>
-                          Source tx{' '}
+                          Casting tx{' '}
                           <Link
                             to={`/tx/${termGroup.slices[0].txid}`}
                             className="text-brand/80 hover:text-brand inline-flex items-center gap-0.5"

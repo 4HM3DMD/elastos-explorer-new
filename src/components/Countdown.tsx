@@ -22,7 +22,7 @@
 
 import { Clock } from 'lucide-react';
 import { cn } from '../lib/cn';
-import { BLOCK_TIME_SECONDS } from '../constants/governance';
+import { BLOCK_TIME_SECONDS, formatBlocksAsCountdown } from '../constants/governance';
 
 interface CountdownProps {
   /**
@@ -53,20 +53,9 @@ interface CountdownProps {
   className?: string;
 }
 
-function formatBlocksRemaining(blocksLeft: number): string {
-  if (blocksLeft <= 0) return '0m';
-  // BLOCK_TIME_SECONDS is 120 (2 min per block), so:
-  //   totalMin = blocksLeft * 2
-  // Kept in terms of the constant so if Elastos ever tunes block time,
-  // this one helper doesn't need a magic-number edit.
-  const totalMin = Math.round((blocksLeft * BLOCK_TIME_SECONDS) / 60);
-  const d = Math.floor(totalMin / 1440);
-  const h = Math.floor((totalMin % 1440) / 60);
-  const m = totalMin % 60;
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
+// Re-export the shared helper under the local name so the rest of
+// this file (and any historical callers) keep working.
+const formatBlocksRemaining = formatBlocksAsCountdown;
 
 function formatEtaDate(blocksLeft: number): string {
   if (blocksLeft <= 0) return 'now';

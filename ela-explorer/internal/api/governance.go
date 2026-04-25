@@ -768,6 +768,12 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 		Votes      string `json:"votes"`
 		VoterCount int    `json:"voterCount"`
 		Elected    bool   `json:"elected"`
+		// Pre-BPoS terms (T1-T3) ran on legacy OTVote without on-chain
+		// reconstructable vote counts. The rank stored here is a
+		// synthetic chronological order from `computeLegacyTermTally`,
+		// not a vote-based ranking. Frontend uses this flag to suppress
+		// the misleading "#N" display for those terms.
+		LegacyEra bool `json:"legacyEra"`
 	}
 	var terms []termRow
 	for termRows.Next() {
@@ -777,6 +783,7 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		t.Votes = selaToELA(votesSela)
+		t.LegacyEra = t.Term <= 3
 		terms = append(terms, t)
 	}
 

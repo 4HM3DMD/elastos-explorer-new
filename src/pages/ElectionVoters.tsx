@@ -1,26 +1,22 @@
-// ElectionVoters — paginated voter list for one term, optionally
-// scoped to a single candidate. One component, two URL shapes:
+// ElectionVoters — paginated list of every distinct voter in one
+// term's voting window, deduped under the UsedCRVotes (latest-
+// TxVoting-per-address) semantic the node enforces.
 //
-//   /governance/elections/:term/voters         → all voters in term
-//   /governance/elections/:term/voters/:cid    → voters for candidate
+// Route: /governance/elections/:term/voters
 //
-// Term-agnostic: works for T4, T5, T6, T7, T8 in 2028, T42 in 2055,
-// without any code changes — the URL drives everything via the
-// generic backend endpoints. No hardcoded term boundaries.
+// Per-candidate voter detail used to live at /voters/:cid in this
+// component; it now lives on the rich CandidateDetail page at
+// /governance/elections/:term/candidate/:cid. App.tsx redirects the
+// old URL shape so external links don't break.
 //
-// All numbers are real: latest-TxVoting-per-voter (UsedCRVotes
-// semantic) applied server-side, with stable links from each row to
-// the voter's address page and the original transaction hash.
+// Term-agnostic: works for T4, T5, T6, T7+, T42 in 2055 without any
+// code changes — the URL drives the generic backend endpoint.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Users, ChevronLeft, ExternalLink } from 'lucide-react';
+import { Users, ChevronLeft } from 'lucide-react';
 import { blockchainApi } from '../services/api';
-import type {
-  ElectionVoter,
-  CandidateVoter,
-  ElectionTermDetail,
-} from '../types/blockchain';
+import type { ElectionVoter, ElectionTermDetail } from '../types/blockchain';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
@@ -30,22 +26,15 @@ import { formatVotes } from '../utils/format';
 
 const PAGE_SIZE = 25;
 
-type TermVoter = ElectionVoter | CandidateVoter;
-
 const ElectionVoters = () => {
-  const { term: termParam, cid } = useParams<{ term: string; cid?: string }>();
+  const { term: termParam } = useParams<{ term: string }>();
   const term = Number(termParam);
 
-  const [voters, setVoters] = useState<TermVoter[]>([]);
+  const [voters, setVoters] = useState<ElectionVoter[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // For showing the candidate's nickname when in candidate mode —
-  // fetched from the term detail (which we'd cache anyway). Display-
-  // only; no logic depends on this value.
-  const [candidateName, setCandidateName] = useState<string>('');
   const [legacyEra, setLegacyEra] = useState(false);
 
   const fetchPage = useCallback(
@@ -58,68 +47,51 @@ const ElectionVoters = () => {
       try {
         setLoading(true);
         setError(null);
-        if (cid) {
-          const res = await blockchainApi.getCRCandidateVoters(term, cid, p, PAGE_SIZE);
-          setVoters(res.data);
-          setTotal(res.total);
-        } else {
-          const res = await blockchainApi.getCRElectionVoters(term, p, PAGE_SIZE);
-          setVoters(res.data);
-          setTotal(res.total);
-        }
+        const res = await blockchainApi.getCRElectionVoters(term, p, PAGE_SIZE);
+        setVoters(res.data);
+        setTotal(res.total);
       } catch {
         setError(`No voter data for Term ${term}`);
       } finally {
         setLoading(false);
       }
     },
-    [term, cid],
+    [term],
   );
 
-  // Initial + page-change fetch.
   useEffect(() => {
     fetchPage(page);
   }, [fetchPage, page]);
 
-  // Resolve candidate nickname + detect legacy era. Cheap one-shot
-  // lookup against the term-detail endpoint.
+  // Cheap one-shot lookup so the legacy-era banner can render without
+  // a separate /status round-trip.
   useEffect(() => {
     let cancelled = false;
     blockchainApi
       .getCRElectionByTerm(term)
       .then((d: ElectionTermDetail) => {
-        if (cancelled) return;
-        setLegacyEra(d.legacyEra === true);
-        if (cid) {
-          const match = d.candidates.find((c) => c.cid === cid);
-          if (match) setCandidateName(match.nickname);
-        }
+        if (!cancelled) setLegacyEra(d.legacyEra === true);
       })
       .catch(() => {
-        /* keep optional — page is still useful without nickname */
+        /* keep optional — page is still useful without era flag */
       });
     return () => {
       cancelled = true;
     };
-  }, [term, cid]);
+  }, [term]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const headline = useMemo(() => {
-    if (cid) {
-      return candidateName
-        ? `Voters for ${candidateName} · Term ${term}`
-        : `Voters · Term ${term}`;
-    }
-    return `All voters · Term ${term}`;
-  }, [cid, candidateName, term]);
+  const headline = `All voters · Term ${term}`;
 
-  // Pre-BPoS terms have no parseable voter data — render an honest
-  // empty state. Mirrors the convention from ElectionDetail.
   if (legacyEra) {
     return (
       <div className="px-4 lg:px-6 py-6 space-y-6">
-        <SEO title={`Term ${term} voters`} description={`Voters for Term ${term} on Elastos`} path={`/governance/elections/${term}/voters`} />
-        <Header term={term} cid={cid} headline={headline} />
+        <SEO
+          title={`Term ${term} voters`}
+          description={`Voters for Term ${term} on Elastos`}
+          path={`/governance/elections/${term}/voters`}
+        />
+        <Header term={term} headline={headline} />
         <div className="card p-6 text-center text-muted text-sm">
           Pre-BPoS era — voter data unavailable at the moment.
         </div>
@@ -145,10 +117,10 @@ const ElectionVoters = () => {
       <SEO
         title={headline}
         description={`Real on-chain voter list for Elastos DAO Term ${term}.`}
-        path={`/governance/elections/${term}/voters${cid ? '/' + cid : ''}`}
+        path={`/governance/elections/${term}/voters`}
       />
 
-      <Header term={term} cid={cid} headline={headline} total={total} />
+      <Header term={term} headline={headline} total={total} />
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
@@ -156,19 +128,9 @@ const ElectionVoters = () => {
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>Voter</th>
-                {cid ? (
-                  <>
-                    <th style={{ textAlign: 'right' }}>Amount</th>
-                    <th className="hidden sm:table-cell" style={{ textAlign: 'right' }}>Block</th>
-                    <th className="hidden md:table-cell" style={{ textAlign: 'right' }}>Tx</th>
-                  </>
-                ) : (
-                  <>
-                    <th style={{ textAlign: 'right' }}>Total</th>
-                    <th className="hidden sm:table-cell" style={{ textAlign: 'right' }}>Candidates</th>
-                    <th className="hidden md:table-cell" style={{ textAlign: 'right' }}>Last vote</th>
-                  </>
-                )}
+                <th style={{ textAlign: 'right' }}>Total</th>
+                <th className="hidden sm:table-cell" style={{ textAlign: 'right' }}>Candidates</th>
+                <th className="hidden md:table-cell" style={{ textAlign: 'right' }}>Last vote</th>
               </tr>
             </thead>
             <tbody>
@@ -180,7 +142,7 @@ const ElectionVoters = () => {
                 </tr>
               ) : (
                 voters.map((v) => (
-                  <VoterRow key={v.address + ('voteHeight' in v ? v.voteHeight : '')} voter={v} candidateMode={!!cid} />
+                  <VoterRow key={v.address + v.lastVoteHeight} voter={v} />
                 ))
               )}
             </tbody>
@@ -203,12 +165,10 @@ const ElectionVoters = () => {
 
 function Header({
   term,
-  cid,
   headline,
   total,
 }: {
   term: number;
-  cid?: string;
   headline: string;
   total?: number;
 }) {
@@ -247,8 +207,7 @@ function Header({
   );
 }
 
-function VoterRow({ voter, candidateMode }: { voter: TermVoter; candidateMode: boolean }) {
-  const txid = candidateMode ? (voter as CandidateVoter).txid : (voter as ElectionVoter).sampleTxid;
+function VoterRow({ voter }: { voter: ElectionVoter }) {
   return (
     <tr>
       <td className="align-top" style={{ textAlign: 'left' }}>
@@ -259,62 +218,30 @@ function VoterRow({ voter, candidateMode }: { voter: TermVoter; candidateMode: b
           <HashDisplay hash={voter.address} length={10} showCopyButton={false} isClickable={false} />
         </Link>
       </td>
-      {candidateMode ? (
-        <>
-          <td className="align-top" style={{ textAlign: 'right' }}>
-            <span
-              className="font-mono text-xs text-primary whitespace-nowrap"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              {formatVotes((voter as CandidateVoter).ela)} ELA
-            </span>
-          </td>
-          <td className="hidden sm:table-cell align-top" style={{ textAlign: 'right' }}>
-            <span
-              className="font-mono text-xs text-secondary"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              {(voter as CandidateVoter).voteHeight.toLocaleString()}
-            </span>
-          </td>
-          <td className="hidden md:table-cell align-top" style={{ textAlign: 'right' }}>
-            <Link
-              to={`/tx/${txid}`}
-              className="inline-flex items-center gap-1 text-xs text-muted hover:text-brand transition-colors"
-            >
-              <span className="font-mono">{txid.slice(0, 8)}…</span>
-              <ExternalLink size={10} />
-            </Link>
-          </td>
-        </>
-      ) : (
-        <>
-          <td className="align-top" style={{ textAlign: 'right' }}>
-            <span
-              className="font-mono text-xs text-primary whitespace-nowrap"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              {formatVotes((voter as ElectionVoter).totalEla)} ELA
-            </span>
-          </td>
-          <td className="hidden sm:table-cell align-top" style={{ textAlign: 'right' }}>
-            <span
-              className="font-mono text-xs text-secondary"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              {(voter as ElectionVoter).candidatesVotedFor}
-            </span>
-          </td>
-          <td className="hidden md:table-cell align-top" style={{ textAlign: 'right' }}>
-            <span
-              className="font-mono text-xs text-muted"
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              {(voter as ElectionVoter).lastVoteHeight.toLocaleString()}
-            </span>
-          </td>
-        </>
-      )}
+      <td className="align-top" style={{ textAlign: 'right' }}>
+        <span
+          className="font-mono text-xs text-primary whitespace-nowrap"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {formatVotes(voter.totalEla)} ELA
+        </span>
+      </td>
+      <td className="hidden sm:table-cell align-top" style={{ textAlign: 'right' }}>
+        <span
+          className="font-mono text-xs text-secondary"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {voter.candidatesVotedFor}
+        </span>
+      </td>
+      <td className="hidden md:table-cell align-top" style={{ textAlign: 'right' }}>
+        <span
+          className="font-mono text-xs text-muted"
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {voter.lastVoteHeight.toLocaleString()}
+        </span>
+      </td>
     </tr>
   );
 }

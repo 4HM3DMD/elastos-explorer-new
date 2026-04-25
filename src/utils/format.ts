@@ -1,5 +1,6 @@
 import { formatDistanceToNow } from 'date-fns';
 import { SELA_PER_ELA } from './sela';
+import { BLOCK_TIME_SECONDS as GOV_BLOCK_TIME_SECONDS } from '../constants/governance';
 
 export function fmtTime(ts: number): string {
   if (!ts || !Number.isFinite(ts)) return '—';
@@ -210,7 +211,11 @@ export function getLocation(code: number): { flag: string; name: string } {
   return LOCATION_MAP[code] ?? { flag: '🌐', name: `Code ${code}` };
 }
 
-const BLOCKS_PER_DAY = 720;
+// Derived from the canonical BLOCK_TIME_SECONDS so a future block-time
+// tuning only changes one constant. 86400 / 120 = 720 today.
+const BLOCKS_PER_DAY = Math.round(86_400 / GOV_BLOCK_TIME_SECONDS);
+const BLOCKS_PER_HOUR = Math.round(3600 / GOV_BLOCK_TIME_SECONDS);
+const MIN_PER_BLOCK = GOV_BLOCK_TIME_SECONDS / 60;
 
 /**
  * Estimates a human-readable time remaining until a target block height.
@@ -223,9 +228,9 @@ export function estimateBlockTime(targetHeight: number, currentHeight: number): 
   if (days > 365) return `~${(days / 365).toFixed(1)}y`;
   if (days > 30) return `~${Math.floor(days / 30)}mo`;
   if (days > 0) return `~${days}d`;
-  const hours = Math.floor(blocksRemaining / 30);
+  const hours = Math.floor(blocksRemaining / BLOCKS_PER_HOUR);
   if (hours > 0) return `~${hours}h`;
-  return `~${blocksRemaining * 2}min`;
+  return `~${Math.round(blocksRemaining * MIN_PER_BLOCK)}min`;
 }
 
 /**
@@ -233,7 +238,7 @@ export function estimateBlockTime(targetHeight: number, currentHeight: number): 
  * ELA averages ~2 min/block, so each block offset is ±120 000 ms from now.
  */
 export function estimateBlockDate(targetHeight: number, currentHeight: number): Date {
-  const MS_PER_BLOCK = 2 * 60 * 1000;
+  const MS_PER_BLOCK = GOV_BLOCK_TIME_SECONDS * 1000;
   return new Date(Date.now() + (targetHeight - currentHeight) * MS_PER_BLOCK);
 }
 

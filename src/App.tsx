@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import { lazy, Suspense, Component, useEffect, useState } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import { HelmetProvider } from 'react-helmet-async';
@@ -34,6 +34,15 @@ const TOAST_OPTIONS = {
   className: 'card',
   duration: 3000,
 } as const;
+
+// One-shot redirect from the old /voters/:cid URL shape (which used to
+// serve a candidate-scoped voters table) to the canonical
+// /candidate/:cid rich-profile page. `replace` keeps the old URL out
+// of browser history so back-button doesn't bounce.
+function LegacyCandidateRedirect() {
+  const { term, cid } = useParams<{ term: string; cid: string }>();
+  return <Navigate to={`/governance/elections/${term}/candidate/${cid}`} replace />;
+}
 
 const PageLoader = () => (
   <div className="flex justify-center items-center h-64">
@@ -124,8 +133,15 @@ function AnimatedRoutes() {
           <Route path="/governance/elections" element={<Navigate to="/governance" replace />} />
           <Route path="/governance/elections/:term" element={<ElectionDetail />} />
           <Route path="/governance/elections/:term/voters" element={<ElectionVoters />} />
-          <Route path="/governance/elections/:term/voters/:cid" element={<CandidateDetail />} />
           <Route path="/governance/elections/:term/candidate/:cid" element={<CandidateDetail />} />
+          {/* Earlier builds routed per-candidate detail under
+              /voters/:cid; the rich /candidate/:cid page is now the
+              canonical surface. Redirect old links so external
+              references don't 404. */}
+          <Route
+            path="/governance/elections/:term/voters/:cid"
+            element={<LegacyCandidateRedirect />}
+          />
           <Route path="/dev/elections-replay" element={<DevElectionReplay />} />
 
           <Route path="/charts" element={<Charts />} />

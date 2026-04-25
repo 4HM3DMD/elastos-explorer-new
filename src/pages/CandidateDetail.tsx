@@ -40,14 +40,9 @@ import Pagination from '../components/Pagination';
 import OpinionBar from '../components/OpinionBar';
 import { formatVotes, safeExternalUrl, getLocation } from '../utils/format';
 import { copyToClipboard } from '../utils/clipboard';
+import { BLOCK_TIME_SECONDS } from '../constants/governance';
 
 const PAGE_SIZE = 25;
-
-// Elastos mainnet block time. Used to convert block-height spans
-// into approximate wall-clock duration (tenure summary). If the
-// chain ever changes block time this needs to update — keep it
-// here and not inline in formulas.
-const ELASTOS_BLOCK_SECONDS = 120;
 
 const CandidateDetail = () => {
   const { term: termParam, cid } = useParams<{ term: string; cid: string }>();
@@ -189,7 +184,10 @@ const CandidateDetail = () => {
               </div>
               <p className="text-[11px] md:text-xs text-muted tracking-[0.04em]">
                 Term {term}
-                {thisTerm && ` · Rank ${thisTerm.rank}`}
+                {/* Suppress "Rank N" for pre-BPoS terms — the stored rank
+                    is synthetic chronological order, not vote-based. */}
+                {thisTerm && !thisTerm.legacyEra && ` · Rank ${thisTerm.rank}`}
+                {thisTerm?.legacyEra && ' · Pre-BPoS council member'}
                 {externalUrl && (
                   <>
                     {' · '}
@@ -294,22 +292,49 @@ const CandidateDetail = () => {
         </div>
       </div>
 
-      {/* 4. STATS GRID — this term */}
+      {/* 4. STATS GRID — this term + lifetime member metadata.
+          For pre-BPoS terms (T1-T3) the per-term tiles show 0/N/A
+          because the legacy fallback can't reconstruct vote counts —
+          we replace those three tiles with one honest banner instead
+          of three lying zeros. Lifetime tiles (Register, Deposit,
+          Penalty, Impeachment) still render since they're cumulative
+          member-state, not per-term. */}
+      {thisTerm?.legacyEra ? (
+        <div className="card p-3 sm:p-4 relative overflow-hidden flex items-start gap-3">
+          <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
+          <Trophy size={16} className="text-brand mt-0.5 ml-1.5 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-primary mb-1">
+              Pre-BPoS council member · Term {term}
+            </p>
+            <p className="text-xs text-secondary">
+              Vote counts and per-candidate rankings can&apos;t be reconstructed for terms 1-3
+              (pre-DPoSv2 OTVote consensus). The 12 elected members are sourced from the
+              proposal-review record.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <div className={cn(
         'grid grid-cols-2 sm:grid-cols-3 gap-2 md:gap-3',
         showPenalty || showImpeachment ? 'lg:grid-cols-6' : 'lg:grid-cols-5',
       )}>
-        <MiniStat icon={ScrollText} label="Rank" value={thisTerm ? `#${thisTerm.rank}` : '—'} />
-        <MiniStat
-          icon={Coins}
-          label="Total Votes"
-          value={thisTerm ? `${formatVotes(thisTerm.votes)} ELA` : '—'}
-        />
-        <MiniStat
-          icon={Users}
-          label="Voter Count"
-          value={thisTerm ? thisTerm.voterCount.toLocaleString() : '—'}
-        />
+        {!thisTerm?.legacyEra && (
+          <>
+            <MiniStat icon={ScrollText} label="Rank" value={thisTerm ? `#${thisTerm.rank}` : '—'} />
+            <MiniStat
+              icon={Coins}
+              label="Total Votes"
+              value={thisTerm ? `${formatVotes(thisTerm.votes)} ELA` : '—'}
+            />
+            <MiniStat
+              icon={Users}
+              label="Voter Count"
+              value={thisTerm ? thisTerm.voterCount.toLocaleString() : '—'}
+            />
+          </>
+        )}
         <MiniStat
           icon={Hash}
           label="Register"
@@ -323,7 +348,7 @@ const CandidateDetail = () => {
         {showPenalty && (
           <MiniStat
             icon={Scale}
-            label="Penalty"
+            label="Lifetime penalty"
             value={`${formatVotes(m.penalty)} ELA`}
             tone="red"
           />
@@ -331,7 +356,7 @@ const CandidateDetail = () => {
         {showImpeachment && (
           <MiniStat
             icon={Scale}
-            label="Impeachment Votes"
+            label="Lifetime impeachment"
             value={`${formatVotes(m.impeachmentVotes)} ELA`}
             tone="red"
           />
@@ -341,17 +366,21 @@ const CandidateDetail = () => {
       {/* 5. GOVERNANCE RECORD */}
       <GovernanceCard governance={profile.governance} cid={cid!} />
 
-      {/* 6. VOTERS TABLE — this term */}
-      <VotersCard
-        voters={voters}
-        loading={votersLoading}
-        total={voterTotal}
-        page={voterPage}
-        totalPages={voterTotalPages}
-        onPageChange={setVoterPage}
-        term={term}
-        cid={cid!}
-      />
+      {/* 6. VOTERS TABLE — this term. Pre-BPoS terms have no parseable
+          per-voter data so we skip the empty card; the legacy banner
+          already explains why. */}
+      {!thisTerm?.legacyEra && (
+        <VotersCard
+          voters={voters}
+          loading={votersLoading}
+          total={voterTotal}
+          page={voterPage}
+          totalPages={voterTotalPages}
+          onPageChange={setVoterPage}
+          term={term}
+          cid={cid!}
+        />
+      )}
     </div>
   );
 };
@@ -376,7 +405,7 @@ function Muted({ children }: { children: React.ReactNode }) {
 // to summarize) so the caller can omit the chip entirely.
 function formatTenureSpan(blockSpan: number): string {
   if (blockSpan <= 0) return '';
-  const days = (blockSpan * ELASTOS_BLOCK_SECONDS) / 86400;
+  const days = (blockSpan * BLOCK_TIME_SECONDS) / 86400;
   if (days < 1) return '< 1 day tenure';
   if (days < 7) {
     const d = Math.round(days);
@@ -498,19 +527,28 @@ function TermPills({
                     ? 'bg-brand/15 text-brand border-brand/40'
                     : 'text-secondary border-[var(--color-border)] hover:text-primary hover:border-[var(--color-border-strong)]',
                 )}
-                title={
-                  t.elected
-                    ? `Term ${t.term} · Rank #${t.rank} · Elected`
-                    : `Term ${t.term} · Rank #${t.rank} · Not elected`
-                }
+                title={(() => {
+                  if (t.legacyEra) return `Term ${t.term} · Pre-BPoS council member`;
+                  if (t.elected) return `Term ${t.term} · Rank #${t.rank} · Elected`;
+                  return `Term ${t.term} · Rank #${t.rank} · Not elected`;
+                })()}
               >
                 <span className="font-semibold tracking-wider">T{t.term}</span>
                 <span
                   className="text-[10px] mt-0.5 text-muted group-hover:text-secondary inline-flex items-center gap-1"
                   style={{ fontVariantNumeric: 'tabular-nums' }}
                 >
-                  #{t.rank}
-                  {t.elected && <Trophy size={9} className="text-brand" />}
+                  {/* Pre-BPoS terms have no vote-based ranks — show
+                      Trophy alone (still elected) instead of misleading
+                      "#5" / "#10" synthetic numbers. */}
+                  {t.legacyEra ? (
+                    t.elected && <Trophy size={11} className="text-brand" />
+                  ) : (
+                    <>
+                      #{t.rank}
+                      {t.elected && <Trophy size={9} className="text-brand" />}
+                    </>
+                  )}
                 </span>
               </Link>
             );

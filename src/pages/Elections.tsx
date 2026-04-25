@@ -296,16 +296,28 @@ const Elections = () => {
         </>
       )}
 
-      {/* History — shown below everything. Always present. */}
+      {/* Election history — leads to per-term results pages
+          (candidates + votes + winners), not council rosters.
+          Renamed from "Past councils" because users were
+          interpreting the section as a member directory. */}
       {pastTerms.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-primary tracking-[0.02em] flex items-center gap-2">
-            <Trophy size={13} className="text-brand" />
-            Past councils
-          </h2>
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold text-primary tracking-[0.02em] flex items-center gap-2">
+              <Trophy size={13} className="text-brand" />
+              Election results
+            </h2>
+            <span className="text-[10px] text-muted">
+              {pastTerms.length} term{pastTerms.length === 1 ? '' : 's'}
+            </span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {pastTerms.map((t) => (
-              <TermCard key={t.term} term={t} />
+              <TermCard
+                key={t.term}
+                term={t}
+                isCurrent={t.term === status?.currentCouncilTerm}
+              />
             ))}
           </div>
         </section>
@@ -441,8 +453,14 @@ export function StatusHero({
     const hasNextWindow = status.nextVotingStartHeight > 0;
     return (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {/* Primary: WHAT TERM ARE WE IN. Spans 2 of 3 cols on md+. */}
-        <div className="md:col-span-2 card-accent relative overflow-hidden p-4 sm:p-5 md:p-6">
+        {/* Primary: WHAT TERM ARE WE IN. Spans 2 of 3 cols on md+.
+            Headline doubles as a link to the term's full election
+            results page so operators can pivot from "who is the
+            council" to "how did they get elected" in one click. */}
+        <Link
+          to={`/governance/elections/${status.currentCouncilTerm}`}
+          className="md:col-span-2 card-accent relative overflow-hidden p-4 sm:p-5 md:p-6 block transition-all hover:border-[var(--color-border-strong)]"
+        >
           <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
           <div className="relative pl-2">
             <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2">
@@ -457,9 +475,11 @@ export function StatusHero({
             <p className="text-[11px] md:text-xs text-secondary mt-2 tracking-[0.04em]">
               Seated through block{' '}
               <span className="font-mono text-primary">{status.onDutyEndHeight.toLocaleString()}</span>
+              {' · '}
+              <span className="text-brand">view election results →</span>
             </p>
           </div>
-        </div>
+        </Link>
 
         {/* Secondary: NEXT election countdown. Compact card. */}
         {hasNextWindow && (
@@ -679,18 +699,32 @@ export function CandidatesList({
  * For legacy terms (T1-T3), total-votes is displayed as "—" since the
  * pre-BPoS era's vote counts aren't reconstructable from UTXO data.
  */
-function TermCard({ term }: { term: ElectionSummary }) {
+function TermCard({ term, isCurrent }: { term: ElectionSummary; isCurrent?: boolean }) {
   const legacy = term.legacyEra === true;
   return (
     <Link
       to={`/governance/elections/${term.term}`}
-      className="card p-4 relative block transition-all hover:border-[var(--color-border-strong)] hover:bg-hover"
+      className={cn(
+        'card p-4 relative block transition-all hover:border-[var(--color-border-strong)] hover:bg-hover',
+        isCurrent && 'border-brand/40',
+      )}
     >
-      <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
+      <div
+        className={cn(
+          'absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full',
+          isCurrent ? 'bg-brand' : 'bg-brand/40',
+        )}
+      />
       <div className="pl-1.5">
         <div className="flex items-baseline justify-between mb-2">
-          <span className="text-[10px] text-muted uppercase tracking-[0.18em]">
-            Term {legacy && <span className="ml-1 text-[9px] text-muted/70">(pre-BPoS)</span>}
+          <span className="text-[10px] text-muted uppercase tracking-[0.18em] flex items-center gap-1.5">
+            Term
+            {legacy && <span className="text-[9px] text-muted/70">(pre-BPoS)</span>}
+            {isCurrent && (
+              <span className="text-[9px] uppercase tracking-wider text-brand bg-brand/10 px-1.5 py-0.5 rounded-full">
+                Current
+              </span>
+            )}
           </span>
           <span
             className="text-lg font-semibold text-primary"

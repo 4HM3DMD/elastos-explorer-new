@@ -193,6 +193,125 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getCRElectionReplayEvents returns the raw vote events for a term's
+// voting window, grouped per (height, voter address) so a frontend
+// simulator can reconstruct the running tally exactly the way the
+// node does — applying each TxVoting as a full replacement of the
+// voter's prior allocation (the `UsedCRVotes[stakeAddress]` semantic).
+//
+// One "event" represents a single TxVoting transaction. Its `votes`
+// array lists every candidate that voter chose in that transaction.
+// When a later event from the same address arrives, the frontend
+// drops the prior allocation entirely and applies the new one.
+//
+// Response shape:
+//
+//	{
+//	  "term": 6,
+//	  "narrowStart": 1941250,
+//	  "narrowEnd":   1962849,
+//	  "termStart":   1972930,
+//	  "events": [
+//	    {
+//	      "height": 1948980,
+//	      "address": "EVK1932jCipUvrvHmRcqq4zbJGJSygb2uL",
+//	      "votes": [
+//	        {"candidate": "iodHnQx1MMNBRgRD6R1CyMnfWyvAEg9NeE", "amountSela": 150000000000},
+//	        {"candidate": "icsgg6rePudEhSR3D1N6viEQVJEqe5BpF4", "amountSela": 150000000000}
+//	      ]
+//	    },
+//	    ...
+//	  ]
+//	}
+//
+// Hard cap of 10,000 events per response — Term 6 had 906 rows so
+// this is generous, and any term needing more would suggest a bug.
+func (s *Server) getCRElectionReplayEvents(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+
+	// Same constants as elsewhere — keep in sync with aggregator.go
+	// and Elastos.ELA mainnet config.
+	const crFirstTermStart = int64(658930)
+	const crTermLength = int64(262800)
+	const crVotingPeriod = int64(21600)
+	const crClaimPeriod = int64(10080)
+
+	termStart := crFirstTermStart + (int64(term)-1)*crTermLength
+	narrowEnd := termStart - 1 - crClaimPeriod
+	narrowStart := narrowEnd - crVotingPeriod + 1
+	if narrowStart < 0 {
+		narrowStart = 0
+	}
+
+	// Pull every CRC vote row in the window. Cheap because of
+	// idx_votes_height. We don't need is_active here — we want the
+	// historical events as they were CAST, regardless of whether
+	// they were later spent or replaced.
+	rows, err := s.db.API.Query(r.Context(), `
+		SELECT stake_height, address, candidate, amount_sela
+		FROM votes
+		WHERE vote_type = 1
+		  AND stake_height >= $1
+		  AND stake_height <= $2
+		ORDER BY stake_height ASC, address ASC, candidate ASC
+		LIMIT 10000`, narrowStart, narrowEnd)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	// Group consecutive rows with the same (height, address) into
+	// one event. The ORDER BY clause guarantees rows from the same
+	// TxVoting are adjacent; same-height same-address rows ARE the
+	// candidate slices of a single replacement transaction.
+	type voteEntry struct {
+		Candidate  string `json:"candidate"`
+		AmountSela int64  `json:"amountSela"`
+	}
+	type event struct {
+		Height  int64       `json:"height"`
+		Address string      `json:"address"`
+		Votes   []voteEntry `json:"votes"`
+	}
+
+	var events []event
+	var current *event
+	for rows.Next() {
+		var height int64
+		var address, candidate string
+		var amount int64
+		if err := rows.Scan(&height, &address, &candidate, &amount); err != nil {
+			continue
+		}
+		if current == nil || current.Height != height || current.Address != address {
+			if current != nil {
+				events = append(events, *current)
+			}
+			current = &event{Height: height, Address: address, Votes: []voteEntry{}}
+		}
+		current.Votes = append(current.Votes, voteEntry{
+			Candidate:  candidate,
+			AmountSela: amount,
+		})
+	}
+	if current != nil {
+		events = append(events, *current)
+	}
+
+	writeJSON(w, 200, map[string]any{
+		"term":        term,
+		"narrowStart": narrowStart,
+		"narrowEnd":   narrowEnd,
+		"termStart":   termStart,
+		"events":      events,
+	})
+}
+
 // getCRElectionStatus returns the current election phase of the DAO:
 // whether we're in a live voting window, a claiming window, or a regular
 // duty period; what the surrounding block-height boundaries are; and the

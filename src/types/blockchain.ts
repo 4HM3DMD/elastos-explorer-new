@@ -463,6 +463,25 @@ export interface ElectionTermDetail {
   candidates: ElectionCandidate[];
 }
 
+// One TxVoting event in a term's voting window. From
+// GET /api/v1/cr/elections/{term}/replay-events. The `votes` array is
+// the full set of candidates this voter chose in this single
+// transaction. A subsequent event from the same `address` REPLACES
+// this allocation in its entirety — node's UsedCRVotes[stakeAddress].
+export interface ElectionReplayEvent {
+  height: number;
+  address: string;
+  votes: { candidate: string; amountSela: number }[];
+}
+
+export interface ElectionReplayEventsResponse {
+  term: number;
+  narrowStart: number;
+  narrowEnd: number;
+  termStart: number;
+  events: ElectionReplayEvent[];
+}
+
 export interface ProposalBudgetItem {
   type: number | string;
   stage: number;

@@ -7,6 +7,7 @@ import type {
   TopStaker, StakingSummary, ELAPrice, SupplyData, SyncStatusDetail,
   BalanceHistoryPoint, VoteHistoryEntry, GovernanceActivity,
   ElectionStatus, ElectionSummary, ElectionTermDetail,
+  ElectionReplayEventsResponse,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
 
@@ -212,6 +213,15 @@ export const blockchainApi = {
 
   getCRElectionByTerm: async (term: number): Promise<ElectionTermDetail> => {
     const res = await api.get<ElectionTermDetail>(`/cr/elections/${term}`);
+    return res.data;
+  },
+
+  // Raw vote events for a term's voting window, used by the dev
+  // election-replay simulator to reconstruct the running tally
+  // exactly as the node did. Each event represents one TxVoting
+  // and replaces the voter's prior allocation in full.
+  getCRElectionReplayEvents: async (term: number): Promise<ElectionReplayEventsResponse> => {
+    const res = await api.get<ElectionReplayEventsResponse>(`/cr/elections/${term}/replay-events`);
     return res.data;
   },
 

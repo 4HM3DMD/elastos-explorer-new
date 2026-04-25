@@ -34,6 +34,7 @@ import type {
   ElectionCandidate,
   ElectionStatus,
   ElectionPhase,
+  ElectionReplayEvent,
 } from '../types/blockchain';
 import { CouncilMembersTable, CandidatesList, StatusHero } from './Elections';
 import SEO from '../components/SEO';
@@ -136,6 +137,7 @@ const DevElectionReplay = () => {
   const [t6Candidates, setT6Candidates] = useState<ElectionCandidate[]>([]);
   const [t5ElectedAsMembers, setT5ElectedAsMembers] = useState<CRMember[]>([]);
   const [t6ElectedAsMembers, setT6ElectedAsMembers] = useState<CRMember[]>([]);
+  const [replayEvents, setReplayEvents] = useState<ElectionReplayEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -143,10 +145,21 @@ const DevElectionReplay = () => {
   // without losing simHeight across renders.
   const intervalRef = useRef<number | null>(null);
 
+  // Initial fetch — three calls in parallel:
+  //   1. Term 5 detail → seed Term 5 elected as the "still-on-duty"
+  //      council during the simulator's pre-voting and voting phases.
+  //   2. Term 6 detail → final candidate list (cid, did, nickname),
+  //      lets us identify the 12 elected for claim/duty rendering.
+  //   3. Term 6 replay events → the real per-block vote stream we
+  //      replay through to reconstruct live tallies.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([blockchainApi.getCRElectionByTerm(5), blockchainApi.getCRElectionByTerm(6)])
-      .then(([t5, t6]) => {
+    Promise.all([
+      blockchainApi.getCRElectionByTerm(5),
+      blockchainApi.getCRElectionByTerm(6),
+      blockchainApi.getCRElectionReplayEvents(6),
+    ])
+      .then(([t5, t6, events]) => {
         if (cancelled) return;
         setT6Candidates(t6.candidates);
         setT5ElectedAsMembers(
@@ -155,6 +168,7 @@ const DevElectionReplay = () => {
         setT6ElectedAsMembers(
           t6.candidates.filter((c) => c.elected).map(candidateToMember),
         );
+        setReplayEvents(events.events);
       })
       .catch(() => {
         if (!cancelled) setFetchError('Failed to load Term 5/6 data from API');
@@ -206,45 +220,83 @@ const DevElectionReplay = () => {
   // - duty (height >= takeover) → Term 6 elected are now seated.
   const liveMembers = simHeight >= T6_TAKEOVER ? t6ElectedAsMembers : t5ElectedAsMembers;
 
-  // For the voting body we synthesise a live tally that scales the
-  // final vote totals down to what they "would have been" at this
-  // simulated height. Without this, the voting view shows final
-  // numbers from block 0 and feels static.
+  // Real event replay. Walk every TxVoting event up to simHeight,
+  // applying the node's `UsedCRVotes[stakeAddress]` semantic: each
+  // event REPLACES the voter's prior allocation entirely. This
+  // produces a tally identical to what the node had at simHeight,
+  // which is exactly what we want for verification.
   //
-  // Per-candidate easing curve makes the leaderboard reorder over
-  // time — some candidates start strong and plateau, others surge
-  // late. Curve exponent k ∈ [0.6, 1.8] is derived deterministically
-  // from the CID so the same simulation run always plays the same
-  // way (helpful for screen recording / reproducible bug reports).
+  // Recomputed from scratch every render. With ~906 events for
+  // Term 6 this is cheap (<2ms in V8). If a future term blows past
+  // 10k events we can switch to an incremental cursor; for now the
+  // simplicity wins.
+  //
+  // Out: { totals: Map<cid, sela>, voters: Map<cid, Set<addr>> }
+  // — per-candidate live ELA total and the set of distinct voters
+  // currently allocating to them. These feed the table render and
+  // (later) the click-to-drilldown view.
+  const liveTally = useMemo(() => {
+    const voterAllocations = new Map<string, Map<string, number>>();
+    const totals = new Map<string, number>();
+    const voters = new Map<string, Set<string>>();
+    if (replayEvents.length === 0) return { totals, voters, eventCount: 0 };
+
+    let appliedCount = 0;
+    for (const ev of replayEvents) {
+      if (ev.height > simHeight) break;
+      // Drop voter's previous allocation, if any — the new TxVoting
+      // is a full replacement.
+      const prev = voterAllocations.get(ev.address);
+      if (prev) {
+        for (const [cand, amt] of prev) {
+          totals.set(cand, (totals.get(cand) || 0) - amt);
+          voters.get(cand)?.delete(ev.address);
+        }
+      }
+      // Apply new allocation.
+      const fresh = new Map<string, number>();
+      for (const v of ev.votes) {
+        fresh.set(v.candidate, v.amountSela);
+        totals.set(v.candidate, (totals.get(v.candidate) || 0) + v.amountSela);
+        if (!voters.has(v.candidate)) voters.set(v.candidate, new Set());
+        voters.get(v.candidate)!.add(ev.address);
+      }
+      voterAllocations.set(ev.address, fresh);
+      appliedCount++;
+    }
+    return { totals, voters, eventCount: appliedCount };
+  }, [replayEvents, simHeight]);
+
+  // Build the voting-body candidate list with real numbers from the
+  // tally above. We start from the full Term 6 candidate roster (so
+  // the table layout is stable), then overlay live votes/voterCount.
+  // No "Elected" badges during voting — the node only locks elected
+  // status when the voting window closes.
   const votingBody = useMemo(() => {
     if (phase !== 'voting' || t6Candidates.length === 0) return t6Candidates;
-    const progress =
-      (simHeight - T6_VOTING_START) / Math.max(1, T6_VOTING_END - T6_VOTING_START);
-    const clamped = Math.max(0, Math.min(1, progress));
-    const scaled = t6Candidates.map((c) => {
-      // Deterministic hash of CID → exponent k in [0.6, 1.8].
-      let h = 0;
-      for (let i = 0; i < c.cid.length; i++) h = (h * 31 + c.cid.charCodeAt(i)) >>> 0;
-      const k = 0.6 + (h % 1000) / 1000 * 1.2;
-      const fraction = Math.pow(clamped, k);
-      const finalVotes = Number(c.votes) || 0;
-      const scaledVotes = finalVotes * fraction;
-      const scaledVoterCount = Math.round(c.voterCount * fraction);
+    const SELA_PER_ELA = 1e8;
+    const enriched = t6Candidates.map((c) => {
+      const sela = liveTally.totals.get(c.cid) || 0;
+      const ela = sela / SELA_PER_ELA;
+      const voterCount = liveTally.voters.get(c.cid)?.size || 0;
       return {
         ...c,
-        votes: scaledVotes.toFixed(8),
-        voterCount: scaledVoterCount,
-        // Elected status isn't decided until voting closes. During
-        // the voting window every row shows its current rank but no
-        // "Elected" badge — matches the node's real semantics.
+        votes: ela.toFixed(8),
+        voterCount,
         elected: false,
       };
     });
-    // Re-rank by current scaled votes so the leaderboard reorders
-    // visibly as the simulation plays.
-    scaled.sort((a, b) => Number(b.votes) - Number(a.votes));
-    return scaled.map((c, i) => ({ ...c, rank: i + 1 }));
-  }, [phase, t6Candidates, simHeight]);
+    // Re-rank by current votes — the leaderboard reorders as
+    // events arrive. Candidates with 0 votes drop to the bottom by
+    // CID ASC tie-break.
+    enriched.sort((a, b) => {
+      const av = Number(a.votes);
+      const bv = Number(b.votes);
+      if (av !== bv) return bv - av;
+      return a.cid.localeCompare(b.cid);
+    });
+    return enriched.map((c, i) => ({ ...c, rank: i + 1 }));
+  }, [phase, t6Candidates, liveTally]);
 
   // Candidate count drives the voting hero subtitle.
   const targetCandidateCount = votingBody.length;
@@ -307,6 +359,9 @@ const DevElectionReplay = () => {
               {phase === 'claim' && `${T6_TAKEOVER - simHeight} blocks until handover`}
               {phase === 'duty' && simHeight >= T6_TAKEOVER && `${T6_ON_DUTY_END - simHeight} blocks until next election cycle`}
               {phase === 'duty' && simHeight < T6_TAKEOVER && `${T6_VOTING_START - simHeight} blocks until voting opens`}
+              {phase === 'voting' && replayEvents.length > 0 && (
+                <span> · {liveTally.eventCount} / {replayEvents.length} TxVoting events applied</span>
+              )}
             </p>
           </div>
 

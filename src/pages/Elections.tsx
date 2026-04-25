@@ -433,43 +433,54 @@ export function StatusHero({
   // phases. Subtitle frames "until handover" so the meaning of the
   // upcoming voting → claim → takeover sequence is on one line.
   if (phase === 'duty') {
+    // Big headline = the term that's actually seated (what term am I
+    // in?). Secondary tile = compact countdown to next voting open.
+    // Previous design buried the seated council under a giant "Term
+    // {N+1}" banner about the upcoming election, which read as if
+    // T{N+1} was the current state. Operators kept misreading it.
     const hasNextWindow = status.nextVotingStartHeight > 0;
-    if (!hasNextWindow) return null;
     return (
-      <div className="card relative overflow-hidden p-4 sm:p-5 md:p-6">
-        <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
-          <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand/40" />
-        </div>
-        <div className="relative grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center pl-2">
-          <div className="min-w-0">
-            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2 flex items-center gap-1.5">
-              Next election
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {/* Primary: WHAT TERM ARE WE IN. Spans 2 of 3 cols on md+. */}
+        <div className="md:col-span-2 card-accent relative overflow-hidden p-4 sm:p-5 md:p-6">
+          <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
+          <div className="relative pl-2">
+            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2">
+              On duty
             </p>
             <p
-              className="text-gradient-brand text-[22px] sm:text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em]"
+              className="text-gradient-brand text-[26px] sm:text-[32px] md:text-[40px] leading-none font-[200] tracking-[0.02em]"
               style={{ fontVariantNumeric: 'tabular-nums' }}
             >
-              Term {status.targetTerm}
+              Term {status.currentCouncilTerm} Council
             </p>
-            <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
-              Voting opens at block{' '}
-              <span className="font-mono text-primary">{status.nextVotingStartHeight.toLocaleString()}</span>
-              .
-            </p>
-            <p className="text-[10px] md:text-[11px] text-muted mt-1 tracking-[0.04em]">
-              Current Term {status.currentCouncilTerm} council seated until block{' '}
-              <span className="font-mono text-secondary">{status.onDutyEndHeight.toLocaleString()}</span>
-              .
+            <p className="text-[11px] md:text-xs text-secondary mt-2 tracking-[0.04em]">
+              Seated through block{' '}
+              <span className="font-mono text-primary">{status.onDutyEndHeight.toLocaleString()}</span>
             </p>
           </div>
-          <Countdown
-            targetHeight={status.nextVotingStartHeight}
-            currentHeight={status.currentHeight}
-            label="Voting opens in"
-            size="hero"
-            showHeight
-          />
         </div>
+
+        {/* Secondary: NEXT election countdown. Compact card. */}
+        {hasNextWindow && (
+          <div className="card relative overflow-hidden p-4 sm:p-5">
+            <div className="space-y-2">
+              <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] flex items-center gap-1.5">
+                Next election · Term {status.targetTerm}
+              </p>
+              <Countdown
+                targetHeight={status.nextVotingStartHeight}
+                currentHeight={status.currentHeight}
+                label="Voting opens in"
+                size="inline"
+                showHeight={false}
+              />
+              <p className="text-[10px] md:text-[11px] text-muted tracking-[0.04em]">
+                Block <span className="font-mono text-secondary">{status.nextVotingStartHeight.toLocaleString()}</span>
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

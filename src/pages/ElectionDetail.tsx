@@ -144,8 +144,10 @@ const ElectionDetail = () => {
         <GovernanceNav activePath="/governance" />
       </div>
 
-      {/* Back to governance index */}
-      <div>
+      {/* Back nav + drilldown link to the all-voters list. The
+          all-voters page only makes sense for non-legacy terms; for
+          T1-T3 it would just say "Pre-BPoS era — unavailable". */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Link
           to="/governance"
           className="inline-flex items-center gap-1 text-xs text-secondary hover:text-brand transition-colors"
@@ -153,6 +155,15 @@ const ElectionDetail = () => {
           <ChevronLeft size={12} />
           Back to governance
         </Link>
+        {!legacyEra && (
+          <Link
+            to={`/governance/elections/${term}/voters`}
+            className="inline-flex items-center gap-1 text-xs text-brand hover:underline"
+          >
+            <Users size={12} />
+            All voters
+          </Link>
+        )}
       </div>
 
       {/* Legacy-era banner — pre-BPoS voter data isn't reconstructable
@@ -248,7 +259,7 @@ const ElectionDetail = () => {
                 </tr>
               ) : (
                 sortedCandidates.map((c) => (
-                  <CandidateRow key={c.cid} candidate={c} hideVotes={legacyEra} />
+                  <CandidateRow key={c.cid} candidate={c} hideVotes={legacyEra} term={term} />
                 ))
               )}
             </tbody>
@@ -297,9 +308,11 @@ function SortHeader({
 function CandidateRow({
   candidate,
   hideVotes,
+  term,
 }: {
   candidate: ElectionCandidate;
   hideVotes?: boolean;
+  term: number;
 }) {
   return (
     <tr className={cn(candidate.elected && 'bg-brand/[0.03]')}>
@@ -342,12 +355,22 @@ function CandidateRow({
       )}
       {!hideVotes && (
         <td className="align-top" style={{ textAlign: 'right' }}>
-          <span
-            className="font-mono text-xs text-secondary"
-            style={{ fontVariantNumeric: 'tabular-nums' }}
-          >
-            {candidate.voterCount.toLocaleString()}
-          </span>
+          {candidate.voterCount > 0 ? (
+            <Link
+              to={`/governance/elections/${term}/voters/${candidate.cid}`}
+              className="font-mono text-xs text-secondary hover:text-brand transition-colors"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
+              {candidate.voterCount.toLocaleString()}
+            </Link>
+          ) : (
+            <span
+              className="font-mono text-xs text-muted"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
+              {candidate.voterCount.toLocaleString()}
+            </span>
+          )}
         </td>
       )}
       <td className="hidden sm:table-cell align-top" style={{ textAlign: 'right' }}>

@@ -8,6 +8,7 @@ import type {
   BalanceHistoryPoint, VoteHistoryEntry, GovernanceActivity,
   ElectionStatus, ElectionSummary, ElectionTermDetail,
   ElectionReplayEventsResponse,
+  ElectionVoter, CandidateVoter, AddressCRVoteTerm,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
 
@@ -220,6 +221,29 @@ export const blockchainApi = {
   // and replaces the voter's prior allocation in full.
   getCRElectionReplayEvents: async (term: number): Promise<ElectionReplayEventsResponse> => {
     return unwrap<ElectionReplayEventsResponse>(await api.get(`/cr/elections/${term}/replay-events`));
+  },
+
+  // Paginated list of every voter in a term's voting window,
+  // ranked by total ELA contributed (latest-TxVoting basis).
+  getCRElectionVoters: async (term: number, page = 1, pageSize = 25) => {
+    return unwrapPaginated<ElectionVoter[]>(
+      await api.get(`/cr/elections/${term}/voters`, { params: { page, pageSize } }),
+    );
+  },
+
+  // Paginated list of voters who allocated to a specific candidate
+  // in a term, sorted by amount DESC.
+  getCRCandidateVoters: async (term: number, cid: string, page = 1, pageSize = 25) => {
+    return unwrapPaginated<CandidateVoter[]>(
+      await api.get(`/cr/elections/${term}/voters/${cid}`, { params: { page, pageSize } }),
+    );
+  },
+
+  // Full CR voting history for an address — every term they
+  // participated in. Term-agnostic: scans every term where this
+  // address has at least one CRC vote.
+  getAddressCRVotes: async (address: string): Promise<AddressCRVoteTerm[]> => {
+    return unwrap<AddressCRVoteTerm[]>(await api.get(`/address/${address}/cr-votes`));
   },
 
   // Current phase of the DAO (voting / claim / duty / failed_restart /

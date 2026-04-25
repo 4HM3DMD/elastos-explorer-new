@@ -489,6 +489,42 @@ export interface ElectionReplayEventsResponse {
   events: ElectionReplayEvent[];
 }
 
+// One voter row from GET /api/v1/cr/elections/{term}/voters.
+// Aggregated per voter (latest-TxVoting basis): their total ELA
+// across all candidates they chose, plus a sample tx hash for proof.
+export interface ElectionVoter {
+  address: string;
+  totalEla: string;
+  candidatesVotedFor: number;
+  firstVoteHeight: number;
+  lastVoteHeight: number;
+  sampleTxid: string;
+}
+
+// One voter row from GET /api/v1/cr/elections/{term}/voters/{cid}.
+// The amount is THIS voter's allocation to THIS specific candidate.
+export interface CandidateVoter {
+  address: string;
+  ela: string;
+  voteHeight: number;
+  txid: string;
+}
+
+// One per-term entry from GET /api/v1/address/{address}/cr-votes.
+// `slices` is the address's final TxVoting for that term — every
+// candidate they chose with their amounts.
+export interface AddressCRVoteTerm {
+  term: number;
+  totalEla: string;
+  slices: {
+    candidate: string;
+    nickname?: string;
+    ela: string;
+    voteHeight: number;
+    txid: string;
+  }[];
+}
+
 export interface ProposalBudgetItem {
   type: number | string;
   stage: number;

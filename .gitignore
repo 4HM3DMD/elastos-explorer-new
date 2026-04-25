@@ -155,3 +155,12 @@ playwright/.cache/
 # package-lock.json
 # yarn.lock
 # pnpm-lock.yaml
+
+# Claude Code — local-only memory (server IPs, passwords, tokens, etc.)
+# CLAUDE.md is committed and contains only generic architecture info.
+# CLAUDE.local.md is auto-loaded by Claude Code but stays out of git.
+CLAUDE.local.md
+CHAT-CONTEXT-DUMP*.md
+.claude/sessions/
+.claude/projects/
+.claude/session-env/

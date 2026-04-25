@@ -567,22 +567,29 @@ const DevElectionReplay = () => {
 };
 
 /**
- * ClaimNodeTracker — during the CRClaimPeriod, shows for each elected
- * councilor whether their on-chain node info has been set and at
- * which block. Driven by real `cr_members.register_height` data —
- * the block of each member's most recent TxRegisterCR / TxUpdateCR,
- * which is the transaction that establishes their claimed_node.
+ * ClaimNodeTracker — shows per-councilor node operational status
+ * derived from real chain data:
  *
- * For most terms (T4-T6 retrospectively) every member's
- * register_height falls during the voting window or earlier — they
- * came into the claim period already "claimed" and are just waiting
- * for takeover. The tracker shows that truthfully: "Node ready since
- * block X" with X always ≤ voting close.
+ *   - "Claimed" timestamp = `cr_members.register_height`. Block of
+ *     the most recent TxRegisterCR/TxUpdateCR, which sets
+ *     claimed_node. Tells us when the member declared which DPoS
+ *     pubkey they'll run.
  *
- * For terms where a member updates DURING the claim window (rare),
- * register_height would land in [votingEnd+1, termStart) and the
- * tracker would correctly show "Pending" until simHeight passes that
- * registerHeight, then flip to "Ready since block X".
+ *   - "Online" timestamp = `firstActiveHeight`. First block at
+ *     which their pubkey appeared in arbiter_turns.cr_pubkeys
+ *     after voting closed. Tells us when their server actually
+ *     came online and joined the consensus rotation.
+ *
+ * Status at simHeight:
+ *   - simHeight < registerHeight  → Pending claim (rare; usually
+ *                                    declared during voting)
+ *   - registerHeight ≤ simHeight < firstActiveHeight (or no online
+ *                                    yet) → Claimed but server offline
+ *   - simHeight ≥ firstActiveHeight → Server live (in rotation)
+ *
+ * For T6: at simHeight = takeover, only ~2 of 12 are server-live;
+ * the rest take days/weeks to come online (real chain history,
+ * not approximation).
  */
 function ClaimNodeTracker({
   claimBody,
@@ -593,18 +600,27 @@ function ClaimNodeTracker({
   simHeight: number;
   takeoverHeight: number;
 }) {
-  const ready = claimBody.filter(
+  const onlineCount = claimBody.filter(
+    (c) => c.firstActiveHeight && c.firstActiveHeight <= simHeight,
+  ).length;
+  const claimedCount = claimBody.filter(
     (c) => (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight,
-  );
-  const pending = claimBody.filter(
-    (c) => !c.registerHeight || c.registerHeight > simHeight,
-  );
+  ).length;
+
+  // Sort by online-first then claimed-first so the "what's ready
+  // now" rows surface to the top.
+  const sorted = [...claimBody].sort((a, b) => {
+    const aOn = a.firstActiveHeight && a.firstActiveHeight <= simHeight ? 0 : 1;
+    const bOn = b.firstActiveHeight && b.firstActiveHeight <= simHeight ? 0 : 1;
+    if (aOn !== bOn) return aOn - bOn;
+    return (a.firstActiveHeight ?? Infinity) - (b.firstActiveHeight ?? Infinity);
+  });
 
   return (
     <div className="card overflow-hidden">
       <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm font-medium text-primary">
-          Node-claim status &middot; {ready.length} / {claimBody.length} ready
+          Node operational status &middot; {onlineCount} live / {claimedCount} claimed / {claimBody.length} elected
         </span>
         <span className="text-xs text-muted">
           Handover at block <span className="font-mono text-secondary">{takeoverHeight.toLocaleString()}</span>
@@ -616,31 +632,61 @@ function ClaimNodeTracker({
             <tr>
               <th style={{ textAlign: 'left' }}>Councilor</th>
               <th style={{ textAlign: 'left' }}>Status</th>
-              <th style={{ textAlign: 'right' }}>Node ready since</th>
+              <th style={{ textAlign: 'right' }}>Claimed at</th>
+              <th style={{ textAlign: 'right' }}>Server online at</th>
             </tr>
           </thead>
           <tbody>
-            {[...ready, ...pending].map((c) => {
-              const isReady = (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight;
+            {sorted.map((c) => {
+              const claimed =
+                (c.registerHeight ?? 0) > 0 && (c.registerHeight ?? 0) <= simHeight;
+              const online =
+                c.firstActiveHeight !== undefined && c.firstActiveHeight <= simHeight;
+              let statusBadge: { label: string; cls: string };
+              if (online) {
+                statusBadge = { label: 'Server live', cls: 'bg-green-500/20 text-green-400' };
+              } else if (claimed) {
+                statusBadge = {
+                  label: 'Claimed · server offline',
+                  cls: 'bg-yellow-500/20 text-yellow-400',
+                };
+              } else {
+                statusBadge = { label: 'Not yet claimed', cls: 'bg-muted/20 text-muted' };
+              }
               return (
                 <tr key={c.cid}>
                   <td style={{ textAlign: 'left' }}>
                     <span className="font-semibold text-primary text-xs">{c.nickname}</span>
                   </td>
                   <td style={{ textAlign: 'left' }}>
-                    {isReady ? (
-                      <span className="badge bg-green-500/20 text-green-400">Node claimed</span>
-                    ) : (
-                      <span className="badge bg-yellow-500/20 text-yellow-400">Pending claim</span>
-                    )}
+                    <span className={`badge whitespace-nowrap ${statusBadge.cls}`}>
+                      {statusBadge.label}
+                    </span>
                   </td>
                   <td style={{ textAlign: 'right' }}>
-                    {c.registerHeight && c.registerHeight > 0 ? (
-                      <span className="font-mono text-xs text-secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                        block {c.registerHeight.toLocaleString()}
+                    {(c.registerHeight ?? 0) > 0 ? (
+                      <span
+                        className="font-mono text-xs text-secondary"
+                        style={{ fontVariantNumeric: 'tabular-nums' }}
+                      >
+                        block {(c.registerHeight ?? 0).toLocaleString()}
                       </span>
                     ) : (
                       <span className="text-muted text-xs">—</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    {c.firstActiveHeight ? (
+                      <span
+                        className={`font-mono text-xs ${
+                          online ? 'text-green-400' : 'text-muted'
+                        }`}
+                        style={{ fontVariantNumeric: 'tabular-nums' }}
+                      >
+                        block {c.firstActiveHeight.toLocaleString()}
+                      </span>
+                    ) : (
+                      <span className="text-muted text-xs">never</span>
                     )}
                   </td>
                 </tr>

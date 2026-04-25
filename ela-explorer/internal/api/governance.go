@@ -148,6 +148,24 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	// 0-vote, non-elected rows (~30-50 noise rows per recent term).
 	// Legacy terms (T1-T3) have all rows with final_votes_sela = 0
 	// AND elected = true, so they pass the filter naturally.
+	// firstActiveHeight: the first block at which an elected member's
+	// DPoS pubkey appeared in arbiter_turns.cr_pubkeys after voting
+	// closed — i.e. when their consensus node first joined the active
+	// rotation. This is "is the server actually running?" ground
+	// truth, distinct from register_height (which is just when they
+	// declared their pubkey on-chain). We scope the search to
+	// >= votingEnd+1 so we don't pick up appearances from prior
+	// terms when the same operator was already on a council.
+	//
+	// The LIKE on the JSON array is acceptable: arbiter_turns has
+	// ~40k rows total, the (height >= cutoff) filter narrows it to
+	// post-claim blocks, and we only run this for elected members.
+	const crFirstTermStart2 = int64(658930)
+	const crTermLength2 = int64(262800)
+	const crClaimPeriod2 = int64(10080)
+	tmStart := crFirstTermStart2 + (int64(term)-1)*crTermLength2
+	votingEndForActive := tmStart - 1 - crClaimPeriod2 // last voting block
+
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT et.candidate_cid,
 			COALESCE(NULLIF(et.nickname, ''), cm.nickname, '') AS nickname,
@@ -158,13 +176,18 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			COALESCE(cm.url, '') AS url,
 			COALESCE(cm.state, '') AS state,
 			COALESCE(cm.location, 0) AS location,
-			COALESCE(cm.deposit_amount, 0) AS deposit_amount
+			COALESCE(cm.deposit_amount, 0) AS deposit_amount,
+			CASE WHEN et.elected AND cm.dpos_pubkey != '' THEN
+				(SELECT MIN(at.height) FROM arbiter_turns at
+				 WHERE at.height > $2
+				   AND at.cr_pubkeys LIKE '%' || cm.dpos_pubkey || '%')
+			ELSE NULL END AS first_active_height
 		FROM cr_election_tallies et
 		LEFT JOIN cr_members cm ON cm.cid = et.candidate_cid
 		WHERE et.term = $1
 		  AND et.candidate_cid != '__sentinel__'
 		  AND (et.final_votes_sela > 0 OR et.elected = TRUE)
-		ORDER BY et.rank ASC`, term)
+		ORDER BY et.rank ASC`, term, votingEndForActive)
 	if err != nil {
 		writeError(w, 500, "database error")
 		return
@@ -179,7 +202,8 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		var voterCount, rank int
 		var elected bool
 		var votingStart, votingEnd, computedAt, registerHeight, location int64
-		if err := rows.Scan(&cid, &nickname, &votesSela, &voterCount, &rank, &elected, &votingStart, &votingEnd, &computedAt, &did, &registerHeight, &url, &state, &location, &depositSela); err != nil {
+		var firstActiveHeight *int64
+		if err := rows.Scan(&cid, &nickname, &votesSela, &voterCount, &rank, &elected, &votingStart, &votingEnd, &computedAt, &did, &registerHeight, &url, &state, &location, &depositSela, &firstActiveHeight); err != nil {
 			continue
 		}
 		if len(results) == 0 {
@@ -212,6 +236,13 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		}
 		if depositSela != 0 {
 			r["depositAmount"] = selaToELA(depositSela)
+		}
+		// Real "node online" timestamp from arbiter_turns. Only
+		// populated for elected members whose pubkey appears in the
+		// post-voting CR rotation. NULL → never came online (their
+		// server stayed offline through this term).
+		if firstActiveHeight != nil {
+			r["firstActiveHeight"] = *firstActiveHeight
 		}
 		results = append(results, r)
 	}

@@ -10,13 +10,13 @@ import { fmtEla, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
 import GovernanceNav from '../components/GovernanceNav';
-import { formatBlocksAsCountdown } from '../constants/governance';
+import {
+  formatBlocksAsCountdown,
+  CR_COUNCIL_SIZE,
+  PROPOSAL_REVIEW_PERIOD_BLOCKS,
+  PROPOSAL_VETO_PERIOD_BLOCKS,
+} from '../constants/governance';
 
-// Proposal review period (Council Vote phase): 7 days * 720 blocks/day.
-// Distinct from CR election VOTING_PERIOD; named so the constant
-// can't be confused at the call site.
-const PROPOSAL_REVIEW_PERIOD_BLOCKS = 5040;
-const PROPOSAL_VETO_PERIOD_BLOCKS = 5040;
 const PAGE_SIZE = 20;
 const PORTAL_BANNER_DISMISS_KEY = 'dao-portal-banner-dismissed';
 
@@ -92,14 +92,13 @@ const VoteBar = ({ approve, reject, abstain, status }: { approve: number; reject
   const total = approve + reject + abstain;
   if (total === 0) return <span className="text-muted text-[11px]">No votes</span>;
 
-  const council = 12;
-  const remaining = Math.max(0, council - total);
+  const remaining = Math.max(0, CR_COUNCIL_SIZE - total);
   const isVotingOpen = VOTING_OPEN_STATUSES.has(status);
 
   return (
     <div className="flex items-center gap-2.5">
       <div className="flex gap-px w-[72px]">
-        {Array.from({ length: council }).map((_, i) => {
+        {Array.from({ length: CR_COUNCIL_SIZE }).map((_, i) => {
           let color = 'bg-[var(--color-surface-tertiary)]';
           if (i < approve) color = 'bg-green-500';
           else if (i < approve + reject) color = 'bg-red-500';

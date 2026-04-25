@@ -9,6 +9,14 @@ interface HashDisplayProps {
   className?: string;
   showCopyButton?: boolean;
   isClickable?: boolean;
+  /**
+   * If false, render the full hash with no truncation regardless of
+   * `length`. Use this when the value is short enough to display
+   * verbatim (e.g. ELA addresses are 34 chars). Cleaner than the
+   * historical workaround of passing an artificially huge `length`
+   * value to trick the early-return inside `truncateHash`.
+   */
+  truncate?: boolean;
 }
 
 function truncateHash(h: string, len: number): string {
@@ -21,7 +29,8 @@ const HashDisplay: React.FC<HashDisplayProps> = ({
   length = 16,
   className = '',
   showCopyButton = true,
-  isClickable = true
+  isClickable = true,
+  truncate = true,
 }) => {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -60,7 +69,7 @@ const HashDisplay: React.FC<HashDisplayProps> = ({
         tabIndex={isClickable ? 0 : -1}
         aria-label={`Hash: ${hash.slice(0, 8)}…`}
       >
-        {truncateHash(hash, length)}
+        {truncate ? truncateHash(hash, length) : hash}
       </button>
       {showCopyButton && (
         <button

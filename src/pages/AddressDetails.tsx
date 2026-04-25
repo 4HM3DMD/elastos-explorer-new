@@ -149,7 +149,7 @@ const AddressDetails = () => {
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          <HashDisplay hash={info.address} length={100} showCopyButton isClickable={false} />
+          <HashDisplay hash={info.address} truncate={false} showCopyButton isClickable={false} />
           <button
             onClick={() => setQrOpen(true)}
             className="p-1 rounded-md hover:bg-hover transition-colors text-muted hover:text-brand shrink-0"

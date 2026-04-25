@@ -14,6 +14,20 @@ export const CR_CLAIMING_PERIOD_BLOCKS = 10080;
 /** Average seconds per block on Elastos main chain (merged-mined, 2-min target). */
 export const BLOCK_TIME_SECONDS = 120;
 
+/** Number of seated council members per term (MemberCount in node config). */
+export const CR_COUNCIL_SIZE = 12;
+
+/**
+ * Proposal review and veto windows (per Elastos node `CRConfiguration`).
+ *
+ * NOT to be confused with `CR_VOTING_PERIOD_BLOCKS` above — that's the
+ * 30-day window in which voters elect the next council. These two are
+ * the 7-day windows in which the seated council reviews each proposal
+ * and the community can veto an approved one.
+ */
+export const PROPOSAL_REVIEW_PERIOD_BLOCKS = 5040;
+export const PROPOSAL_VETO_PERIOD_BLOCKS = 5040;
+
 /**
  * Backend (`aggregator.go:electionVotingPeriod`) defines the election window as:
  *   narrowEnd   = termStart - 1 - CLAIMING     (termStart - 10081)

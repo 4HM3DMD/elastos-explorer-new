@@ -15,9 +15,12 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import { fmtEla, fmtElaSmart, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
-
-const CR_VOTING_PERIOD_BLOCKS = 5040;
-const VETO_PERIOD_BLOCKS = 5040;
+import {
+  formatBlocksAsCountdown,
+  CR_COUNCIL_SIZE,
+  PROPOSAL_REVIEW_PERIOD_BLOCKS,
+  PROPOSAL_VETO_PERIOD_BLOCKS,
+} from '../constants/governance';
 
 const LIFECYCLE_STEPS = [
   { raw: 'Registered',   label: 'Under Review' },
@@ -161,19 +164,18 @@ const SidebarVotes = ({ approve, reject, abstain, status, reviews }: {
   reviews?: CRProposalDetail['reviews'];
 }) => {
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const council = 12;
-  const remaining = Math.max(0, council - approve - reject - abstain);
+  const remaining = Math.max(0, CR_COUNCIL_SIZE - approve - reject - abstain);
   const isVotingOpen = VOTING_OPEN_STATUSES.has(status);
 
   const segments = useMemo(() => buildVoteSegments(reviews), [reviews]);
 
   const allSegments = useMemo(() => {
     const filled = [...segments];
-    while (filled.length < council) {
+    while (filled.length < CR_COUNCIL_SIZE) {
       filled.push({ name: isVotingOpen ? 'Pending' : 'Did not vote', opinion: 'none', color: 'bg-[var(--color-surface-tertiary)]' });
     }
     return filled;
-  }, [segments, isVotingOpen, council]);
+  }, [segments, isVotingOpen]);
 
   return (
     <div className="space-y-2.5">
@@ -528,30 +530,20 @@ const ProposalDetail = () => {
   const countdown = useMemo(() => {
     if (!currentHeight || !proposal?.registerHeight) return null;
 
-    const fmt = (blocksLeft: number): string => {
-      const totalMin = blocksLeft * 2;
-      const d = Math.floor(totalMin / 1440);
-      const h = Math.floor((totalMin % 1440) / 60);
-      const m = totalMin % 60;
-      if (d > 0) return `${d}d ${h}h`;
-      if (h > 0) return `${h}h ${m}m`;
-      return `${m}m`;
-    };
-
     if (proposal.status === 'Registered') {
-      const blocksLeft = (proposal.registerHeight + CR_VOTING_PERIOD_BLOCKS) - currentHeight;
+      const blocksLeft = (proposal.registerHeight + PROPOSAL_REVIEW_PERIOD_BLOCKS) - currentHeight;
       if (blocksLeft <= 0) return { label: 'Council Vote', time: '', blocks: 0, overdue: true, phase: 'review' as const };
-      return { label: 'Council Vote', time: fmt(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' as const };
+      return { label: 'Council Vote', time: formatBlocksAsCountdown(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'review' as const };
     }
     // CRAgreed and Notification are the same phase (community veto
     // window) — show the veto countdown for both instead of going
     // silent during the transient CRAgreed state that the node
     // reports briefly after council vote closes.
     if (proposal.status === 'Notification' || proposal.status === 'CRAgreed') {
-      const vetoStart = proposal.registerHeight + CR_VOTING_PERIOD_BLOCKS;
-      const blocksLeft = (vetoStart + VETO_PERIOD_BLOCKS) - currentHeight;
+      const vetoStart = proposal.registerHeight + PROPOSAL_REVIEW_PERIOD_BLOCKS;
+      const blocksLeft = (vetoStart + PROPOSAL_VETO_PERIOD_BLOCKS) - currentHeight;
       if (blocksLeft <= 0) return { label: 'Veto Period', time: '', blocks: 0, overdue: true, phase: 'veto' as const };
-      return { label: 'Veto Period', time: fmt(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'veto' as const };
+      return { label: 'Veto Period', time: formatBlocksAsCountdown(blocksLeft), blocks: blocksLeft, overdue: false, phase: 'veto' as const };
     }
     return null;
   }, [proposal?.status, proposal?.registerHeight, currentHeight]);

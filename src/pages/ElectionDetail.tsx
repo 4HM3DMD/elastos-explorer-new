@@ -88,7 +88,10 @@ const ElectionDetail = () => {
     const total = data.candidates.length;
     const elected = data.candidates.filter(c => c.elected).length;
     const totalVotes = data.candidates.reduce((s, c) => s + Number(c.votes || 0), 0);
-    const uniqueVoters = data.candidates.reduce((s, c) => s + c.voterCount, 0);
+    // Real distinct-voter count comes from the backend (one COUNT(DISTINCT)
+    // over the votes table). Summing per-candidate `voterCount` would
+    // double-count any voter who split their stake across N candidates.
+    const uniqueVoters = data.uniqueVoterCount ?? 0;
     const avgVotes = total > 0 ? totalVotes / total : 0;
     return { total, elected, totalVotes, uniqueVoters, avgVotes };
   }, [data]);
@@ -207,9 +210,9 @@ const ElectionDetail = () => {
           />
           <StatTile
             icon={Users}
-            label="Voter slots"
+            label="Unique voters"
             value={`${summary.uniqueVoters.toLocaleString()}`}
-            detail="sum across candidates"
+            detail="distinct addresses"
           />
         </div>
       )}

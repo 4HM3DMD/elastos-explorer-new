@@ -219,11 +219,37 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "no election data for this term")
 		return
 	}
+
+	// Real unique-voter count for the term — distinct addresses with
+	// at least one TxVoting in this term's voting window, deduped via
+	// the latest-per-address (UsedCRVotes) semantic. The frontend used
+	// to derive this by summing per-candidate `voterCount` across the
+	// candidate list, which double-counts vote-splitters (one address
+	// allocating to N candidates). Pre-BPoS terms have no parseable
+	// vote rows, so the count is naturally 0 for T1-T3.
+	var uniqueVoterCount int64
+	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
+	if term > 3 {
+		_ = s.db.API.QueryRow(r.Context(), `
+			WITH latest_per_voter AS (
+				SELECT address, MAX(stake_height) AS h
+				FROM votes
+				WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+				GROUP BY address
+			)
+			SELECT COUNT(DISTINCT v.address)
+			FROM votes v
+			JOIN latest_per_voter lpv ON lpv.address = v.address AND lpv.h = v.stake_height
+			WHERE v.vote_type = 1 AND v.stake_height BETWEEN $1 AND $2`,
+			narrowStart, narrowEnd).Scan(&uniqueVoterCount)
+	}
+
 	writeJSON(w, 200, APIResponse{Data: map[string]any{
 		"term":              term,
 		"votingStartHeight": firstVotingStart,
 		"votingEndHeight":   firstVotingEnd,
 		"legacyEra":         term <= 3,
+		"uniqueVoterCount":  uniqueVoterCount,
 		"candidates":        results,
 	}})
 }

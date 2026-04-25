@@ -467,6 +467,10 @@ export interface ElectionTermDetail {
   votingStartHeight: number;
   votingEndHeight: number;
   legacyEra?: boolean;
+  // Distinct addresses that cast at least one TxVoting in the term's
+  // window, deduped under the UsedCRVotes (latest-per-address)
+  // semantic. 0 for legacy / pre-BPoS terms with no parseable votes.
+  uniqueVoterCount?: number;
   candidates: ElectionCandidate[];
 }
 

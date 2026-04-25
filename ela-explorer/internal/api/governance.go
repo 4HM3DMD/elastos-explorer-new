@@ -86,6 +86,10 @@ func (s *Server) getCRMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getCRElections(w http.ResponseWriter, r *http.Request) {
+	// Same filter rule as getCRElectionByTerm — only count real
+	// term-N participants (those who received votes or were elected).
+	// Without this, the per-term "candidates" count is inflated by
+	// prior-term carry-over noise.
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT term,
 			COUNT(*) AS candidates,
@@ -96,6 +100,7 @@ func (s *Server) getCRElections(w http.ResponseWriter, r *http.Request) {
 			MIN(computed_at) AS computed_at
 		FROM cr_election_tallies
 		WHERE candidate_cid != '__sentinel__'
+		  AND (final_votes_sela > 0 OR elected = TRUE)
 		GROUP BY term
 		HAVING COUNT(*) > 0
 		ORDER BY term DESC`)
@@ -136,6 +141,13 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter to actual term-N participants: candidates who received
+	// votes during this term's voting window OR who were elected.
+	// Without this filter, prior-term candidates whose registration
+	// state lingered into the replay snapshot pollute the list with
+	// 0-vote, non-elected rows (~30-50 noise rows per recent term).
+	// Legacy terms (T1-T3) have all rows with final_votes_sela = 0
+	// AND elected = true, so they pass the filter naturally.
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT et.candidate_cid,
 			COALESCE(NULLIF(et.nickname, ''), cm.nickname, '') AS nickname,
@@ -144,7 +156,9 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			COALESCE(cm.did, '') AS did
 		FROM cr_election_tallies et
 		LEFT JOIN cr_members cm ON cm.cid = et.candidate_cid
-		WHERE et.term = $1 AND et.candidate_cid != '__sentinel__'
+		WHERE et.term = $1
+		  AND et.candidate_cid != '__sentinel__'
+		  AND (et.final_votes_sela > 0 OR et.elected = TRUE)
 		ORDER BY et.rank ASC`, term)
 	if err != nil {
 		writeError(w, 500, "database error")

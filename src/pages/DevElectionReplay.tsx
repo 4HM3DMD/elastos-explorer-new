@@ -267,15 +267,39 @@ const DevElectionReplay = () => {
     return { totals, voters, eventCount: appliedCount };
   }, [replayEvents, simHeight]);
 
+  // Filter to the REAL Term 6 ballot. The backend's cr_election_tallies
+  // table contains noise from prior-term registrations whose state
+  // lingered into the T6 replay snapshot — candidates who weren't
+  // actually running in T6 but show up with 0 votes. The authoritative
+  // T6 ballot = candidates that received at least one vote in the
+  // voting window (proven by replayEvents) ∪ candidates that ended up
+  // elected (proposal-review oracle). Anyone outside both sets wasn't
+  // a T6 candidate in any meaningful sense.
+  const t6CidsWithVotes = useMemo(() => {
+    const set = new Set<string>();
+    for (const ev of replayEvents) {
+      for (const v of ev.votes) set.add(v.candidate);
+    }
+    return set;
+  }, [replayEvents]);
+
+  // For the voting display we want ONLY those who received votes —
+  // this is the live ballot as voters saw it. Elected-but-never-
+  // voted-for candidates (rare; inserted via claim-period DID update)
+  // wouldn't have appeared on the voting ballot, so we exclude them
+  // here even though they show up under "Incoming council" later.
+  const votingCandidates = useMemo(
+    () => t6Candidates.filter((c) => t6CidsWithVotes.has(c.cid)),
+    [t6Candidates, t6CidsWithVotes],
+  );
+
   // Build the voting-body candidate list with real numbers from the
-  // tally above. We start from the full Term 6 candidate roster (so
-  // the table layout is stable), then overlay live votes/voterCount.
-  // No "Elected" badges during voting — the node only locks elected
-  // status when the voting window closes.
+  // tally above. No "Elected" badges during voting — the node only
+  // locks elected status when the voting window closes.
   const votingBody = useMemo(() => {
-    if (phase !== 'voting' || t6Candidates.length === 0) return t6Candidates;
+    if (phase !== 'voting' || votingCandidates.length === 0) return votingCandidates;
     const SELA_PER_ELA = 1e8;
-    const enriched = t6Candidates.map((c) => {
+    const enriched = votingCandidates.map((c) => {
       const sela = liveTally.totals.get(c.cid) || 0;
       const ela = sela / SELA_PER_ELA;
       const voterCount = liveTally.voters.get(c.cid)?.size || 0;
@@ -296,7 +320,7 @@ const DevElectionReplay = () => {
       return a.cid.localeCompare(b.cid);
     });
     return enriched.map((c, i) => ({ ...c, rank: i + 1 }));
-  }, [phase, t6Candidates, liveTally]);
+  }, [phase, votingCandidates, liveTally]);
 
   // Candidate count drives the voting hero subtitle.
   const targetCandidateCount = votingBody.length;

@@ -258,8 +258,9 @@ const Elections = () => {
         </div>
       )}
 
-      {/* Phase-specific hero. duty has no hero — the members table IS the body. */}
-      {status && phase && phase !== 'duty' && phase !== 'pre-genesis' && (
+      {/* Phase-specific hero. duty shows a countdown to the next voting
+          window so operators always know when the next election opens. */}
+      {status && phase && phase !== 'pre-genesis' && (
         <StatusHero status={status} targetCandidateCount={targetCandidates.length} />
       )}
 
@@ -421,6 +422,54 @@ function StatusHero({
     );
   }
 
+  // Duty phase — there's no live election right now, but operators
+  // and voters still want to know when the next one opens. The card
+  // mirrors the voting/claim hero shape (left-aligned context block,
+  // right-aligned countdown) so the page rhythm is consistent across
+  // phases. Subtitle frames "until handover" so the meaning of the
+  // upcoming voting → claim → takeover sequence is on one line.
+  if (phase === 'duty') {
+    const hasNextWindow = status.nextVotingStartHeight > 0;
+    if (!hasNextWindow) return null;
+    return (
+      <div className="card relative overflow-hidden p-4 sm:p-5 md:p-6">
+        <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
+          <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand/40" />
+        </div>
+        <div className="relative grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 items-start md:items-center pl-2">
+          <div className="min-w-0">
+            <p className="text-[10px] md:text-[11px] text-muted uppercase tracking-[0.18em] mb-1.5 md:mb-2 flex items-center gap-1.5">
+              Next election
+            </p>
+            <p
+              className="text-gradient-brand text-[22px] sm:text-[28px] md:text-[36px] leading-none font-[200] tracking-[0.02em]"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
+              Term {status.targetTerm}
+            </p>
+            <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
+              Voting opens at block{' '}
+              <span className="font-mono text-primary">{status.nextVotingStartHeight.toLocaleString()}</span>
+              .
+            </p>
+            <p className="text-[10px] md:text-[11px] text-muted mt-1 tracking-[0.04em]">
+              Current Term {status.currentCouncilTerm} council seated until block{' '}
+              <span className="font-mono text-secondary">{status.onDutyEndHeight.toLocaleString()}</span>
+              .
+            </p>
+          </div>
+          <Countdown
+            targetHeight={status.nextVotingStartHeight}
+            currentHeight={status.currentHeight}
+            label="Voting opens in"
+            size="hero"
+            showHeight
+          />
+        </div>
+      </div>
+    );
+  }
+
   return null;
 }
 
@@ -448,11 +497,12 @@ function CouncilMembersTable({
         <table className="table-clean w-full">
           <thead>
             <tr>
-              <th className="w-16">#</th>
-              <th>Member</th>
-              <th className="hidden sm:table-cell">DID</th>
-              <th className="hidden md:table-cell">State</th>
-              <th>Elected By</th>
+              <th className="w-12 sm:w-16" style={{ textAlign: 'left' }}>#</th>
+              <th style={{ textAlign: 'left' }}>Member</th>
+              <th className="hidden md:table-cell" style={{ textAlign: 'left' }}>DID</th>
+              {/* State stays visible on every breakpoint (compact badge) */}
+              <th style={{ textAlign: 'left' }}>State</th>
+              <th style={{ textAlign: 'right' }}>Elected By</th>
             </tr>
           </thead>
           <tbody>
@@ -477,12 +527,12 @@ function CouncilMembersTable({
                 const stateColor = CR_STATE_COLORS[m.state] || 'bg-gray-500/20 text-gray-400';
                 return (
                   <tr key={m.cid || m.did || `cr-${m.rank}`}>
-                    <td>
+                    <td className="align-top">
                       <span className="font-bold text-xs text-secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
                         {m.rank}
                       </span>
                     </td>
-                    <td>
+                    <td className="align-top">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-primary text-xs">{m.nickname || 'Unnamed'}</span>
                         {safeExternalUrl(m.url) && (
@@ -496,15 +546,21 @@ function CouncilMembersTable({
                           </a>
                         )}
                       </div>
+                      {/* On phones the DID column is hidden — surface it
+                          here as a small subtitle so users can still see
+                          and copy it without horizontal scroll. */}
+                      <div className="md:hidden mt-1">
+                        <HashDisplay hash={m.did} length={6} showCopyButton={true} isClickable={false} />
+                      </div>
                     </td>
-                    <td className="hidden sm:table-cell">
+                    <td className="hidden md:table-cell align-top">
                       <HashDisplay hash={m.did} length={10} showCopyButton={true} isClickable={false} />
                     </td>
-                    <td className="hidden md:table-cell">
-                      <span className={cn('badge', stateColor)}>{m.state}</span>
+                    <td className="align-top">
+                      <span className={cn('badge whitespace-nowrap', stateColor)}>{m.state}</span>
                     </td>
-                    <td>
-                      <span className="font-mono text-xs text-primary" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    <td className="align-top" style={{ textAlign: 'right' }}>
+                      <span className="font-mono text-xs text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
                         {formatVotes(m.votes)} ELA
                       </span>
                     </td>

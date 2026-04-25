@@ -206,21 +206,26 @@ const ElectionDetail = () => {
       {/* Candidate leaderboard — sortable header, visual cue for
           elected rows via left border + trophy icon. For legacy (T1-T3)
           terms, vote/voter columns are hidden because the pre-BPoS era
-          doesn't have reconstructable numbers. */}
+          doesn't have reconstructable numbers.
+
+          NOTE: `.table-clean th` declares `text-align: left` via @apply
+          in index.css, which beats Tailwind utility classes in source
+          order. Headers therefore set alignment via inline `style` —
+          that's the canonical override for tables in this codebase. */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="table-clean w-full">
             <thead>
               <tr>
-                <SortHeader label="#" active={sort === 'rank'} onClick={() => setSort('rank')} />
-                <th>Candidate</th>
-                <th className="hidden sm:table-cell">CID</th>
+                <SortHeader label="#" active={sort === 'rank'} onClick={() => setSort('rank')} align="left" />
+                <th style={{ textAlign: 'left' }}>Candidate</th>
+                <th className="hidden md:table-cell" style={{ textAlign: 'left' }}>CID</th>
                 {!legacyEra && (
                   <SortHeader
                     label="Votes"
                     active={sort === 'votes'}
                     onClick={() => setSort('votes')}
-                    className="text-right"
+                    align="right"
                   />
                 )}
                 {!legacyEra && (
@@ -228,10 +233,10 @@ const ElectionDetail = () => {
                     label="Voters"
                     active={sort === 'voterCount'}
                     onClick={() => setSort('voterCount')}
-                    className="text-right"
+                    align="right"
                   />
                 )}
-                <th className="hidden md:table-cell text-right">Result</th>
+                <th className="hidden sm:table-cell" style={{ textAlign: 'right' }}>Result</th>
               </tr>
             </thead>
             <tbody>
@@ -258,26 +263,33 @@ function SortHeader({
   label,
   active,
   onClick,
-  className,
+  align = 'left',
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
-  className?: string;
+  align?: 'left' | 'right';
 }) {
+  // The button is wrapped in a flex container that aligns it to the
+  // requested edge. We CAN'T rely on `text-align` on the <th> alone
+  // because .table-clean th sets text-align: left via @apply and wins
+  // over Tailwind utilities. Inline-style + flex justify is the
+  // canonical override pattern for tables in this codebase.
   return (
-    <th className={cn(className)}>
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          'inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.1em] transition-colors',
-          active ? 'text-brand' : 'text-muted hover:text-secondary',
-        )}
-      >
-        {label}
-        {active && <span className="text-brand">↓</span>}
-      </button>
+    <th style={{ textAlign: align }}>
+      <div className={cn('flex items-center gap-1', align === 'right' ? 'justify-end' : 'justify-start')}>
+        <button
+          type="button"
+          onClick={onClick}
+          className={cn(
+            'inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.1em] transition-colors',
+            active ? 'text-brand' : 'text-muted hover:text-secondary',
+          )}
+        >
+          {label}
+          {active && <span className="text-brand">↓</span>}
+        </button>
+      </div>
     </th>
   );
 }
@@ -291,7 +303,7 @@ function CandidateRow({
 }) {
   return (
     <tr className={cn(candidate.elected && 'bg-brand/[0.03]')}>
-      <td>
+      <td className="align-top" style={{ textAlign: 'left' }}>
         <span
           className="font-bold text-xs text-secondary"
           style={{ fontVariantNumeric: 'tabular-nums' }}
@@ -299,7 +311,7 @@ function CandidateRow({
           {candidate.rank}
         </span>
       </td>
-      <td>
+      <td className="align-top" style={{ textAlign: 'left' }}>
         <div className="flex items-center gap-2">
           {candidate.elected && <Trophy size={11} className="text-brand shrink-0" />}
           <span className={cn(
@@ -309,14 +321,19 @@ function CandidateRow({
             {candidate.nickname || 'Unnamed'}
           </span>
         </div>
+        {/* CID column hides on phone — surface a short copy under the
+            name so it's still inspectable without horizontal scroll. */}
+        <div className="md:hidden mt-1">
+          <HashDisplay hash={candidate.cid} length={6} showCopyButton isClickable={false} />
+        </div>
       </td>
-      <td className="hidden sm:table-cell">
+      <td className="hidden md:table-cell align-top" style={{ textAlign: 'left' }}>
         <HashDisplay hash={candidate.cid} length={10} showCopyButton isClickable={false} />
       </td>
       {!hideVotes && (
-        <td className="text-right">
+        <td className="align-top" style={{ textAlign: 'right' }}>
           <span
-            className="font-mono text-xs text-primary"
+            className="font-mono text-xs text-primary whitespace-nowrap"
             style={{ fontVariantNumeric: 'tabular-nums' }}
           >
             {formatVotes(candidate.votes)} ELA
@@ -324,7 +341,7 @@ function CandidateRow({
         </td>
       )}
       {!hideVotes && (
-        <td className="text-right">
+        <td className="align-top" style={{ textAlign: 'right' }}>
           <span
             className="font-mono text-xs text-secondary"
             style={{ fontVariantNumeric: 'tabular-nums' }}
@@ -333,7 +350,7 @@ function CandidateRow({
           </span>
         </td>
       )}
-      <td className="hidden md:table-cell text-right">
+      <td className="hidden sm:table-cell align-top" style={{ textAlign: 'right' }}>
         {candidate.elected ? (
           <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-brand font-medium">
             Elected

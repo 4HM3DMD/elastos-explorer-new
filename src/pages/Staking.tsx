@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { TopStaker, StakingSummary, BlockchainStats } from '../types/blockchain';
@@ -302,12 +302,33 @@ interface MiniStatProps {
 
 function MiniStat({ icon: Icon, label, value, tooltip }: MiniStatProps) {
   const [showTip, setShowTip] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Escape + click-outside to dismiss while open. The previous
+  // implementation only toggled on the button click — the inline
+  // comment claimed "tap-anywhere-else dismisses" but no listener
+  // backed it up, so the tooltip persisted across all unrelated
+  // clicks until the button was tapped again.
+  useEffect(() => {
+    if (!showTip) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowTip(false); };
+    const onPointerDown = (e: PointerEvent) => {
+      if (!wrapperRef.current?.contains(e.target as Node)) setShowTip(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [showTip]);
+
   return (
     // `relative` so the tooltip anchors to the card; `overflow-hidden` removed
     // from the outer card (previously clipped tooltips) and moved to a dedicated
     // wrapper around just the decorative left-border bar — so the tooltip can
     // escape the card bounds freely.
-    <div className="card p-2 md:p-3 relative">
+    <div ref={wrapperRef} className="card p-2 md:p-3 relative">
       <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
         <div className="absolute left-0 top-[20%] bottom-[20%] w-[2px] rounded-r-full bg-brand/40" />
       </div>
@@ -340,8 +361,9 @@ function MiniStat({ icon: Icon, label, value, tooltip }: MiniStatProps) {
       {tooltip && showTip && (
         // Absolute, positioned below the card's label row. z-30 sits above
         // sibling cards in the grid. max-w keeps the bubble narrow on wide
-        // screens so long copy wraps legibly. Tap-anywhere-else dismisses
-        // via the onClick toggle on the button.
+        // screens so long copy wraps legibly. Outside-click + Escape
+        // dismissal is wired via the useEffect above (was previously
+        // documented but never implemented).
         <div
           role="tooltip"
           className="absolute left-0 right-0 top-full mt-1 z-30 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised,#1a1a1a)] p-2.5 text-[11px] leading-snug text-primary shadow-xl max-w-[320px]"

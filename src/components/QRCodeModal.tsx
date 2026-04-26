@@ -22,6 +22,18 @@ const QRCodeModal = ({ address, open, onClose }: QRCodeModalProps) => {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, []);
 
+  // Body scroll lock while open. Without this the page behind the
+  // modal can scroll under touch / wheel input — confusing because
+  // the modal stays put but content shifts behind it. Restore the
+  // previous overflow value on close (don't assume it was empty —
+  // could have been 'auto' or page-set).
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [open]);
+
   // Focus trap + restore. While the modal is open, Tab stays inside
   // the dialog (cycles between Close and Copy). On close we restore
   // focus to whatever the user clicked to open the modal — without

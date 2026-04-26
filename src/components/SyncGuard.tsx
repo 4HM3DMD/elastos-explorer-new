@@ -141,7 +141,13 @@ const SyncingOverlay = ({ status }: { status: SyncStatusDetail }) => {
   const remaining = chainTip - currentHeight;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: 'var(--color-bg)' }}>
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center"
+      style={{ background: 'var(--color-bg)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Blockchain synchronization in progress"
+    >
       <div className="flex flex-col items-center gap-8 px-6 max-w-lg w-full text-center">
         <img src="/logo.svg" alt="Elastos" className="h-10 w-auto opacity-90" />
 

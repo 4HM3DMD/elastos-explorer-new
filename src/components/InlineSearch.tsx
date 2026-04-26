@@ -237,6 +237,8 @@ const InlineSearch = ({ className, compact }: InlineSearchProps) => {
               notFound && 'placeholder:text-accent-red/60',
             )}
             disabled={searching}
+            aria-label="Search blockchain (block, transaction, address, validator, council member, or proposal)"
+            autoComplete="off"
           />
 
           {query && (

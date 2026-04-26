@@ -44,7 +44,11 @@ const Pagination = ({ page, totalPages, total, label = 'items', onPageChange }: 
 
   return (
     <div className="px-4 py-3 border-t border-[var(--color-border)] flex flex-col sm:flex-row items-center justify-between gap-3">
-      <span className="text-xs text-muted">
+      {/* aria-live announces the new page state to screen readers
+          when the user paginates. polite (not assertive) so it
+          doesn't interrupt other announcements; atomic so the full
+          phrase is read each time, not just the changed number. */}
+      <span className="text-xs text-muted" aria-live="polite" aria-atomic="true">
         Page {page} of {totalPages.toLocaleString()} ({total.toLocaleString()} {label})
       </span>
       <div className="flex items-center gap-1">

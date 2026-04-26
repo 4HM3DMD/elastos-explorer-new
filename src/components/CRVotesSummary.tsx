@@ -141,7 +141,7 @@ const CRVotesSummary = ({ address }: CRVotesSummaryProps) => {
                         className="flex items-baseline justify-between gap-2 text-xs py-1"
                       >
                         <Link
-                          to={`/governance/elections/${termGroup.term}/candidate/${slice.candidate}`}
+                          to={`/governance/candidate/${slice.candidate}?term=${termGroup.term}`}
                           className={cn(
                             'text-secondary hover:text-brand transition-colors truncate',
                             'max-w-[60%]',

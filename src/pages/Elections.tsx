@@ -592,7 +592,7 @@ export function CouncilMembersTable({
                             about a member. Three-click discovery → one. */}
                         {term && m.cid ? (
                           <Link
-                            to={`/governance/elections/${term}/candidate/${m.cid}`}
+                            to={`/governance/candidate/${m.cid}?term=${term}`}
                             className="font-semibold text-primary text-xs hover:text-brand transition-colors"
                           >
                             {m.nickname || 'Unnamed'}

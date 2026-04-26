@@ -55,12 +55,14 @@ export function getRouteForResult(result: SearchResult): string | null {
     case 'producer':
       return `/validator/${value}`;
     case 'crMember': {
-      // The backend ships the candidate's most-recent term so we can
-      // build a per-term URL (CandidateDetail expects both segments).
-      // If the term is missing for any reason, route to the elections
-      // archive instead of producing a broken URL.
-      if (!result.term || result.term < 1) return '/governance/elections';
-      return `/governance/elections/${result.term}/candidate/${value}`;
+      // Canonical flat URL (PR 4) — candidates span terms, so they
+      // get a stable URL and an optional ?term= query for the
+      // currently-highlighted pill. Falls back to the candidate page
+      // without ?term if backend omitted it (page will default to the
+      // candidate's most-recent term once the profile loads).
+      const base = `/governance/candidate/${value}`;
+      if (!result.term || result.term < 1) return base;
+      return `${base}?term=${result.term}`;
     }
     default:
       return null;

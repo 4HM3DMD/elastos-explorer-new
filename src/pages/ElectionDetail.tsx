@@ -326,7 +326,7 @@ function CandidateRow({
         <div className="flex items-center gap-2">
           {candidate.elected && <Trophy size={11} className="text-brand shrink-0" />}
           <Link
-            to={`/governance/elections/${term}/candidate/${candidate.cid}`}
+            to={`/governance/candidate/${candidate.cid}?term=${term}`}
             className={cn(
               'text-xs hover:text-brand transition-colors',
               candidate.elected ? 'font-semibold text-primary' : 'text-secondary',
@@ -358,7 +358,7 @@ function CandidateRow({
         <td className="align-top" style={{ textAlign: 'right' }}>
           {candidate.voterCount > 0 ? (
             <Link
-              to={`/governance/elections/${term}/candidate/${candidate.cid}`}
+              to={`/governance/candidate/${candidate.cid}?term=${term}`}
               className="font-mono text-xs text-secondary hover:text-brand transition-colors"
               style={{ fontVariantNumeric: 'tabular-nums' }}
             >

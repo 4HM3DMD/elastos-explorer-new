@@ -16,7 +16,7 @@
 // T7/T8 candidates render identically.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Activity, ArrowLeft, Coins, ChevronDown, ChevronRight,
   Copy, Check, ExternalLink, Hash, Landmark, ScrollText, ShieldCheck,
@@ -46,8 +46,20 @@ import GovernanceBreadcrumb from '../components/GovernanceBreadcrumb';
 const PAGE_SIZE = 25;
 
 const CandidateDetail = () => {
-  const { term: termParam, cid } = useParams<{ term: string; cid: string }>();
-  const term = Number(termParam);
+  // Two URL shapes both land here:
+  //   /governance/candidate/:cid                  (canonical, flat)
+  //   /governance/elections/:term/candidate/:cid  (legacy — redirected to flat by App.tsx)
+  // The flat URL accepts ?term=N as a query param to highlight a
+  // specific term in the multi-term pills. Without one, default to
+  // the candidate's most-recent term once their profile loads.
+  const { term: termParam, cid } = useParams<{ term?: string; cid: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryTerm = searchParams.get('term');
+  const explicitTerm = Number(termParam ?? queryTerm);
+  const [resolvedTerm, setResolvedTerm] = useState<number>(
+    Number.isFinite(explicitTerm) && explicitTerm > 0 ? explicitTerm : 0,
+  );
+  const term = resolvedTerm;
 
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [voters, setVoters] = useState<CandidateVoter[]>([]);
@@ -69,7 +81,17 @@ const CandidateDetail = () => {
     blockchainApi
       .getCandidateProfile(cid)
       .then((p) => {
-        if (!cancelled) setProfile(p);
+        if (cancelled) return;
+        setProfile(p);
+        // If the URL didn't carry an explicit term (flat URL with no
+        // ?term= query param), default to the candidate's most-recent
+        // participation. The terms array comes back ASC-sorted from
+        // the backend, so the last element is the latest. This makes
+        // /governance/candidate/{cid} a useful entry point on its own.
+        if (!resolvedTerm && p.terms.length > 0) {
+          const latest = p.terms[p.terms.length - 1].term;
+          setResolvedTerm(latest);
+        }
       })
       .catch(() => {
         if (!cancelled) setError('Candidate profile unavailable');
@@ -80,7 +102,20 @@ const CandidateDetail = () => {
     return () => {
       cancelled = true;
     };
-  }, [cid]);
+  }, [cid, resolvedTerm]);
+
+  // Sync `resolvedTerm` back into the URL as ?term= so the page is
+  // bookmarkable in whatever term the user lands on. `replace` avoids
+  // adding a history entry for the auto-resolution case (only the
+  // initial render bumps it from 0 to the latest term).
+  useEffect(() => {
+    if (!resolvedTerm) return;
+    if (queryTerm === String(resolvedTerm)) return;
+    if (termParam) return; // legacy URL — App.tsx already redirected, don't re-write
+    const next = new URLSearchParams(searchParams);
+    next.set('term', String(resolvedTerm));
+    setSearchParams(next, { replace: true });
+  }, [resolvedTerm, queryTerm, termParam, searchParams, setSearchParams]);
 
   // Voters for THIS term
   const fetchVoters = useCallback(
@@ -144,7 +179,7 @@ const CandidateDetail = () => {
       <SEO
         title={`${m.nickname || 'Candidate'} · Term ${term}`}
         description={`Council member ${m.nickname} — Term ${term} stats, governance record, and voter list.`}
-        path={`/governance/elections/${term}/candidate/${cid}`}
+        path={`/governance/candidate/${cid}`}
       />
 
       <GovernanceBreadcrumb
@@ -231,7 +266,7 @@ const CandidateDetail = () => {
             No on-chain participation for this candidate in Term {term}.
           </span>
           <Link
-            to={`/governance/elections/${profile.terms[profile.terms.length - 1].term}/candidate/${cid}`}
+            to={`/governance/candidate/${cid}?term=${profile.terms[profile.terms.length - 1].term}`}
             className="text-brand hover:underline"
           >
             View their most recent term →
@@ -534,7 +569,7 @@ function TermPills({
             return (
               <Link
                 key={t.term}
-                to={`/governance/elections/${t.term}/candidate/${cid}`}
+                to={`/governance/candidate/${cid}?term=${t.term}`}
                 className={cn(
                   'group flex flex-col items-center min-w-[60px] px-3 py-2 rounded-md text-xs transition-colors border',
                   isActive

@@ -43,7 +43,16 @@ const TOAST_OPTIONS = {
 // of browser history so back-button doesn't bounce.
 function LegacyCandidateRedirect() {
   const { term, cid } = useParams<{ term: string; cid: string }>();
-  return <Navigate to={`/governance/elections/${term}/candidate/${cid}`} replace />;
+  return <Navigate to={`/governance/candidate/${cid}?term=${term}`} replace />;
+}
+
+// Redirect from the old per-term-nested candidate URL to the new flat
+// canonical URL. Term context is preserved as `?term=` so the page
+// lands on the right multi-term pill. `replace` keeps the old URL
+// out of browser history.
+function LegacyTermCandidateRedirect() {
+  const { term, cid } = useParams<{ term: string; cid: string }>();
+  return <Navigate to={`/governance/candidate/${cid}?term=${term}`} replace />;
 }
 
 const PageLoader = () => (
@@ -139,7 +148,19 @@ function AnimatedRoutes() {
           <Route path="/governance/elections" element={<ElectionsArchive />} />
           <Route path="/governance/elections/:term" element={<ElectionDetail />} />
           <Route path="/governance/elections/:term/voters" element={<ElectionVoters />} />
-          <Route path="/governance/elections/:term/candidate/:cid" element={<CandidateDetail />} />
+          {/* Canonical flat candidate URL — candidates often span
+              multiple terms (Sash served T2-T6); the old per-term URL
+              tied them artificially to one term. New URL uses an
+              optional ?term= query param to highlight a specific term
+              in the multi-term pills. */}
+          <Route path="/governance/candidate/:cid" element={<CandidateDetail />} />
+          {/* Legacy URL — redirect to canonical, preserving the term
+              context as a query param so the page lands on the right
+              term. */}
+          <Route
+            path="/governance/elections/:term/candidate/:cid"
+            element={<LegacyTermCandidateRedirect />}
+          />
           {/* Earlier builds routed per-candidate detail under
               /voters/:cid; the rich /candidate/:cid page is now the
               canonical surface. Redirect old links so external

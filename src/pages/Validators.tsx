@@ -14,11 +14,15 @@ import { getRegistrationBadge } from '../utils/validatorBadge';
 const PRODUCER_TABS = [
   { label: 'Active', value: 'Active' },
   { label: 'Inactive', value: 'Inactive' },
+  { label: 'Canceled', value: 'Canceled' },
   { label: 'Illegal', value: 'Illegal' },
   { label: 'All', value: 'all' },
 ] as const;
 
-const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Illegal']);
+// All states surfaced in the "All" view. Canceled is included now —
+// the backend has always returned it; the frontend filter just didn't
+// expose it, hiding canceled validators from history.
+const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Canceled', 'Illegal']);
 
 // Badge logic moved to `src/utils/validatorBadge.ts` so the list and
 // detail pages render the same producer with the same label. See the
@@ -139,9 +143,17 @@ const Validators = () => {
                   const loc = getLocation(p.location);
                   const badge = getRegistrationBadge(p);
                   const stateColor = PRODUCER_STATE_COLORS[p.state] || 'bg-gray-500/20 text-gray-400';
+                  // The active BPoS committee is the top-36 by votes
+                  // among Active producers. Subtle background tint marks
+                  // them so users can see at a glance "this is the
+                  // currently-elected set, the rest are reserves /
+                  // canceled / inactive". Only meaningful when state
+                  // filter is Active or All — within other state filters
+                  // the rank field doesn't reflect committee membership.
+                  const inActiveSet = p.state === 'Active' && p.rank <= 36;
 
                   return (
-                    <tr key={p.ownerPublicKey}>
+                    <tr key={p.ownerPublicKey} className={inActiveSet ? 'bg-brand/[0.025]' : ''}>
                       <td>
                         <span className={`font-bold text-xs ${p.rank <= 3 ? 'text-brand' : 'text-secondary'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>#{p.rank}</span>
                       </td>

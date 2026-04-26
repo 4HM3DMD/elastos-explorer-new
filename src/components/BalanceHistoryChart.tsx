@@ -223,6 +223,18 @@ const BalanceHistoryChart = ({ address }: Props) => {
     );
   }
 
+  // Fresh wallet (no balance history yet) — show a friendly message
+  // instead of an empty chart frame, which previously rendered as a
+  // confusing blank canvas with axes but no line.
+  const activeData = txMode ? txChartData : chartData;
+  if (activeData.length === 0) {
+    return (
+      <div className="card p-8 text-center">
+        <p className="text-sm text-muted">No balance history yet — this address has no on-chain activity in the selected range.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Main chart card */}

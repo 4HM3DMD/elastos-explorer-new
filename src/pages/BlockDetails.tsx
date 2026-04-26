@@ -71,9 +71,12 @@ const BlockDetails = () => {
 
   if (error || !block) {
     return (
-      <div className="px-4 lg:px-6 py-8 text-center">
-        <p className="text-accent-red mb-4">{error || 'Block not found'}</p>
-        <button onClick={() => window.location.reload()} className="btn-primary">Retry</button>
+      <div className="px-4 lg:px-6 py-8 text-center space-y-4">
+        <p className="text-accent-red">{error || 'Block not found'}</p>
+        <div className="flex items-center justify-center gap-2">
+          <button onClick={() => window.location.reload()} className="btn-primary">Retry</button>
+          <Link to="/blocks" className="btn-secondary">Back to Blocks</Link>
+        </div>
       </div>
     );
   }

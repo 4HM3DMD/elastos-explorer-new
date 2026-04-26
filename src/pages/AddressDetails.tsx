@@ -354,7 +354,7 @@ function OverviewTab({ info, page, totalPages, fmtELA, goPage }: OverviewTabProp
 
         <div className="divide-y divide-[var(--color-border)]">
           {info.transactions?.length ? info.transactions.map((tx, i) => (
-            <TxRow key={`${tx.txid}-${tx.direction}-${i}`} tx={tx} />
+            <TxRow key={`${tx.txid}-${tx.direction}-${i}`} tx={tx} currentAddress={info.address} />
           )) : (
             <p className="text-center text-muted py-8 text-sm">No transactions</p>
           )}
@@ -426,7 +426,7 @@ function getCategoryAccent(typeName: string): string {
 
 /* ─── TxRow ───────────────────────────────────────────────────────────── */
 
-function TxRow({ tx }: { tx: AddressTransaction }) {
+function TxRow({ tx, currentAddress }: { tx: AddressTransaction; currentAddress: string }) {
   const isSent = tx.direction === 'sent';
   const DirIcon = isSent ? ArrowUpRight : ArrowDownLeft;
   const dirColor = isSent ? 'text-accent-red' : 'text-accent-green';
@@ -461,9 +461,24 @@ function TxRow({ tx }: { tx: AddressTransaction }) {
                 <span className="text-white/15">·</span>
                 <span>
                   {isSent ? 'to' : 'from'}{' '}
-                  {counterparties.slice(0, 2).map((addr, i) => (
-                    <span key={addr}>{i > 0 && ', '}<Link to={`/address/${addr}`} className="link-blue font-mono">{addr.slice(0, 8)}…{addr.slice(-4)}</Link></span>
-                  ))}
+                  {counterparties.slice(0, 2).map((addr, i) => {
+                    // Self-transfers / change-back-to-self can list the
+                    // current address as a counterparty. Render it as
+                    // plain text — clicking would just reload the same
+                    // page, which is a confusing dead loop.
+                    const truncated = `${addr.slice(0, 8)}…${addr.slice(-4)}`;
+                    const isSelf = addr === currentAddress;
+                    return (
+                      <span key={addr}>
+                        {i > 0 && ', '}
+                        {isSelf ? (
+                          <span className="font-mono text-muted" title="This address">{truncated}</span>
+                        ) : (
+                          <Link to={`/address/${addr}`} className="link-blue font-mono">{truncated}</Link>
+                        )}
+                      </span>
+                    );
+                  })}
                   {counterparties.length > 2 && <span> +{counterparties.length - 2} more</span>}
                 </span>
               </>

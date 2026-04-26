@@ -255,7 +255,12 @@ const Home = () => {
           </div>
           <div className="divide-y divide-[rgba(255,255,255,0.06)]">
             {latestTxs.slice(0, 6).map((tx) => (
-              <div key={tx.txid} className="flex items-center justify-between px-5 h-[56px] hover:bg-hover transition-colors duration-150 gap-3">
+              <div
+                key={tx.txid}
+                className={`flex items-center justify-between px-5 h-[56px] transition-colors duration-150 gap-3 ${
+                  tx.blockHeight && tx.blockHeight === newBlockHeight ? 'bg-brand/5' : 'hover:bg-hover'
+                }`}
+              >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <Link to={`/tx/${tx.txid}`} className="text-brand text-[14px] font-mono hover:brightness-125 transition-all truncate tracking-[0.56px]">

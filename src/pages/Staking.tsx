@@ -130,7 +130,7 @@ const Staking = () => {
             </thead>
             <tbody>
               {loading ? (
-                Array.from({ length: 20 }).map((_, i) => (
+                Array.from({ length: PAGE_SIZE }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 3 }).map((_, j) => (
                       <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>

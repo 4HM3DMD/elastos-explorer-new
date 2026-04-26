@@ -20,11 +20,48 @@ import type { ElectionStatus } from '../types/blockchain';
 import { cn } from '../lib/cn';
 
 const ESSENTIALS_DOWNLOAD = 'https://download.elastos.io/app/elastos-essentials/';
-const STAKING_PORTAL = 'https://staking.elastos.net/';
 
 interface HowToVoteCardProps {
   status: ElectionStatus;
 }
+
+// Source-of-truth voting flow inside Elastos Essentials, copy-edited
+// against the actual app's UX so a user can follow it without
+// guessing. Reused by both the live "Cast your vote" panel and the
+// "Get ready" preparation panel — the last step changes by phase but
+// steps 1-3 are identical.
+const STEP_INSTALL = {
+  title: 'Install Elastos Essentials',
+  body: (
+    <>
+      The mobile wallet that holds your CR voting capability.{' '}
+      <ExternalLinkText href={ESSENTIALS_DOWNLOAD}>Download</ExternalLinkText>
+    </>
+  ),
+};
+
+const STEP_ADVANCED_MODE = {
+  title: 'Switch to Advanced wallet mode',
+  body: (
+    <>
+      Open <span className="text-primary">Settings → Wallet Mode</span> and
+      change to <span className="text-primary">Advanced</span>. The default
+      simple mode hides the staking surface.
+    </>
+  ),
+};
+
+const STEP_STAKE = {
+  title: 'Stake your ELA',
+  body: (
+    <>
+      Open the <span className="text-primary">Staking</span> section and stake
+      the amount you want to vote with. Stakes aren&apos;t locked — you can
+      withdraw anytime — but if you withdraw <em>during</em> a voting window,
+      your votes drop with the stake. Unvote first, then withdraw.
+    </>
+  ),
+};
 
 const HowToVoteCard = ({ status }: HowToVoteCardProps) => {
   const phase = status.phase === 'claiming' ? 'claim' : status.phase;
@@ -40,30 +77,16 @@ const HowToVoteCard = ({ status }: HowToVoteCardProps) => {
         icon: Vote,
         title: 'Cast your vote',
         steps: [
+          STEP_INSTALL,
+          STEP_ADVANCED_MODE,
+          STEP_STAKE,
           {
-            title: 'Open Elastos Essentials',
+            title: 'Open Elastos Council and vote',
             body: (
               <>
-                The mobile wallet that signs CR voting transactions.{' '}
-                <ExternalLinkText href={ESSENTIALS_DOWNLOAD}>Download</ExternalLinkText>
-              </>
-            ),
-          },
-          {
-            title: 'Stake your ELA',
-            body: (
-              <>
-                Voting weight = staked ELA × lock duration. Visit the{' '}
-                <ExternalLinkText href={STAKING_PORTAL}>Staking Portal</ExternalLinkText>{' '}
-                if you haven&apos;t already.
-              </>
-            ),
-          },
-          {
-            title: 'Pick up to 12 candidates',
-            body: (
-              <>
-                Your stake splits evenly across the candidates you select. Top 12 by
+                In Essentials, open <span className="text-primary">Elastos Council</span>{' '}
+                and tap <span className="text-primary">Vote Now</span> at the top.
+                Your stake splits evenly across the candidates you pick. Top 12 by
                 total ELA take seats on Term {status.targetTerm} council.
               </>
             ),
@@ -81,31 +104,17 @@ const HowToVoteCard = ({ status }: HowToVoteCardProps) => {
         icon: isImminent ? Vote : Clock,
         title: isImminent ? 'Voting opens soon' : 'Get ready to vote',
         steps: [
-          {
-            title: 'Stake ELA in advance',
-            body: (
-              <>
-                Voting weight is computed from already-staked ELA at the moment voting
-                opens — there&apos;s no last-minute path.{' '}
-                <ExternalLinkText href={STAKING_PORTAL}>Staking Portal</ExternalLinkText>
-              </>
-            ),
-          },
-          {
-            title: 'Install Elastos Essentials',
-            body: (
-              <>
-                The wallet that holds your CR voting capability.{' '}
-                <ExternalLinkText href={ESSENTIALS_DOWNLOAD}>Download</ExternalLinkText>
-              </>
-            ),
-          },
+          STEP_INSTALL,
+          STEP_ADVANCED_MODE,
+          STEP_STAKE,
           {
             title: 'Watch this page',
             body: (
               <>
-                When voting opens (~Term {status.targetTerm}), the candidate list and
-                voting flow appear here.
+                When voting opens (~Term {status.targetTerm}), open{' '}
+                <span className="text-primary">Elastos Council</span> in Essentials
+                and tap <span className="text-primary">Vote Now</span>. The
+                live candidate list will surface here too.
               </>
             ),
           },

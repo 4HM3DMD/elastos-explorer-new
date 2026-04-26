@@ -556,12 +556,17 @@ export interface AddressProposalReview {
 
 /** Full governance roll-up for an address. `councilDid` is non-empty
  *  when the address is a council member's deposit_address — it tells
- *  the UI to surface the "council member" section. */
+ *  the UI to surface the "council member" section.
+ *  `councilCid` and `councilNickname` are populated alongside it so the
+ *  address-page identity badge can link straight to the candidate
+ *  profile (keyed on CID) and show the member's display name. */
 export interface AddressGovernanceSummary {
   elections: AddressCRVoteTerm[];
   impeachments: AddressImpeachmentVote[];
   proposalReviews: AddressProposalReview[];
   councilDid: string;
+  councilCid?: string;
+  councilNickname?: string;
 }
 
 // /api/v1/cr/members/{cid}/profile — single roll-up of every chain
@@ -919,7 +924,7 @@ export interface ELAPrice {
 // ============================================================
 
 export interface SearchResult {
-  type: 'block' | 'transaction' | 'address' | 'producer' | 'crMember' | 'none';
+  type: 'block' | 'transaction' | 'address' | 'producer' | 'crMember' | 'proposal' | 'none';
   value: string | number | null;
   /**
    * Used by `crMember` results — the candidate's most-recent term, so

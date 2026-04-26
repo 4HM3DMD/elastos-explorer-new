@@ -24,7 +24,10 @@ const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Illegal']);
 // detail pages render the same producer with the same label. See the
 // note there for the historical drift this removes.
 
-const VALID_TABS = new Set(PRODUCER_TABS.map(t => t.value));
+// Widened to Set<string> so `.has(rawState)` accepts arbitrary URL
+// param values without TS narrowing complaints. Runtime semantics
+// unchanged — the set still only contains the four valid tab values.
+const VALID_TABS: Set<string> = new Set(PRODUCER_TABS.map(t => t.value));
 
 const Validators = () => {
   const [searchParams, setSearchParams] = useSearchParams();

@@ -19,7 +19,7 @@ export function detectInputType(query: string): SearchInputHint {
   }
 
   if (HEX_64_RE.test(q)) {
-    return { type: 'tx_or_block_hash', label: 'Transaction / Block Hash' };
+    return { type: 'tx_or_block_hash', label: 'Transaction / Block / Proposal Hash' };
   }
 
   if (q.length >= 20 && q.length <= 40 && q.startsWith('S')) {

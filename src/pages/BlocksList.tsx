@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import { webSocketService } from '../services/websocket';
 import type { BlockSummary, WSNewBlock } from '../types/blockchain';
@@ -18,12 +18,29 @@ function displayMiner(minerInfo?: string, minerAddress?: string): string | null 
   return null;
 }
 
+const VALID_PAGE_SIZES = new Set([20, 30, 50]);
+
 const BlocksList = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [blocks, setBlocks] = useState<BlockSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  // URL is the source of truth for both page and pageSize. Refresh,
+  // back-button, and shared links all restore the user's position.
+  // Defaults: page=1, pageSize=20. Invalid values fall back to defaults
+  // rather than 400ing the user.
+  const pageRaw = parseInt(searchParams.get('page') || '1', 10);
+  const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
+  const pageSizeRaw = parseInt(searchParams.get('pageSize') || '20', 10);
+  const pageSize = VALID_PAGE_SIZES.has(pageSizeRaw) ? pageSizeRaw : 20;
+
+  const updateUrl = useCallback((nextPage: number, nextSize: number) => {
+    const params: Record<string, string> = {};
+    if (nextPage !== 1) params.page = String(nextPage);
+    if (nextSize !== 20) params.pageSize = String(nextSize);
+    setSearchParams(params, { replace: true });
+  }, [setSearchParams]);
+
   const [total, setTotal] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
   const [newBlockHeight, setNewBlockHeight] = useState<number | null>(null);
@@ -84,7 +101,7 @@ const BlocksList = () => {
   }, [page, pageSize]);
 
   const goPage = (p: number) => {
-    if (p >= 1 && p <= totalPages) setPage(p);
+    if (p >= 1 && p <= totalPages) updateUrl(p, pageSize);
   };
 
   if (loading && blocks.length === 0) return <PageSkeleton />;
@@ -93,7 +110,7 @@ const BlocksList = () => {
     return (
       <div className="px-4 lg:px-6 py-6 text-center">
         <p className="text-accent-red mb-4">{error}</p>
-        <button onClick={() => { setPage(1); fetchBlocks(1, pageSize); }} className="btn-primary">Retry</button>
+        <button onClick={() => { updateUrl(1, pageSize); fetchBlocks(1, pageSize); }} className="btn-primary">Retry</button>
       </div>
     );
   }
@@ -116,7 +133,7 @@ const BlocksList = () => {
           <StatusBadge connected={wsConnected} />
           <select
             value={pageSize}
-            onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+            onChange={(e) => updateUrl(1, Number(e.target.value))}
             aria-label="Blocks per page"
             className="bg-surface-secondary border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs text-primary focus:ring-2 focus:ring-brand/50 focus:outline-none"
           >

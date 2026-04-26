@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { Producer } from '../types/blockchain';
 import { PRODUCER_STATE_COLORS } from '../types/blockchain';
@@ -24,11 +24,22 @@ const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Illegal']);
 // detail pages render the same producer with the same label. See the
 // note there for the historical drift this removes.
 
+const VALID_TABS = new Set(PRODUCER_TABS.map(t => t.value));
+
 const Validators = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [producers, setProducers] = useState<Producer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('Active');
+  // URL is the source of truth. `?state=Active` preserves filter across
+  // refresh, back-button, and shared links. Defaults to Active when no
+  // param is present or the value isn't one of the four known tabs.
+  const rawState = searchParams.get('state');
+  const activeTab = rawState && VALID_TABS.has(rawState) ? rawState : 'Active';
+
+  const setActiveTab = useCallback((tab: string) => {
+    setSearchParams(tab === 'Active' ? {} : { state: tab }, { replace: true });
+  }, [setSearchParams]);
 
   const fetchProducers = useCallback(async (state: string) => {
     try {

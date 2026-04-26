@@ -889,8 +889,21 @@ export interface ELAPrice {
 // ============================================================
 
 export interface SearchResult {
-  type: 'block' | 'transaction' | 'address' | 'producer' | 'none';
+  type: 'block' | 'transaction' | 'address' | 'producer' | 'crMember' | 'none';
   value: string | number | null;
+  /**
+   * Used by `crMember` results — the candidate's most-recent term, so
+   * the router can build a per-term URL like
+   * /governance/elections/{term}/candidate/{cid}. Other result kinds
+   * leave this undefined.
+   */
+  term?: number;
+  /**
+   * Optional human-readable label for richer suggestion UI (e.g. the
+   * candidate's nickname rendered alongside the cid). Currently only
+   * the crMember branch sets this.
+   */
+  label?: string;
 }
 
 // ============================================================

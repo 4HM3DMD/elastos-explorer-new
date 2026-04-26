@@ -613,6 +613,43 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try CR member: nickname (case-insensitive substring), CID, or DID.
+	// Returns the most-recent term they appear in so the frontend can
+	// route to /governance/elections/{term}/candidate/{cid}. Skips
+	// sentinel rows and ties go to alphabetical CID for determinism.
+	//
+	// Substring match makes "Sash" find "Sash | Elacity 🐘" — exact-
+	// match would only catch the full string, which is rarely what a
+	// user types. Capped at the first hit (LIMIT 1) so this stays
+	// O(scan-then-pick); for a fuller suggestion list we'd return an
+	// array, but the current InlineSearch UI only consumes one suggestion.
+	var (
+		crCID, crNickname string
+		crLatestTerm      int64
+	)
+	err = s.db.API.QueryRow(r.Context(), `
+		SELECT cm.cid, COALESCE(cm.nickname, ''), COALESCE(MAX(et.term), 0) AS latest_term
+		FROM cr_members cm
+		LEFT JOIN cr_election_tallies et
+		  ON et.candidate_cid = cm.cid
+		  AND et.candidate_cid != '__sentinel__'
+		  AND (et.final_votes_sela > 0 OR et.elected = TRUE)
+		WHERE LOWER(cm.nickname) LIKE LOWER('%' || $1 || '%')
+		   OR cm.cid = $1
+		   OR cm.did = $1
+		GROUP BY cm.cid, cm.nickname
+		ORDER BY latest_term DESC, cm.cid ASC
+		LIMIT 1`, q).Scan(&crCID, &crNickname, &crLatestTerm)
+	if err == nil && crCID != "" && crLatestTerm > 0 {
+		writeJSON(w, 200, APIResponse{Data: map[string]any{
+			"type":  "crMember",
+			"value": crCID,
+			"term":  crLatestTerm,
+			"label": crNickname,
+		}})
+		return
+	}
+
 	writeJSON(w, 200, APIResponse{Data: map[string]any{"type": "none", "value": nil}})
 }
 

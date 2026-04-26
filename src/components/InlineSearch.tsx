@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Loader2, XCircle, Blocks, ArrowLeftRight, Wallet, Shield, Clock, X, CornerDownLeft } from 'lucide-react';
+import { Search, Loader2, XCircle, Blocks, ArrowLeftRight, Wallet, Shield, Landmark, Clock, X, CornerDownLeft } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import { detectInputType, getRouteForResult } from '../utils/searchRouting';
 import type { SearchResult } from '../types/blockchain';
@@ -38,6 +38,7 @@ const TYPE_ICONS: Record<string, typeof Blocks> = {
   transaction: ArrowLeftRight,
   address: Wallet,
   producer: Shield,
+  crMember: Landmark,
 };
 
 interface InlineSearchProps {
@@ -283,10 +284,15 @@ const InlineSearch = ({ className, compact }: InlineSearchProps) => {
                 <div className="flex-1 min-w-0">
                   <span className="text-xs font-medium text-primary block truncate">
                     {suggestion.type === 'block' ? `Block #${Number(suggestion.value).toLocaleString()}`
+                      : suggestion.type === 'crMember' ? (suggestion.label || String(suggestion.value))
                       : suggestion.type === 'producer' ? String(suggestion.value)
                       : String(suggestion.value)}
                   </span>
-                  <span className="text-[10px] text-muted capitalize">{suggestion.type === 'producer' ? 'Validator' : suggestion.type}</span>
+                  <span className="text-[10px] text-muted">
+                    {suggestion.type === 'producer' ? 'Validator'
+                      : suggestion.type === 'crMember' ? `Council member · Term ${suggestion.term}`
+                      : suggestion.type.charAt(0).toUpperCase() + suggestion.type.slice(1)}
+                  </span>
                 </div>
                 <CornerDownLeft size={12} className="text-muted shrink-0 group-hover:text-brand" />
               </button>

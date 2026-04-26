@@ -5,7 +5,7 @@ export type SearchInputHint =
   | { type: 'tx_or_block_hash'; label: 'Transaction / Block Hash' }
   | { type: 'staking_address'; label: 'Staking Address' }
   | { type: 'address'; label: 'Address' }
-  | { type: 'text'; label: 'Validator Name' }
+  | { type: 'text'; label: 'Validator or Council Member' }
   | null;
 
 const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
@@ -31,7 +31,7 @@ export function detectInputType(query: string): SearchInputHint {
   }
 
   if (q.length >= 2) {
-    return { type: 'text', label: 'Validator Name' };
+    return { type: 'text', label: 'Validator or Council Member' };
   }
 
   return null;
@@ -54,6 +54,14 @@ export function getRouteForResult(result: SearchResult): string | null {
       return `/address/${value}`;
     case 'producer':
       return `/validator/${value}`;
+    case 'crMember': {
+      // The backend ships the candidate's most-recent term so we can
+      // build a per-term URL (CandidateDetail expects both segments).
+      // If the term is missing for any reason, route to the elections
+      // archive instead of producing a broken URL.
+      if (!result.term || result.term < 1) return '/governance/elections';
+      return `/governance/elections/${result.term}/candidate/${value}`;
+    }
     default:
       return null;
   }
@@ -65,6 +73,7 @@ export function getTypeIcon(type: SearchResult['type']): string {
     case 'transaction': return 'ArrowLeftRight';
     case 'address': return 'Wallet';
     case 'producer': return 'Shield';
+    case 'crMember': return 'Landmark';
     default: return 'Search';
   }
 }
@@ -75,6 +84,7 @@ export function getTypeLabel(type: SearchResult['type']): string {
     case 'transaction': return 'Transaction';
     case 'address': return 'Address';
     case 'producer': return 'Validator';
+    case 'crMember': return 'Council Member';
     default: return 'Unknown';
   }
 }

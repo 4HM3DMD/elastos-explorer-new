@@ -247,13 +247,28 @@ const CandidateDetail = () => {
                   </span>
                 )}
                 {thisTerm?.elected && (
-                  <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-brand font-medium px-2 py-0.5 rounded-full bg-brand/10">
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-brand font-medium px-2 py-0.5 rounded-full bg-brand/10"
+                    title={`Won the Term ${term} election`}
+                  >
                     <ShieldCheck size={10} /> Elected
                   </span>
                 )}
-                {m.state && (
-                  <span className={cn('badge whitespace-nowrap', stateBadgeColor)}>
-                    {m.state}
+                {/* Two badges used to render side-by-side: the Trophy
+                    "Elected" pill above (term-specific: won this term)
+                    and a `cr_members.state` pill (chain-current node
+                    state). When both happened to read "Elected" the
+                    page had two identical-looking labels meaning two
+                    different things; "Unknown" surfaced on retired
+                    members with no useful signal. Show the chain-state
+                    badge only for NOTABLE states — when it actually
+                    tells the reader something the Trophy pill doesn't. */}
+                {m.state && m.state !== 'Elected' && m.state !== 'Unknown' && (
+                  <span
+                    className={cn('badge whitespace-nowrap', stateBadgeColor)}
+                    title={chainStateLabel(m.state)}
+                  >
+                    {chainStateBadge(m.state)}
                   </span>
                 )}
               </div>
@@ -473,6 +488,49 @@ function IdentityRow({ label, children }: { label: string; children: React.React
 
 function Muted({ children }: { children: React.ReactNode }) {
   return <span className="text-xs text-muted">{children}</span>;
+}
+
+// Short, scannable label for a `cr_members.state` value when it's
+// being shown as a standalone badge. The protocol values are
+// terse and a casual reader can't tell "Returned" means
+// "deposit returned" or that "Inactive" is a node-offline signal —
+// we expand them where it helps without losing the canonical name.
+function chainStateBadge(state: string): string {
+  switch (state) {
+    case 'Inactive':  return 'Inactive · node offline';
+    case 'Impeached': return 'Impeached';
+    case 'Illegal':   return 'Illegal · slashed';
+    case 'Pending':   return 'Pending registration';
+    case 'Returned':  return 'Deposit returned';
+    case 'Canceled':  return 'Canceled';
+    case 'Terminated':return 'Terminated';
+    default:          return state;
+  }
+}
+
+// Long-form description used as the title= tooltip so a hover
+// gives the reader the full meaning even when the badge text is
+// abbreviated for layout. Falls through to a generic phrasing for
+// any state value we haven't seen on mainnet yet.
+function chainStateLabel(state: string): string {
+  switch (state) {
+    case 'Inactive':
+      return 'Seated council member whose node has been marked offline by the protocol';
+    case 'Impeached':
+      return 'Removed from the council by community impeachment vote';
+    case 'Illegal':
+      return 'Slashed for protocol-level misbehaviour';
+    case 'Pending':
+      return 'Registration submitted, not yet seated';
+    case 'Returned':
+      return 'Candidate deposit returned after term end';
+    case 'Canceled':
+      return 'Candidacy cancelled by the registrant';
+    case 'Terminated':
+      return 'Candidacy terminated by the protocol';
+    default:
+      return `Current chain state: ${state}`;
+  }
 }
 
 // Convert a block-height span into a human-friendly tenure label.

@@ -51,7 +51,7 @@ func (s *Server) serveSitemap(w http.ResponseWriter, r *http.Request) {
 
 	// Top addresses by balance (top 1000)
 	rows, err := s.db.API.Query(ctx,
-		`SELECT address FROM addresses ORDER BY balance DESC LIMIT 1000`)
+		`SELECT address FROM address_balances ORDER BY balance_sela DESC LIMIT 1000`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -98,7 +98,7 @@ func (s *Server) serveSitemap(w http.ResponseWriter, r *http.Request) {
 
 	// Active validators
 	rows4, err := s.db.API.Query(ctx,
-		`SELECT owner_public_key FROM producers WHERE state = 'Active'`)
+		`SELECT owner_pubkey FROM producers WHERE state = 'Active'`)
 	if err == nil {
 		defer rows4.Close()
 		for rows4.Next() {

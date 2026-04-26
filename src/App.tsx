@@ -8,29 +8,68 @@ import ScrollToTop from './components/ScrollToTop.js';
 import DegradedBanner from './components/DegradedBanner.js';
 import { ElectionStatusProvider } from './contexts/ElectionStatusContext.js';
 
-const Home = lazy(() => import('./pages/Home.js'));
-const BlocksList = lazy(() => import('./pages/BlocksList.js'));
-const BlockDetails = lazy(() => import('./pages/BlockDetails.js'));
-const TransactionsList = lazy(() => import('./pages/TransactionsList.js'));
-const TransactionDetails = lazy(() => import('./pages/TransactionDetails.js'));
-const AddressDetails = lazy(() => import('./pages/AddressDetails.js'));
-const Validators = lazy(() => import('./pages/Validators.js'));
-const ValidatorDetail = lazy(() => import('./pages/ValidatorDetail.js'));
-const CRProposals = lazy(() => import('./pages/CRProposals.js'));
-const ProposalDetail = lazy(() => import('./pages/ProposalDetail.js'));
-const Elections = lazy(() => import('./pages/Elections.js'));
-const ElectionsArchive = lazy(() => import('./pages/ElectionsArchive.js'));
-const ElectionDetail = lazy(() => import('./pages/ElectionDetail.js'));
-const ElectionVoters = lazy(() => import('./pages/ElectionVoters.js'));
-const CandidateDetail = lazy(() => import('./pages/CandidateDetail.js'));
-const DevElectionReplay = lazy(() => import('./pages/DevElectionReplay.js'));
-const Charts = lazy(() => import('./pages/Charts.js'));
-const Mempool = lazy(() => import('./pages/Mempool.js'));
-const Ranking = lazy(() => import('./pages/Ranking.js'));
-const Staking = lazy(() => import('./pages/Staking.js'));
-const StakerDetail = lazy(() => import('./pages/StakerDetail.js'));
-const NotFound = lazy(() => import('./pages/NotFound.js'));
-const ApiDocs = lazy(() => import('./pages/ApiDocs.js'));
+// lazyWithReload — wrap React.lazy() so an atomic deploy doesn't strand
+// open browser sessions. Vite emits asset filenames with a content hash
+// (e.g. TransactionsList-5458b216.js); on rebuild those hashes change
+// and the old files disappear from /assets. A session that loaded the
+// previous manifest then tries to lazy-load a route, hits a 404 on the
+// stale chunk, and React surfaces "Failed to fetch dynamically imported
+// module" as a fatal page error.
+//
+// Standard fix: catch that specific failure and reload the page once,
+// so the user picks up the fresh manifest. A session-storage marker
+// prevents an infinite reload loop if the chunk is genuinely broken
+// (not just stale) — the marker auto-expires after 30s so subsequent
+// real deploys still recover automatically.
+function lazyWithReload<T extends { default: React.ComponentType<unknown> }>(
+  loader: () => Promise<T>,
+): React.LazyExoticComponent<T['default']> {
+  return lazy(() =>
+    loader().catch((err) => {
+      const isChunkLoadError =
+        /Failed to fetch dynamically imported module|Loading chunk \d+ failed/i.test(String(err));
+      if (!isChunkLoadError) throw err;
+
+      const STALE_KEY = 'staleChunkReloadAt';
+      const previousReloadAt = Number(sessionStorage.getItem(STALE_KEY) || 0);
+      const now = Date.now();
+      // 30s window: if we already reloaded in the last 30 seconds and
+      // the chunk STILL failed, the chunk is genuinely broken — don't
+      // loop. Throw and let the ErrorBoundary surface a real error.
+      if (previousReloadAt && now - previousReloadAt < 30_000) throw err;
+
+      sessionStorage.setItem(STALE_KEY, String(now));
+      window.location.reload();
+      // Return a never-resolving promise so React doesn't continue
+      // rendering while the page is mid-reload.
+      return new Promise<T>(() => {});
+    }),
+  );
+}
+
+const Home = lazyWithReload(() => import('./pages/Home.js'));
+const BlocksList = lazyWithReload(() => import('./pages/BlocksList.js'));
+const BlockDetails = lazyWithReload(() => import('./pages/BlockDetails.js'));
+const TransactionsList = lazyWithReload(() => import('./pages/TransactionsList.js'));
+const TransactionDetails = lazyWithReload(() => import('./pages/TransactionDetails.js'));
+const AddressDetails = lazyWithReload(() => import('./pages/AddressDetails.js'));
+const Validators = lazyWithReload(() => import('./pages/Validators.js'));
+const ValidatorDetail = lazyWithReload(() => import('./pages/ValidatorDetail.js'));
+const CRProposals = lazyWithReload(() => import('./pages/CRProposals.js'));
+const ProposalDetail = lazyWithReload(() => import('./pages/ProposalDetail.js'));
+const Elections = lazyWithReload(() => import('./pages/Elections.js'));
+const ElectionsArchive = lazyWithReload(() => import('./pages/ElectionsArchive.js'));
+const ElectionDetail = lazyWithReload(() => import('./pages/ElectionDetail.js'));
+const ElectionVoters = lazyWithReload(() => import('./pages/ElectionVoters.js'));
+const CandidateDetail = lazyWithReload(() => import('./pages/CandidateDetail.js'));
+const DevElectionReplay = lazyWithReload(() => import('./pages/DevElectionReplay.js'));
+const Charts = lazyWithReload(() => import('./pages/Charts.js'));
+const Mempool = lazyWithReload(() => import('./pages/Mempool.js'));
+const Ranking = lazyWithReload(() => import('./pages/Ranking.js'));
+const Staking = lazyWithReload(() => import('./pages/Staking.js'));
+const StakerDetail = lazyWithReload(() => import('./pages/StakerDetail.js'));
+const NotFound = lazyWithReload(() => import('./pages/NotFound.js'));
+const ApiDocs = lazyWithReload(() => import('./pages/ApiDocs.js'));
 
 const TOAST_OPTIONS = {
   className: 'card',

@@ -40,6 +40,20 @@ export default defineConfig(({ mode }) => {
       ? { drop: ['debugger'], pure: ['console.log', 'console.warn', 'console.info', 'console.debug'] }
       : undefined,
     build: {
+      // KEEP old asset files across rebuilds. Vite's default behaviour
+      // is to wipe `dist/` before each build, which strands open browser
+      // sessions: a user with the previous index.html in their tab
+      // tries to lazy-load `/assets/Page-OLDHASH.js`, hits 404, and
+      // their app dies with "Failed to fetch dynamically imported
+      // module". Frontend has a `lazyWithReload` shim that catches
+      // this and reloads, but BOTH layers — keeping old assets AND the
+      // reload shim — give the smoothest UX (no flash on the user's
+      // side, no surprise page-reload mid-action).
+      //
+      // Old assets accumulate over time; prune anything older than
+      // 30 days with `find dist/assets -mtime +30 -delete`. The
+      // scripts/prune-old-assets.sh helper wraps that.
+      emptyOutDir: false,
       rollupOptions: {
         output: {
           manualChunks: {

@@ -20,7 +20,12 @@ services:
     # roundtrip on the hot path) so this is safe to hit every 30s. On
     # failure, `restart: unless-stopped` restarts the container.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:8339/health"]
+      # The alpine base image ships busybox + wget; curl was assumed
+      # but isn't actually installed, so the previous curl-based
+      # healthcheck was failing every interval and Docker had been
+      # marking the container "unhealthy" continuously even though the
+      # binary was serving 200s. wget on the busybox path works.
+      test: ["CMD", "wget", "-q", "--spider", "--timeout=5", "http://127.0.0.1:8339/health"]
       interval: 30s
       timeout: 10s
       retries: 3

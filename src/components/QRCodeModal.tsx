@@ -13,16 +13,57 @@ interface QRCodeModalProps {
 const QRCodeModal = ({ address, open, onClose }: QRCodeModalProps) => {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, []);
 
+  // Focus trap + restore. While the modal is open, Tab stays inside
+  // the dialog (cycles between Close and Copy). On close we restore
+  // focus to whatever the user clicked to open the modal — without
+  // this, screen readers and keyboard users get dropped at the top
+  // of the page.
   useEffect(() => {
     if (!open) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    // Focus the close button on open so Escape / Tab is intuitive.
+    // Run in a microtask so the portal child has actually mounted.
+    queueMicrotask(() => closeButtonRef.current?.focus());
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      // Find the focusable elements inside the dialog (close button +
+      // copy button). Wrap Tab navigation around them.
+      const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button, a, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      // Restore focus on close. The previously-focused element may
+      // have been removed from the DOM — guard with .focus()? null check.
+      previouslyFocusedRef.current?.focus?.();
+    };
   }, [open, onClose]);
 
   const copyAddress = useCallback(async () => {
@@ -39,13 +80,18 @@ const QRCodeModal = ({ address, open, onClose }: QRCodeModalProps) => {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Address QR code"
     >
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
+        ref={dialogRef}
         className="relative card p-6 max-w-sm w-full flex flex-col items-center gap-5"
         onClick={e => e.stopPropagation()}
       >
         <button
+          ref={closeButtonRef}
           onClick={onClose}
           className="absolute top-3 right-3 p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors text-muted hover:text-primary"
           aria-label="Close"

@@ -334,7 +334,7 @@ const StakerDetail = () => {
           </div>
           <div className="min-w-0 flex-1">
             <span className="text-[10px] uppercase tracking-wider text-muted block">Stake Address</span>
-            <HashDisplay hash={data.address} length={100} showCopyButton isClickable={false} />
+            <HashDisplay hash={data.address} truncate={false} showCopyButton isClickable={false} />
           </div>
         </div>
       </div>

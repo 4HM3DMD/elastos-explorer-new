@@ -6,7 +6,7 @@ import type { RichAddress } from '../types/blockchain';
 import { downloadCSV } from '../utils/csv';
 import Pagination from '../components/Pagination';
 import { PageSkeleton } from '../components/LoadingSkeleton';
-import { formatEla, fmtEla } from '../utils/format';
+import { fmtEla } from '../utils/format';
 import { BURN_ADDRESS, getAddressInfo, getCategoryIcon, buildDisplayLabels } from '../constants/addressLabels';
 import SEO from '../components/SEO';
 
@@ -147,7 +147,7 @@ const Ranking = () => {
                       </td>
                       <td>
                         <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {formatEla(addr.balance)}
+                          {fmtEla(addr.balance, { minDecimals: 2 })}
                         </span>
                       </td>
                       <td>

@@ -14,13 +14,7 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import { getLocation, formatVotes, fmtEla, safeExternalUrl } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
-
-function getRegistrationBadge(type: string, isCouncil?: boolean): { label: string; cls: string } {
-  if (type === 'Council Node') return { label: 'Council Node', cls: 'badge-purple' };
-  if (type === 'BPoS (legacy)') return { label: 'BPoS (legacy)', cls: 'badge-orange' };
-  if (isCouncil) return { label: 'BPoS + Council', cls: 'badge-green' };
-  return { label: 'BPoS', cls: 'badge-blue' };
-}
+import { getRegistrationBadge } from '../utils/validatorBadge';
 
 function getStateDisplay(p: Pick<Producer, 'registrationType' | 'isCouncil' | 'state'>): { label: string; cls: string } {
   if (p.registrationType === 'Council Node') {
@@ -95,7 +89,7 @@ const ValidatorDetail = () => {
   }
 
   const loc = getLocation(producer.location);
-  const badge = getRegistrationBadge(producer.registrationType, producer.isCouncil);
+  const badge = getRegistrationBadge(producer);
   const stateDisplay = getStateDisplay(producer);
 
   return (

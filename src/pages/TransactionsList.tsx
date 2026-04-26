@@ -13,6 +13,7 @@ import { toSela } from '../utils/sela';
 import { txDisplayValue } from '../utils/txSummary';
 import { getTypeLabel, getTypeInfo, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
+import { TX_TYPE_VOTING } from '../constants/txTypes';
 import SEO from '../components/SEO';
 
 const SYSTEM_TYPES = new Set([0, 5, 20, 102]);
@@ -33,7 +34,7 @@ const TX_TYPE_FILTERS: { label: string; simplifiedLabel: string; value: number |
   { label: 'All Types',              simplifiedLabel: 'All Types',              value: undefined },
   { label: 'Transfer',               simplifiedLabel: 'Payments',              value: 0x02 },
   { label: 'Block Reward',             simplifiedLabel: 'Block Rewards',         value: 0x00 },
-  { label: 'BPoS Vote',              simplifiedLabel: 'Staking Votes',         value: 0x63 },
+  { label: 'BPoS Vote',              simplifiedLabel: 'Staking Votes',         value: TX_TYPE_VOTING },
   { label: 'Claim Staking Reward',   simplifiedLabel: 'Claim Rewards',         value: 0x60 },
   { label: 'Staking Reward Withdraw', simplifiedLabel: 'Reward Withdrawals',   value: 0x61 },
   { label: 'Exchange Votes',         simplifiedLabel: 'Vote Conversions',      value: 0x62 },
@@ -326,7 +327,7 @@ function TxTransferCell({ tx }: { tx: TransactionSummary }) {
 
   if (tx.transfers && tx.transfers.length > 0) {
     if (tx.selfTransfer) {
-      const isVoteTx = tx.type === 0x63;
+      const isVoteTx = tx.type === TX_TYPE_VOTING;
       const actionLabel = isVoteTx ? typeLabel : 'Self-Transfer';
       return (
         <div className="flex items-center gap-1.5 text-xs">

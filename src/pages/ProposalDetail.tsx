@@ -643,9 +643,8 @@ const ProposalDetail = () => {
               </div>
             </div>
           </div>
-          <Link to="/governance/proposals" className="text-xs text-muted hover:text-brand transition-colors flex items-center gap-1 shrink-0">
-            <ArrowLeft size={12} /> All Proposals
-          </Link>
+          {/* The breadcrumb above the SEO meta covers the "back" affordance —
+              the All Proposals link in the page header was redundant. */}
         </div>
       </div>
 

@@ -9,6 +9,7 @@ import NodeAvatar from '../components/NodeAvatar';
 import { getLocation, formatVotes } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
+import { getRegistrationBadge } from '../utils/validatorBadge';
 
 const PRODUCER_TABS = [
   { label: 'Active', value: 'Active' },
@@ -19,10 +20,9 @@ const PRODUCER_TABS = [
 
 const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Illegal']);
 
-function getRegistrationBadge(payloadVersion: number): { label: string; cls: string } {
-  if (payloadVersion < 1) return { label: 'BPoS (legacy)', cls: 'badge-orange' };
-  return { label: 'BPoS', cls: 'badge-blue' };
-}
+// Badge logic moved to `src/utils/validatorBadge.ts` so the list and
+// detail pages render the same producer with the same label. See the
+// note there for the historical drift this removes.
 
 const Validators = () => {
   const [producers, setProducers] = useState<Producer[]>([]);
@@ -123,7 +123,7 @@ const Validators = () => {
               ) : (
                 producers.map((p) => {
                   const loc = getLocation(p.location);
-                  const badge = getRegistrationBadge(p.payloadVersion);
+                  const badge = getRegistrationBadge(p);
                   const stateColor = PRODUCER_STATE_COLORS[p.state] || 'bg-gray-500/20 text-gray-400';
 
                   return (

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import InlineSearch from '../components/InlineSearch';
+import { TX_TYPE_VOTING } from '../constants/txTypes';
 import RelativeTime from '../components/RelativeTime';
 import { truncHash } from '../utils/format';
 import { txDisplayValue } from '../utils/txSummary';
@@ -312,7 +313,7 @@ function HomeTxTransfer({ tx }: { tx: TransactionSummary }) {
 
   if (tx.transfers && tx.transfers.length > 0) {
     if (tx.selfTransfer) {
-      const isVoteTx = tx.type === 0x63;
+      const isVoteTx = tx.type === TX_TYPE_VOTING;
       return (
         <div className="flex items-center gap-1 mt-0.5">
           <Link to={`/address/${tx.transfers[0].from}`} className="text-[10px] font-mono text-white hover:text-brand truncate max-w-[80px] tracking-[0.4px]">

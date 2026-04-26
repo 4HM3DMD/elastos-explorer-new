@@ -43,6 +43,7 @@ import SEO from '../components/SEO';
 import Countdown from '../components/Countdown';
 import HashDisplay from '../components/HashDisplay';
 import GovernanceNav from '../components/GovernanceNav';
+import HowToVoteCard from '../components/HowToVoteCard';
 import { formatVotes, safeExternalUrl } from '../utils/format';
 import { webSocketService } from '../services/websocket';
 
@@ -267,6 +268,14 @@ const Elections = () => {
       {status && phase && phase !== 'pre-genesis' && (
         <StatusHero status={status} targetCandidateCount={targetCandidates.length} />
       )}
+
+      {/* "How to vote" instructions — actually tells users HOW to
+          participate (which wallet, what's required, what they do).
+          Renders only in voting + duty phases (the actionable ones);
+          claim and failed_restart suppress it since voting is closed
+          or pending another window. The component itself is the
+          phase gate. */}
+      {status && <HowToVoteCard status={status} />}
 
       {/* Body — depends on phase. */}
       {(phase === 'duty' || phase === 'pre-genesis' || phase === 'failed_restart') && (

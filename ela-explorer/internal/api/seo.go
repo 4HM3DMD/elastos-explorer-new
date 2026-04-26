@@ -235,17 +235,24 @@ func lookupProposal(s *Server, ctx context.Context, matches []string) seoMeta {
 func lookupValidator(s *Server, ctx context.Context, matches []string) seoMeta {
 	pubKey := matches[1]
 	var nickname string
-	var votes float64
+	var votesSela int64
 
+	// Two columns names were wrong here: `dpos_v2_votes` doesn't exist
+	// (real column is `dposv2_votes_sela`) and `owner_public_key`
+	// doesn't exist (real column is `owner_pubkey`). The query failed
+	// on every validator-page request, falling through to the generic
+	// "Validator Details" SEO fallback. Now reads the actual sela value
+	// and converts to ELA via selaToELA() so the meta shows accurate
+	// vote totals.
 	err := s.db.API.QueryRow(ctx,
-		`SELECT nickname, COALESCE(dpos_v2_votes, 0) FROM producers WHERE owner_public_key = $1`, pubKey,
-	).Scan(&nickname, &votes)
+		`SELECT nickname, COALESCE(dposv2_votes_sela, 0) FROM producers WHERE owner_pubkey = $1`, pubKey,
+	).Scan(&nickname, &votesSela)
 	if err != nil {
 		return seoMeta{Title: "Validator Details", Desc: "Validator details on the Elastos network."}
 	}
 
 	title := fmt.Sprintf("Validator %s", nickname)
-	desc := fmt.Sprintf("%s on the Elastos (ELA) network with %.0f ELA in votes.", nickname, votes)
+	desc := fmt.Sprintf("%s on the Elastos (ELA) network with %s ELA in votes.", nickname, selaToELA(votesSela))
 	return seoMeta{Title: title, Desc: desc}
 }
 

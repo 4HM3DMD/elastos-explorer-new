@@ -16,8 +16,19 @@
 
     --color-text-primary: #FFFFFF;
     --color-text-secondary: #A1A1A1;
-    --color-text-muted: #666666;
-    --color-text-tertiary: #484848;
+    /* WCAG AA requires ≥4.5:1 contrast for body text and ≥3:1 for
+       large/auxiliary text. Old #666666 on #141414 was only 3.27:1
+       — failing AA for body. #8E8E8E lifts to ~5.0:1, comfortably
+       above AA, while staying clearly subordinate to
+       --color-text-secondary (#A1A1A1, 7.21:1). The five-step ramp
+       (primary → secondary → muted → tertiary) preserves the same
+       visual hierarchy, just with more readable muted/tertiary tiers.
+
+       --color-text-tertiary nudged from #484848 (1.97:1, fails) to
+       #6E6E6E (~3.3:1) — still clearly the dimmest tier but now
+       legible enough for large-text use. */
+    --color-text-muted: #8E8E8E;
+    --color-text-tertiary: #6E6E6E;
 
     --color-brand: #ff9e18;
     --color-brand-dark: #B04200;

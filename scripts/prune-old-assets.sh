@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Prune dist/assets/* files older than RETENTION_DAYS (default 30).
+# Prune dist/assets/* files older than RETENTION_DAYS (default 7).
 #
 # We keep old assets across rebuilds (vite emptyOutDir: false) so that
 # users with stale browser sessions can still lazy-load the chunks they
 # remember from the previous deploy. Files in dist/assets/ accumulate
 # over time; this script trims the long tail.
 #
-# Run weekly via cron:
-#   0 4 * * 0 /opt/elastos-explorer-new/scripts/prune-old-assets.sh
+# Run daily via cron (a 7-day retention works best with daily pruning
+# so the deletion window doesn't drift):
+#   0 4 * * * /opt/elastos-explorer-new/scripts/prune-old-assets.sh
 #
 # Safe to run anytime — it never touches index.html or files referenced
 # by the current manifest. mtime-based: deletes assets nobody has
@@ -17,7 +18,7 @@
 set -euo pipefail
 
 DIST_DIR="${DIST_DIR:-/opt/elastos-explorer-new/dist/assets}"
-RETENTION_DAYS="${RETENTION_DAYS:-30}"
+RETENTION_DAYS="${RETENTION_DAYS:-7}"
 
 if [ ! -d "$DIST_DIR" ]; then
   echo "prune-old-assets: $DIST_DIR not found, nothing to do" >&2

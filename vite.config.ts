@@ -51,8 +51,9 @@ export default defineConfig(({ mode }) => {
       // side, no surprise page-reload mid-action).
       //
       // Old assets accumulate over time; prune anything older than
-      // 30 days with `find dist/assets -mtime +30 -delete`. The
-      // scripts/prune-old-assets.sh helper wraps that.
+      // 7 days with `find dist/assets -mtime +7 -delete`. The
+      // scripts/prune-old-assets.sh helper wraps that and is meant
+      // to run daily via cron.
       emptyOutDir: false,
       rollupOptions: {
         output: {

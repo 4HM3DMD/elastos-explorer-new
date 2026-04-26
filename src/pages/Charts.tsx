@@ -35,6 +35,10 @@ function formatChartValue(value: number | string): string {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
+  // `new Date('not a date')` returns Invalid Date; toLocaleDateString
+  // would happily render the string "Invalid Date" on the X-axis. Fall
+  // back to the raw input so a single bad row doesn't poison the chart.
+  if (Number.isNaN(d.getTime())) return dateStr;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 

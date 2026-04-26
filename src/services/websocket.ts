@@ -23,7 +23,6 @@ class WebSocketService {
   private subscriptions = new Map<number, Subscription>();
   private nextId = 1;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private connectionCount = 0;
@@ -48,6 +47,14 @@ class WebSocketService {
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && this.connectionCount > 0 && !this.isConnected()) {
+        // Tab just became visible after some time away. Reset the
+        // reconnect attempt counter so a long offline period doesn't
+        // leave us permanently capped out — without this, after 10
+        // consecutive failures the only path to recovery is a full
+        // page reload. Network conditions visible to the user
+        // (re-focusing the tab) are the cleanest signal that they'd
+        // like us to try again.
+        this.reconnectAttempts = 0;
         this.connect();
       }
     });
@@ -155,9 +162,14 @@ class WebSocketService {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) return;
     if (this.reconnectTimer) return;
 
+    // Exponential backoff capped at 30s. No hard cap on attempts —
+    // a permanent cap would silently break long-lived tabs whenever
+    // the backend was down for >5min (the time to burn through 10
+    // attempts), with no recovery short of a page reload. The 30s
+    // delay already throttles to ~120 attempts/hour worst case,
+    // which is bounded enough for a single client.
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30_000);
     this.reconnectAttempts++;
     this.reconnectTimer = setTimeout(() => {

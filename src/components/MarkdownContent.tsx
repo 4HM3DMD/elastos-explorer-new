@@ -71,6 +71,27 @@ const PURIFY_CONFIG = {
   ADD_ATTR: ['target'],
 };
 
+// Defense-in-depth for the HTML-content path: every <a target="_blank">
+// gets `rel="noopener noreferrer"` injected. Modern browsers already
+// imply noopener for target=_blank since 2020 (Chrome 88, Firefox 79,
+// Safari 12.1), so this is belt-and-braces — but proposal markdown is
+// untrusted user content and the markdown-only path (MarkdownLink
+// component) hardcodes the same rel, so HTML should match.
+//
+// Hook is a module-level setup so it only registers once. The
+// `if (...)` guard prevents double-registration if the module ever
+// re-evaluates (HMR, etc.).
+let purifyHookRegistered = false;
+function ensurePurifyHook() {
+  if (purifyHookRegistered) return;
+  purifyHookRegistered = true;
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+}
+
 function isHtmlContent(text: string): boolean {
   return HTML_TAG_PATTERN.test(text);
 }
@@ -82,6 +103,7 @@ const MarkdownContent = ({ content, className, draftHash }: MarkdownContentProps
   const html = isHtmlContent(processed);
 
   if (html) {
+    ensurePurifyHook();
     const withImages = mdImagesToHtml(processed);
     const clean = DOMPurify.sanitize(withImages, PURIFY_CONFIG);
     return (

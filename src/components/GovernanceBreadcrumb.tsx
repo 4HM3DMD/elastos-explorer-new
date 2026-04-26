@@ -29,6 +29,11 @@ interface GovernanceBreadcrumbProps {
 }
 
 const GovernanceBreadcrumb = ({ items, className }: GovernanceBreadcrumbProps) => {
+  // Render nothing when called with an empty trail — a lone "Governance"
+  // chip would be redundant chrome on a page that's already at the
+  // governance root, and the page-level Link/back-affordance covers it.
+  if (items.length === 0) return null;
+
   // Always prepend the governance root so callers don't have to.
   const trail: BreadcrumbItem[] = [
     { label: 'Governance', to: '/governance' },

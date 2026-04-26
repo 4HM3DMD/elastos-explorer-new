@@ -37,17 +37,34 @@ function fmtCompact(n: number): string {
   return n.toLocaleString('en-US');
 }
 
+// Detected once at module load. `(hover: hover)` is true on devices
+// with a mouse-like pointer that can sustain hover (desktop/laptop);
+// false on touch-primary devices where every "hover" is synthesized
+// from a tap and behaves erratically. We only bind onMouseEnter /
+// onMouseLeave when this is true so phones don't have hover handlers
+// stealing tap state.
+const SUPPORTS_HOVER =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(hover: hover)').matches;
+
 function InfoTip({ text, children }: { text: string; children?: React.ReactNode }) {
-  // Tooltips were rendering with `absolute` inside cards that carry
-  // `overflow-hidden` for the brand-bar/glow decorations — the popup
-  // appeared but got clipped at the card boundary, so most tips were
-  // invisible. They were also hover-only, which doesn't fire on touch
-  // devices.
+  // History:
+  //   - The original tooltip was hover-only and absolute-positioned
+  //     inside `card overflow-hidden` panels. The popup got clipped
+  //     at the card boundary so most tips were invisible, and touch
+  //     devices had no fallback at all.
+  //   - First fix added a click toggle + portal-to-<body>. Worked on
+  //     desktop, but on mobile the 12x12 svg was below the 44x44
+  //     accessible-tap minimum AND the always-bound onMouseEnter/Leave
+  //     fought the click toggle on touch (synthesized mouse events
+  //     would re-close the tip immediately after tapping it open).
   //
-  // Fix: portal the popup to <body> with `position: fixed` so it
-  // escapes any ancestor clipping, and toggle it on click as well as
-  // hover so phones / tablets can read tips by tapping. The icon
-  // anchor stays inline; only the popup is portaled.
+  // Current shape: portal-to-<body> for clipping, click-only toggle
+  // on touch (the tap-target span gets generous padding so fingers
+  // can land it reliably), hover-to-show retained for true mouse
+  // pointers via `matchMedia('(hover: hover)')`. pointerdown for
+  // outside-dismiss so it fires identically across mouse and touch.
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLSpanElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -72,28 +89,41 @@ function InfoTip({ text, children }: { text: string; children?: React.ReactNode 
     };
   }, [open]);
 
-  // Click-outside dismiss. Bound only while open so the listener
-  // isn't on every page.
+  // Outside-dismiss. `pointerdown` covers both mouse and touch with
+  // identical timing (vs mousedown which is synthesized late on touch
+  // devices and can race the open click).
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (!anchorRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
   }, [open]);
+
+  // Hover handlers ONLY on devices that actually have a hovering
+  // pointer — empty object on touch so the spread below adds nothing.
+  const hoverHandlers = SUPPORTS_HOVER
+    ? {
+        onMouseEnter: () => setOpen(true),
+        onMouseLeave: () => setOpen(false),
+      }
+    : {};
 
   return (
     <>
       <span
         ref={anchorRef}
-        className="relative inline-flex cursor-help"
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
+        // -m-1.5 + p-1.5 = visually unchanged but doubles the
+        // hit-area of the icon to ~24x24 px (still below 44x44 ideal,
+        // but practical given the dense stat-row layout). Without
+        // this the 12x12 svg target was unhittable on a phone.
+        className="relative inline-flex items-center justify-center -m-1.5 p-1.5 cursor-pointer touch-manipulation"
         onClick={(e) => {
           e.stopPropagation();
           setOpen((v) => !v);
         }}
+        {...hoverHandlers}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -104,6 +134,7 @@ function InfoTip({ text, children }: { text: string; children?: React.ReactNode 
           if (e.key === 'Escape') setOpen(false);
         }}
         aria-label={text}
+        aria-expanded={open}
       >
         <svg
           width="12"
@@ -124,11 +155,9 @@ function InfoTip({ text, children }: { text: string; children?: React.ReactNode 
             top: pos.top,
             left: pos.left,
             transform: 'translate(-50%, calc(-100% - 8px))',
-            // Width is set via Tailwind class below; max-width here
-            // protects against hitting the screen edge on phones.
-            maxWidth: 'min(208px, calc(100vw - 24px))',
+            maxWidth: 'min(240px, calc(100vw - 24px))',
           }}
-          className="px-3 py-2 rounded-lg bg-surface-secondary border border-[var(--color-border-strong)] text-[10px] text-secondary z-[100] shadow-lg pointer-events-none w-52"
+          className="px-3 py-2 rounded-lg bg-surface-secondary border border-[var(--color-border-strong)] text-[11px] text-secondary z-[100] shadow-lg pointer-events-none w-60"
         >
           {text}
           {children}

@@ -33,11 +33,16 @@ func (s *Server) getProducers(w http.ResponseWriter, r *http.Request) {
 		       dposv1_votes_sela, dposv2_votes_sela, dposv1_votes_text, dposv2_votes_text,
 		       payload_version, identity, stake_until, last_updated
 		FROM producers`
+	// Tertiary tiebreaker `owner_pubkey ASC` makes the order deterministic
+	// when two producers share both vote totals — without it, pagination
+	// can skip or duplicate rows at the boundary (and rank flickers
+	// between requests). Identical-vote pairs are vanishingly unlikely
+	// today but harmless to guard against.
 	if isAll {
-		query = selectCols + ` ORDER BY dposv2_votes_sela DESC, dposv1_votes_sela DESC LIMIT $1 OFFSET $2`
+		query = selectCols + ` ORDER BY dposv2_votes_sela DESC, dposv1_votes_sela DESC, owner_pubkey ASC LIMIT $1 OFFSET $2`
 		args = []any{pageSize, offset}
 	} else {
-		query = selectCols + ` WHERE state = $1 ORDER BY dposv2_votes_sela DESC, dposv1_votes_sela DESC LIMIT $2 OFFSET $3`
+		query = selectCols + ` WHERE state = $1 ORDER BY dposv2_votes_sela DESC, dposv1_votes_sela DESC, owner_pubkey ASC LIMIT $2 OFFSET $3`
 		args = []any{state, pageSize, offset}
 	}
 
@@ -166,13 +171,17 @@ func (s *Server) getProducerDetail(w http.ResponseWriter, r *http.Request) {
 		regType = "BPoS (legacy)"
 	}
 
-	// Compute rank by counting producers with more votes
+	// Compute rank by counting producers with more votes. Tiebreaker on
+	// owner_pubkey matches the list query's ORDER BY, so detail-page rank
+	// agrees with the rank shown in the validators list.
 	var rank int64
 	if err := s.db.API.QueryRow(r.Context(), `
 		SELECT COUNT(*) + 1 FROM producers
-		WHERE (dposv2_votes_sela > $1 OR (dposv2_votes_sela = $1 AND dposv1_votes_sela > $2))
-		  AND state = 'Active'`,
-		dposv2VotesSela, dposv1VotesSela).Scan(&rank); err != nil {
+		WHERE state = 'Active'
+		  AND (dposv2_votes_sela > $1
+		    OR (dposv2_votes_sela = $1 AND dposv1_votes_sela > $2)
+		    OR (dposv2_votes_sela = $1 AND dposv1_votes_sela = $2 AND owner_pubkey < $3))`,
+		dposv2VotesSela, dposv1VotesSela, ownerPubKey).Scan(&rank); err != nil {
 		rank = 0
 	}
 

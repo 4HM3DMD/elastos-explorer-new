@@ -35,7 +35,7 @@ import type {
   ElectionPhase,
   CRMember,
 } from '../types/blockchain';
-import { CR_STATE_COLORS } from '../types/blockchain';
+import { CR_STATE_COLORS, crStateDisplayLabel } from '../types/blockchain';
 import { Vote, Users, Trophy, Radio, AlertTriangle, ExternalLink } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -631,7 +631,16 @@ export function CouncilMembersTable({
                       <HashDisplay hash={m.did} length={10} showCopyButton={true} isClickable={false} />
                     </td>
                     <td className="align-top">
-                      <span className={cn('badge whitespace-nowrap', stateColor)}>{m.state}</span>
+                      {/* Display "Active" for protocol-Elected; "Inactive"
+                          for offline; etc. Protocol-level "Elected" reads
+                          as past-tense event language to a casual user —
+                          a live council member is more naturally "Active". */}
+                      <span
+                        className={cn('badge whitespace-nowrap', stateColor)}
+                        title={`Chain state: ${m.state}`}
+                      >
+                        {crStateDisplayLabel(m.state)}
+                      </span>
                     </td>
                     <td className="align-top" style={{ textAlign: 'right' }}>
                       <span className="font-mono text-xs text-primary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>

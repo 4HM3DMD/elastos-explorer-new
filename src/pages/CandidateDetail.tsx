@@ -31,7 +31,7 @@ import type {
   CandidateVoter,
   VoterTxHistoryEntry,
 } from '../types/blockchain';
-import { CR_STATE_COLORS } from '../types/blockchain';
+import { CR_STATE_COLORS, crStateDisplayLabel } from '../types/blockchain';
 import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
@@ -495,6 +495,11 @@ function Muted({ children }: { children: React.ReactNode }) {
 // terse and a casual reader can't tell "Returned" means
 // "deposit returned" or that "Inactive" is a node-offline signal —
 // we expand them where it helps without losing the canonical name.
+//
+// "Elected" never reaches this function (it's filtered out at the
+// caller because the term-specific Trophy badge already covers it),
+// but if a future caller passes it, we route through the shared
+// display-label helper so frontend terminology stays consistent.
 function chainStateBadge(state: string): string {
   switch (state) {
     case 'Inactive':  return 'Inactive · node offline';
@@ -504,7 +509,7 @@ function chainStateBadge(state: string): string {
     case 'Returned':  return 'Deposit returned';
     case 'Canceled':  return 'Canceled';
     case 'Terminated':return 'Terminated';
-    default:          return state;
+    default:          return crStateDisplayLabel(state);
   }
 }
 

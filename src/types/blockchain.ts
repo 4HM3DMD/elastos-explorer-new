@@ -1091,3 +1091,34 @@ export const CR_STATE_COLORS: Record<string, string> = {
   Inactive: 'bg-yellow-500/20 text-yellow-400',
   Illegal: 'bg-red-600/20 text-red-500',
 };
+
+/**
+ * User-facing label for a CR member's chain state.
+ *
+ * The Elastos protocol uses "Elected" for a council member who is
+ * currently seated AND has their node online — but to a regular
+ * reader "Elected" sounds like a past-tense event ("they got elected
+ * back in March"), not a live status. The same word is also used in
+ * the term-specific Trophy badge to describe winning an election.
+ *
+ * Translate to "Active" everywhere we render a LIVE state. Election
+ * outcomes (term winners) still use "Elected" since that IS the
+ * past-tense event meaning.
+ *
+ * Keep CR_STATE_COLORS keyed by protocol value so indexer / RPC
+ * payloads don't need re-mapping at the type-system boundary.
+ */
+export function crStateDisplayLabel(state: string): string {
+  switch (state) {
+    case 'Elected':   return 'Active';
+    case 'Inactive':  return 'Inactive';
+    case 'Impeached': return 'Impeached';
+    case 'Illegal':   return 'Illegal';
+    case 'Pending':   return 'Pending';
+    case 'Returned':  return 'Returned';
+    case 'Canceled':  return 'Canceled';
+    case 'Terminated':return 'Terminated';
+    case 'Unknown':   return 'Retired';
+    default:          return state;
+  }
+}

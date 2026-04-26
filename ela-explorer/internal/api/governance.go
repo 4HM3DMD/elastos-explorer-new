@@ -137,7 +137,13 @@ func (s *Server) getCRElections(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		slog.Warn("rows iter failed", "error", err)
 	}
-	writeJSON(w, 200, APIResponse{Data: elections})
+	// Wrap in standard pagination envelope so the response shape matches
+	// every other list endpoint. The full set is small enough today
+	// (one row per CR term, ~6 rows) that we don't actually paginate —
+	// page=1, size=total. Frontend can ignore page/size and just read
+	// Data; downstream callers that expect Total get a meaningful value.
+	total := int64(len(elections))
+	writeJSON(w, 200, APIResponse{Data: elections, Total: total, Page: 1, Size: int(total)})
 }
 
 func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +491,9 @@ func (s *Server) getCRElectionReplayEvents(w http.ResponseWriter, r *http.Reques
 // block heights for an arbitrary term using the same formula the
 // node + aggregator + status endpoint use. Term-agnostic — works
 // for T1, T6, T8, T42 without code changes. See aggregator.go's
-// electionVotingPeriod for the canonical implementation.
+// electionVotingPeriod for the canonical implementation — this MUST
+// stay byte-equivalent to that function or API voter counts will
+// drift from stored tally counts.
 func crElectionWindow(term int64) (narrowStart, narrowEnd, termStart int64) {
 	const crFirstTermStart = int64(658930)
 	const crTermLength = int64(262800)
@@ -493,7 +501,7 @@ func crElectionWindow(term int64) (narrowStart, narrowEnd, termStart int64) {
 	const crClaimPeriod = int64(10080)
 	termStart = crFirstTermStart + (term-1)*crTermLength
 	narrowEnd = termStart - 1 - crClaimPeriod
-	narrowStart = narrowEnd - crVotingPeriod + 1
+	narrowStart = narrowEnd - crVotingPeriod
 	if narrowStart < 0 {
 		narrowStart = 0
 	}
@@ -1879,7 +1887,10 @@ func (s *Server) replayTermTally(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "replay failed: "+err.Error())
 		return
 	}
-	// Return as JSON. Candidates already sorted by votes desc.
+	// Return as JSON. Candidates already sorted by votes desc. We emit
+	// `votesSela` (int64, exact) and let consumers convert to ELA on
+	// their side — the previously-emitted `votesEla` float64 round-trip
+	// loses precision on large balances and no current consumer reads it.
 	candidates := make([]map[string]any, 0, len(result.Candidates))
 	for _, c := range result.Candidates {
 		candidates = append(candidates, map[string]any{
@@ -1888,7 +1899,6 @@ func (s *Server) replayTermTally(w http.ResponseWriter, r *http.Request) {
 			"did":           c.DID,
 			"nickname":      c.Nickname,
 			"votesSela":     c.VotesSela,
-			"votesEla":      float64(c.VotesSela) / 1e8,
 			"voterCount":    c.VoterCount,
 			"elected":       c.Elected,
 			"lastRegHeight": c.LastRegHeight,
@@ -1951,7 +1961,7 @@ func (s *Server) replayValidateTerm(w http.ResponseWriter, r *http.Request) {
 				"rank":       c.Rank,
 				"cid":        c.CID,
 				"nickname":   c.Nickname,
-				"votesEla":   float64(c.VotesSela) / 1e8,
+				"votesSela":  c.VotesSela,
 				"voterCount": c.VoterCount,
 			})
 		}

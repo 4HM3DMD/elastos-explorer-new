@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { getHalvingInfo, MAX_SUPPLY } from '../utils/halvingUtils';
 import { blockchainApi } from '../services/api';
@@ -37,17 +38,104 @@ function fmtCompact(n: number): string {
 }
 
 function InfoTip({ text, children }: { text: string; children?: React.ReactNode }) {
+  // Tooltips were rendering with `absolute` inside cards that carry
+  // `overflow-hidden` for the brand-bar/glow decorations — the popup
+  // appeared but got clipped at the card boundary, so most tips were
+  // invisible. They were also hover-only, which doesn't fire on touch
+  // devices.
+  //
+  // Fix: portal the popup to <body> with `position: fixed` so it
+  // escapes any ancestor clipping, and toggle it on click as well as
+  // hover so phones / tablets can read tips by tapping. The icon
+  // anchor stays inline; only the popup is portaled.
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  // Recompute anchor position whenever the tip opens, and again on
+  // scroll / resize while open. The popup is fixed to viewport
+  // coordinates, so any layout shift would otherwise leave it hanging
+  // in the wrong spot.
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setPos({ top: r.top, left: r.left + r.width / 2 });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open]);
+
+  // Click-outside dismiss. Bound only while open so the listener
+  // isn't on every page.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!anchorRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
   return (
-    <span className="relative group cursor-help">
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="text-muted opacity-50 group-hover:opacity-80 transition-opacity">
-        <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M8 7v4M8 5.5v-.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      </svg>
-      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-3 py-2 rounded-lg bg-surface-secondary border border-[var(--color-border-strong)] text-[10px] text-secondary opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity z-10 w-52 shadow-lg">
-        {text}
-        {children}
+    <>
+      <span
+        ref={anchorRef}
+        className="relative inline-flex cursor-help"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+          if (e.key === 'Escape') setOpen(false);
+        }}
+        aria-label={text}
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 16 16"
+          fill="none"
+          className={`text-muted transition-opacity ${open ? 'opacity-90' : 'opacity-50 hover:opacity-80'}`}
+        >
+          <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M8 7v4M8 5.5v-.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </span>
-    </span>
+      {open && createPortal(
+        <span
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            top: pos.top,
+            left: pos.left,
+            transform: 'translate(-50%, calc(-100% - 8px))',
+            // Width is set via Tailwind class below; max-width here
+            // protects against hitting the screen edge on phones.
+            maxWidth: 'min(208px, calc(100vw - 24px))',
+          }}
+          className="px-3 py-2 rounded-lg bg-surface-secondary border border-[var(--color-border-strong)] text-[10px] text-secondary z-[100] shadow-lg pointer-events-none w-52"
+        >
+          {text}
+          {children}
+        </span>,
+        document.body,
+      )}
+    </>
   );
 }
 

@@ -92,12 +92,24 @@ const Home = () => {
       }),
     ];
 
-    const refreshInterval = setInterval(fetchData, 30000);
+    // Skip the 30s refresh tick when the tab is hidden — there's
+    // nothing to render and the WS subscription will catch up the
+    // moment the user returns. The visibilitychange listener also
+    // re-fetches once on tab-show so the page never sits stale.
+    const refreshInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchData();
+    }, 30000);
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       ids.forEach(id => webSocketService.unsubscribe(id));
       webSocketService.unregisterConnection();
       clearInterval(refreshInterval);
+      document.removeEventListener('visibilitychange', onVisible);
       if (newBlockTimerRef.current) clearTimeout(newBlockTimerRef.current);
     };
   }, [fetchData]);

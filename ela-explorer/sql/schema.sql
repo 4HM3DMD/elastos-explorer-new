@@ -143,6 +143,12 @@ CREATE TABLE IF NOT EXISTS address_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_addrtx_addr_height ON address_transactions (address, height DESC);
 CREATE INDEX IF NOT EXISTS idx_addrtx_height ON address_transactions (height);
+-- The address page sums value_sela GROUP BY direction to compute the
+-- displayed Total Received / Total Sent (the gross numbers stored in
+-- address_balances are inflated by change-output / self-transfer
+-- volume). Without this index the SUM full-scans every tx row for the
+-- address — fine for new wallets but expensive for high-activity ones.
+CREATE INDEX IF NOT EXISTS idx_addrtx_addr_direction ON address_transactions (address, direction);
 
 CREATE TABLE IF NOT EXISTS address_tx_counts (
     address         VARCHAR(34) PRIMARY KEY,
@@ -259,6 +265,11 @@ CREATE TABLE IF NOT EXISTS cr_members (
     last_updated    BIGINT      NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cr_members_did ON cr_members (did) WHERE did != '';
+-- deposit_address lookup is hit on every /address/{addr}/cr-votes call
+-- to determine whether the address belongs to a council member (and
+-- therefore whether to surface their proposal-review record). Without
+-- this index, the lookup full-scans cr_members on every page load.
+CREATE INDEX IF NOT EXISTS idx_cr_members_deposit_address ON cr_members (deposit_address) WHERE deposit_address != '';
 
 CREATE TABLE IF NOT EXISTS cr_proposals (
     proposal_hash   CHAR(64)    PRIMARY KEY,

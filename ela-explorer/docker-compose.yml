@@ -43,8 +43,13 @@ services:
       # Reference RPCs for cross-checking chain height / block hashes
       REFERENCE_RPC_URLS: "https://rpc.elastos.info/ela,https://api.elastos.io/ela"
 
-      # Server
-      LISTEN_ADDR: ":8339"
+      # Server. Bound to LOOPBACK so the API is unreachable from the
+      # public internet — nginx is the only ingress and it proxies to
+      # 127.0.0.1:8339. Without this clamp the binary listens on
+      # 0.0.0.0 (because network_mode: host inherits the host's network
+      # namespace), and the endpoint can be hit directly, bypassing
+      # nginx caching, rate-limit, and any future WAF / TLS termination.
+      LISTEN_ADDR: "127.0.0.1:8339"
       CORS_ORIGINS: "https://explorer.elastos.io,https://explorer.elastos.net"
 
       # Performance (tuned for 32-core / 128GB)

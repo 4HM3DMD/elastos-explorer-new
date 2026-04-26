@@ -38,16 +38,38 @@ const Mempool = () => {
 
   useEffect(() => {
     fetchMempool();
-    intervalRef.current = setInterval(() => fetchMempool(true), AUTO_REFRESH_INTERVAL_MS);
+    // Skip the auto-refresh tick when the tab is hidden — there's
+    // nobody to see the new data, and the wakeup just burns battery
+    // and bandwidth on a backgrounded mobile tab. The next time the
+    // tab is shown, the visibility-change effect below kicks off a
+    // fresh fetch so the data isn't stale.
+    intervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchMempool(true);
+    }, AUTO_REFRESH_INTERVAL_MS);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [fetchMempool]);
+
+  // Refresh immediately when the user comes back to the tab so the
+  // numbers aren't N minutes stale from the previous visit.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchMempool(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [fetchMempool]);
 
   useEffect(() => {
     if (lastUpdated == null) return;
     setSecondsAgo(0);
+    // Tick every 5s instead of 1s. Humans can't perceive the
+    // difference for an "Updated Xs ago" counter, but 1s ticks
+    // forced 60 component re-renders per minute on every device
+    // (battery drain on mobile).
     const tick = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
       setSecondsAgo(Math.round((Date.now() - lastUpdated) / 1000));
-    }, 1000);
+    }, 5000);
     return () => clearInterval(tick);
   }, [lastUpdated]);
 

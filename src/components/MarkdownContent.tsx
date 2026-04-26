@@ -37,10 +37,36 @@ function rewriteImagePaths(md: string, draftHash?: string): string {
  * For mixed content (markdown images + HTML), convert markdown image syntax
  * to HTML <img> tags so the entire content can be rendered as sanitized HTML.
  */
+// Validate image URLs BEFORE inserting them into raw HTML so DOMPurify
+// has less work to do and we don't rely on it as the only line of
+// defense against `javascript:` / `data:` href injection. Allows
+// http(s):// (absolute), //host (protocol-relative), /path (root),
+// and bare relative paths. Strips quotes / angle brackets that could
+// break out of the attribute. Returns empty string on rejection so
+// the resulting <img> renders nothing rather than a broken link.
+function safeImageSrc(src: string): string {
+  const s = src.trim();
+  if (!s) return '';
+  // Reject anything that opens an attribute escape, contains a quote,
+  // or looks like a non-http(s) protocol scheme.
+  if (/["'<>\s]/.test(s)) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) {
+    // Has a scheme — only http: and https: are acceptable.
+    if (!/^https?:/i.test(s)) return '';
+  }
+  return s;
+}
+
 function mdImagesToHtml(text: string): string {
   return text.replace(
     /!\[([^\]]*)\]\(([^)]+)\)/g,
-    (_match, alt, src) => `<img src="${src}" alt="${alt}" loading="lazy" />`
+    (_match, alt, src) => {
+      const safeSrc = safeImageSrc(src);
+      // Strip quotes from alt too — same attribute-escape concern.
+      const safeAlt = String(alt).replace(/["'<>]/g, '');
+      if (!safeSrc) return ''; // drop the image entirely if URL fails the gate
+      return `<img src="${safeSrc}" alt="${safeAlt}" loading="lazy" />`;
+    }
   );
 }
 

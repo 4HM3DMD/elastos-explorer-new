@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Server) getCRMembers(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +143,21 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 60s server-side cache. Per-term election results don't change
+	// between vote events, so the same payload is served to every
+	// visitor for the cache window. The frontend re-fetches cheaply
+	// on navigation; this absorbs the T7-launch traffic spike where
+	// every visitor lands on the current term page in the same
+	// minute. Cache key includes the term so each term has its own
+	// entry; entries auto-evict via the shared TTLCache.
+	cacheKey := fmt.Sprintf("crElection:%d", term)
+	if cached, ok := s.cache.Get(cacheKey); ok {
+		if resp, ok := cached.(map[string]any); ok {
+			writeJSON(w, 200, APIResponse{Data: resp})
+			return
+		}
+	}
+
 	// Filter to actual term-N participants: candidates who received
 	// votes during this term's voting window OR who were elected.
 	// Without this filter, prior-term candidates whose registration
@@ -240,14 +257,16 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		// data still 404 — that's a real data gap, not a UX state.
 		const futureTermSlack = 262_800
 		if chainHeight > 0 && chainHeight < termStart && termStart-chainHeight <= futureTermSlack {
-			writeJSON(w, 200, APIResponse{Data: map[string]any{
+			emptyResp := map[string]any{
 				"term":              term,
 				"votingStartHeight": ns,
 				"votingEndHeight":   ne,
 				"legacyEra":         false,
 				"uniqueVoterCount":  0,
 				"candidates":        []map[string]any{},
-			}})
+			}
+			s.cache.Set(cacheKey, emptyResp)
+			writeJSON(w, 200, APIResponse{Data: emptyResp})
 			return
 		}
 		writeError(w, 404, "no election data for this term")
@@ -278,14 +297,16 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			narrowStart, narrowEnd).Scan(&uniqueVoterCount)
 	}
 
-	writeJSON(w, 200, APIResponse{Data: map[string]any{
+	resp := map[string]any{
 		"term":              term,
 		"votingStartHeight": firstVotingStart,
 		"votingEndHeight":   firstVotingEnd,
 		"legacyEra":         term <= 3,
 		"uniqueVoterCount":  uniqueVoterCount,
 		"candidates":        results,
-	}})
+	}
+	s.cache.Set(cacheKey, resp)
+	writeJSON(w, 200, APIResponse{Data: resp})
 }
 
 // getCRElectionReplayEvents returns the raw vote events for a term's
@@ -730,7 +751,14 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 		Txid      string `json:"txid"`
 	}
 	impeachments := []impeachRow{}
-	if err == nil {
+	if err != nil {
+		// Don't silently return zero impeachments — surface the failure
+		// at WARN so the operator sees data-loss rather than a blank
+		// section. Response still succeeds with the elections data we
+		// already gathered above.
+		slog.Warn("getAddressGovernanceSummary: impeachment query failed",
+			"address", address, "error", err)
+	} else {
 		defer impeachRows.Close()
 		for impeachRows.Next() {
 			var ir impeachRow
@@ -741,6 +769,10 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 			ir.AmountEla = selaToELA(amountSela)
 			ir.Txid = strings.TrimSpace(ir.Txid)
 			impeachments = append(impeachments, ir)
+		}
+		if err := impeachRows.Err(); err != nil {
+			slog.Warn("getAddressGovernanceSummary: impeachment iter failed",
+				"address", address, "error", err)
 		}
 	}
 
@@ -758,8 +790,15 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 	}
 	reviews := []reviewRow{}
 	var memberDID string
-	_ = s.db.API.QueryRow(r.Context(),
-		`SELECT did FROM cr_members WHERE deposit_address = $1 LIMIT 1`, address).Scan(&memberDID)
+	// Treat ErrNoRows as the expected "this address isn't a council
+	// member" case (most addresses). Any OTHER error is unexpected
+	// and worth surfacing at WARN so we don't silently miss reviews
+	// for actual council members on a transient failure.
+	if err := s.db.API.QueryRow(r.Context(),
+		`SELECT did FROM cr_members WHERE deposit_address = $1 LIMIT 1`, address).Scan(&memberDID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		slog.Warn("getAddressGovernanceSummary: deposit_address lookup failed",
+			"address", address, "error", err)
+	}
 	if memberDID != "" {
 		reviewRows, err := s.db.API.Query(r.Context(), `
 			SELECT pr.proposal_hash,
@@ -770,7 +809,10 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 			WHERE pr.did = $1
 			ORDER BY pr.review_height DESC
 			LIMIT 50`, memberDID)
-		if err == nil {
+		if err != nil {
+			slog.Warn("getAddressGovernanceSummary: reviews query failed",
+				"address", address, "did", memberDID, "error", err)
+		} else {
 			defer reviewRows.Close()
 			for reviewRows.Next() {
 				var rr reviewRow
@@ -779,6 +821,10 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 				}
 				rr.Txid = strings.TrimSpace(rr.Txid)
 				reviews = append(reviews, rr)
+			}
+			if err := reviewRows.Err(); err != nil {
+				slog.Warn("getAddressGovernanceSummary: reviews iter failed",
+					"address", address, "did", memberDID, "error", err)
 			}
 		}
 	}

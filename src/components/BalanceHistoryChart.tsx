@@ -81,18 +81,22 @@ const BalanceHistoryChart = ({ address }: Props) => {
   // Per-tx mode walks backwards from the current balance, subtracting
   // receives and adding sends so each tx row lines up with the balance
   // AT that tx. Truncates to MAX_TX_FETCH to keep the walk bounded on
-  // very active addresses.
-  const fetchTxHistory = useCallback(async () => {
+  // very active addresses. The pagination loop can take seconds on
+  // high-activity addresses, so we honour an AbortSignal-style
+  // cancellation flag to skip state updates if the address changes
+  // (or the component unmounts) mid-walk.
+  const fetchTxHistory = useCallback(async (signal: { cancelled: boolean }) => {
     setTxLoading(true);
     try {
       const first = await blockchainApi.getAddress(address, 1, 100);
-      if (!first) return;
+      if (signal.cancelled || !first) return;
       const currentBal = parseFloat(first.balance) || 0;
       const total = first.txCount || 0;
       let txs = [...(first.transactions || [])];
       const pages = Math.ceil(Math.min(total, MAX_TX_FETCH) / 100);
       for (let p = 2; p <= pages; p++) {
         const more = await blockchainApi.getAddress(address, p, 100);
+        if (signal.cancelled) return;
         txs = txs.concat(more?.transactions || []);
       }
       setTxTruncated(total > MAX_TX_FETCH);
@@ -121,17 +125,20 @@ const BalanceHistoryChart = ({ address }: Props) => {
           direction: tx.direction,
         };
       });
-      setTxChartData(points);
+      if (!signal.cancelled) setTxChartData(points);
     } catch {
       // Silently fail — daily mode still works, and we don't want a
       // hidden chart failure to cascade into a user-facing error.
     } finally {
-      setTxLoading(false);
+      if (!signal.cancelled) setTxLoading(false);
     }
   }, [address]);
 
   useEffect(() => {
-    if (txMode && txChartData.length === 0) fetchTxHistory();
+    if (!txMode || txChartData.length > 0) return;
+    const signal = { cancelled: false };
+    fetchTxHistory(signal);
+    return () => { signal.cancelled = true; };
   }, [txMode, txChartData.length, fetchTxHistory]);
 
   const handleSelectPreset = useCallback((d: number) => {

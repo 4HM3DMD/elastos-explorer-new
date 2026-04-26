@@ -8,7 +8,7 @@ import Pagination from './Pagination';
 import StakeBar from './StakeBar';
 import StatCard from './StatCard';
 import RelativeTime from './RelativeTime';
-import { formatEla } from '../utils/format';
+import { fmtEla } from '../utils/format';
 import { getTermFromHeight, getElectionTargetTerm } from '../constants/governance';
 import { cn } from '../lib/cn';
 
@@ -99,7 +99,7 @@ const VoteHistoryTimeline = ({ address }: Props) => {
   }, [fetchVotes, isStakeAddress, staking]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const fmtELA = (v: string | undefined) => formatEla(v ?? '0');
+  const fmtELA = (v: string | undefined) => fmtEla(v ?? '0', { minDecimals: 2 });
 
   // Truncate a stake address for inline display. Matches the
   // truncHash style used elsewhere on the page (first 10 chars …

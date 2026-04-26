@@ -233,7 +233,13 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	if len(results) == 0 {
 		ns, ne, termStart := crElectionWindow(int64(term))
 		chainHeight := s.syncer.LastHeight()
-		if chainHeight > 0 && chainHeight < termStart {
+		// Accept "future term" only if it's within ~1 year of the
+		// current chain tip (one CRTermLength = 262800 blocks).
+		// Without this bound, /cr/elections/9999 would happily return
+		// a fake voting window centuries from now. Past terms with no
+		// data still 404 — that's a real data gap, not a UX state.
+		const futureTermSlack = 262_800
+		if chainHeight > 0 && chainHeight < termStart && termStart-chainHeight <= futureTermSlack {
 			writeJSON(w, 200, APIResponse{Data: map[string]any{
 				"term":              term,
 				"votingStartHeight": ns,

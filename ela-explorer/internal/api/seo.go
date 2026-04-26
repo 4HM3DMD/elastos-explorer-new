@@ -187,12 +187,20 @@ func lookupTx(s *Server, ctx context.Context, matches []string) seoMeta {
 
 func lookupAddress(s *Server, ctx context.Context, matches []string) seoMeta {
 	addr := matches[1]
-	var balance float64
+	var balanceSela int64
 	var txCount int64
 
-	err := s.db.API.QueryRow(ctx,
-		`SELECT COALESCE(balance, 0), COALESCE(tx_count, 0) FROM addresses WHERE address = $1`, addr,
-	).Scan(&balance, &txCount)
+	// Real table is `address_balances`, balance column is `balance_sela`
+	// (int64 sela, not float ELA). Tx count lives in `address_tx_counts`,
+	// joined here so a single query gives us both. The previous version
+	// queried a non-existent `addresses` table and silently fell through
+	// to the generic fallback on every address-page social share.
+	err := s.db.API.QueryRow(ctx, `
+		SELECT COALESCE(ab.balance_sela, 0), COALESCE(tc.tx_count, 0)
+		FROM address_balances ab
+		LEFT JOIN address_tx_counts tc ON tc.address = ab.address
+		WHERE ab.address = $1`, addr,
+	).Scan(&balanceSela, &txCount)
 	if err != nil {
 		short := addr
 		if len(addr) > 16 {
@@ -205,7 +213,7 @@ func lookupAddress(s *Server, ctx context.Context, matches []string) seoMeta {
 	if len(addr) > 16 {
 		short = addr[:10] + "..." + addr[len(addr)-6:]
 	}
-	balStr := fmt.Sprintf("%.4f", balance/1e8)
+	balStr := fmt.Sprintf("%.4f", float64(balanceSela)/1e8)
 	title := fmt.Sprintf("Address %s", short)
 	desc := fmt.Sprintf("Elastos (ELA) address %s with balance %s ELA. %d transactions.", short, balStr, txCount)
 	return seoMeta{Title: title, Desc: desc}

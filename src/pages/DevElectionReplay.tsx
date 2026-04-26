@@ -37,6 +37,7 @@ import type {
   ElectionReplayEvent,
 } from '../types/blockchain';
 import { CouncilMembersTable, CandidatesList, StatusHero } from './Elections';
+import HowToVoteCard from '../components/HowToVoteCard';
 import SEO from '../components/SEO';
 import { cn } from '../lib/cn';
 
@@ -650,6 +651,12 @@ const DevElectionReplay = () => {
 
       {/* Hero — same component as production */}
       {!loading && <StatusHero status={status} targetCandidateCount={targetCandidateCount} />}
+
+      {/* How-to-vote chip — same component as production. Renders
+          the collapsible "Cast your vote" / "Voting opens soon" /
+          "Get ready to vote" panel depending on the simulated phase,
+          so we can preview each variant by scrubbing the timeline. */}
+      {!loading && <HowToVoteCard status={status} />}
 
       {/* Body — same components as production, swapped by phase */}
       {!loading && phase === 'voting' && (

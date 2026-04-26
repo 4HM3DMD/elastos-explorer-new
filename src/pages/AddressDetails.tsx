@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
-import type { AddressInfo, AddressTransaction } from '../types/blockchain';
+import type { AddressInfo, AddressGovernanceSummary, AddressTransaction } from '../types/blockchain';
 import {
   ArrowUpRight, ArrowDownLeft, Activity, TrendingUp,
   TrendingDown, Clock, Lock, Coins, Info, QrCode,
@@ -53,11 +53,22 @@ const AddressDetails = () => {
   const [info, setInfo] = useState<AddressInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
   const [qrOpen, setQrOpen] = useState(false);
+  // Council membership is fetched separately so the identity badge
+  // ("Council Member · Jon Hargreaves") can render at the top of the
+  // page on initial load. Without this, the user would have to click
+  // into the Governance tab to discover the address belongs to a
+  // sitting council member — a major affordance gap reported by the
+  // UI audit.
+  const [govSummary, setGovSummary] = useState<AddressGovernanceSummary | null>(null);
   const pageSize = 20;
 
   const rawTab = searchParams.get('tab') as TabId | null;
+  // URL is the source of truth for tx-list pagination so refresh + back
+  // restore the user's position. Tab + page coexist in the same query
+  // string. Invalid pages fall back to 1 silently.
+  const pageRaw = parseInt(searchParams.get('page') || '1', 10);
+  const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
   // Network aggregates (pools, reward-distribution accounts) live in
   // SYSTEM_AGGREGATE_ADDRESSES — single source of truth in
   // `constants/addressLabels.ts`. Hide staking / governance tabs for
@@ -85,8 +96,17 @@ const AddressDetails = () => {
   })();
 
   const setActiveTab = useCallback((tab: TabId) => {
+    // Switching tab resets pagination — page numbers don't transfer
+    // between tabs (Overview tx list vs Staking, etc.).
     setSearchParams(tab === 'overview' ? {} : { tab }, { replace: true });
   }, [setSearchParams]);
+
+  const goPage = useCallback((nextPage: number) => {
+    const params: Record<string, string> = {};
+    if (rawTab) params.tab = rawTab;
+    if (nextPage !== 1) params.page = String(nextPage);
+    setSearchParams(params, { replace: true });
+  }, [rawTab, setSearchParams]);
 
   const fetchAddress = useCallback(async (p: number) => {
     if (!address) { setLoading(false); setError('Invalid address'); return; }
@@ -95,7 +115,6 @@ const AddressDetails = () => {
     try {
       const data = await blockchainApi.getAddress(address, p, pageSize);
       setInfo(data);
-      setPage(p);
     } catch {
       setError('Address not found');
     } finally {
@@ -103,7 +122,20 @@ const AddressDetails = () => {
     }
   }, [address]);
 
-  useEffect(() => { fetchAddress(1); }, [fetchAddress]);
+  useEffect(() => { fetchAddress(page); }, [fetchAddress, page]);
+
+  // Independent governance lookup. Runs once per address — failures
+  // are silent (the page is fully usable without the badge, and most
+  // addresses aren't council members so a 404-ish empty response is
+  // the common case).
+  useEffect(() => {
+    if (!address) return;
+    let cancelled = false;
+    blockchainApi.getAddressGovernanceSummary(address)
+      .then(s => { if (!cancelled) setGovSummary(s); })
+      .catch(() => { /* non-critical: identity badge just won't render */ });
+    return () => { cancelled = true; };
+  }, [address]);
 
   const fmtELA = (v: string | undefined) => formatEla(v ?? '0');
   const totalPages = info ? Math.max(1, Math.ceil(info.txCount / pageSize)) : 1;
@@ -114,7 +146,7 @@ const AddressDetails = () => {
     return (
       <div className="px-4 lg:px-6 py-8 text-center">
         <p className="text-accent-red mb-4">{error || 'Address not found'}</p>
-        <button onClick={() => fetchAddress(1)} className="btn-primary">Retry</button>
+        <button onClick={() => goPage(1)} className="btn-primary">Retry</button>
       </div>
     );
   }
@@ -135,11 +167,28 @@ const AddressDetails = () => {
       <div className="space-y-3">
         <div className="flex items-center gap-3">
           <AddressAvatar address={info.address} size={40} />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h1 className="text-base md:text-lg font-medium text-primary tracking-[0.04em] truncate">{title}</h1>
-            {displayCategory && (
-              <span className="text-[11px] text-muted">{displayCategory}</span>
-            )}
+            <div className="flex items-center gap-2 flex-wrap mt-0.5">
+              {displayCategory && (
+                <span className="text-[11px] text-muted">{displayCategory}</span>
+              )}
+              {/* Council-member badge — surfaces the role on initial
+                  page load instead of being buried in the Governance
+                  tab. Clickable through to the candidate profile so
+                  users can see term history, votes, proposal reviews
+                  in one hop. */}
+              {govSummary?.councilDid && (
+                <Link
+                  to={`/governance/candidate/${govSummary.councilCid || govSummary.councilDid}`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-brand/15 text-brand hover:bg-brand/25 transition-colors"
+                  title="View council member profile"
+                >
+                  <Landmark size={10} />
+                  Council Member{govSummary.councilNickname ? ` · ${govSummary.councilNickname}` : ''}
+                </Link>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -212,7 +261,7 @@ const AddressDetails = () => {
           page={page}
           totalPages={totalPages}
           fmtELA={fmtELA}
-          fetchAddress={fetchAddress}
+          goPage={goPage}
         />
       )}
       {activeTab === 'balance' && address && (
@@ -241,10 +290,10 @@ interface OverviewTabProps {
   page: number;
   totalPages: number;
   fmtELA: (v: string | undefined) => string;
-  fetchAddress: (p: number) => Promise<void>;
+  goPage: (p: number) => void;
 }
 
-function OverviewTab({ info, page, totalPages, fmtELA, fetchAddress }: OverviewTabProps) {
+function OverviewTab({ info, page, totalPages, fmtELA, goPage }: OverviewTabProps) {
   const [utxoOpen, setUtxoOpen] = useState(false);
   const utxoCount = info.utxos?.length ?? 0;
 
@@ -312,7 +361,7 @@ function OverviewTab({ info, page, totalPages, fmtELA, fetchAddress }: OverviewT
         </div>
 
         {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} total={info.txCount} label="transactions" onPageChange={(p) => { if (p >= 1 && p <= totalPages) fetchAddress(p); }} />
+          <Pagination page={page} totalPages={totalPages} total={info.txCount} label="transactions" onPageChange={(p) => { if (p >= 1 && p <= totalPages) goPage(p); }} />
         )}
       </div>
 

@@ -859,13 +859,19 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 		Txid         string `json:"txid"`
 	}
 	reviews := []reviewRow{}
-	var memberDID string
+	var memberDID, memberCID, memberNickname string
 	// Treat ErrNoRows as the expected "this address isn't a council
 	// member" case (most addresses). Any OTHER error is unexpected
 	// and worth surfacing at WARN so we don't silently miss reviews
 	// for actual council members on a transient failure.
+	//
+	// We also fetch nickname + CID so the address page can render an
+	// identity badge ("Council Member · Jon Hargreaves") that links
+	// straight to the candidate profile (which is keyed on CID, not
+	// DID). Without these, users have to click into the Governance
+	// tab to discover the address belongs to a sitting council member.
 	if err := s.db.API.QueryRow(r.Context(),
-		`SELECT did FROM cr_members WHERE deposit_address = $1 LIMIT 1`, address).Scan(&memberDID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		`SELECT did, COALESCE(cid, ''), COALESCE(nickname, '') FROM cr_members WHERE deposit_address = $1 LIMIT 1`, address).Scan(&memberDID, &memberCID, &memberNickname); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		slog.Warn("getAddressGovernanceSummary: deposit_address lookup failed",
 			"address", address, "error", err)
 	}
@@ -904,6 +910,8 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 		"impeachments":    impeachments,
 		"proposalReviews": reviews,
 		"councilDid":      memberDID,
+		"councilCid":      memberCID,
+		"councilNickname": memberNickname,
 	}})
 }
 

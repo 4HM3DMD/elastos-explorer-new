@@ -4,6 +4,7 @@
 // owned by the parent controller.
 
 import { useState } from 'react';
+import { ArrowUp, ArrowDown } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { type ChartPoint, fmtBal, fmtBalFull } from './helpers';
 
@@ -48,7 +49,26 @@ export function BalanceTxTable({ entryCount, dailyChanges }: BalanceTxTableProps
                     'py-2 px-4 text-sm font-mono text-right whitespace-nowrap',
                     point.delta > 0 ? 'text-emerald-400' : point.delta < 0 ? 'text-red-400' : 'text-muted',
                   )}>
-                    {point.delta === 0 ? '—' : `${point.delta > 0 ? '+' : ''}${fmtBal(point.delta)}`}
+                    {/* Direction signalled by an icon AS WELL AS by
+                        colour, so colour-blind users (and anyone in
+                        a high-contrast / inverted-colour viewing
+                        mode) can still tell positive from negative.
+                        The `+`/`−` prefix already helped, but the
+                        arrow makes it scannable at a glance. */}
+                    {point.delta === 0 ? (
+                      '—'
+                    ) : (
+                      <span className="inline-flex items-center justify-end gap-1">
+                        {point.delta > 0 ? (
+                          <ArrowUp size={12} aria-hidden="true" />
+                        ) : (
+                          <ArrowDown size={12} aria-hidden="true" />
+                        )}
+                        <span>
+                          {point.delta > 0 ? '+' : ''}{fmtBal(point.delta)}
+                        </span>
+                      </span>
+                    )}
                   </td>
                   <td className="py-2 px-4">
                     {point.delta !== 0 && (

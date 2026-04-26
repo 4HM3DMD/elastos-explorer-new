@@ -36,7 +36,11 @@ function paginationRange(current: number, total: number): (number | '...')[] {
 const Pagination = ({ page, totalPages, total, label = 'items', onPageChange }: PaginationProps) => {
   if (totalPages <= 1) return null;
 
-  const btnBase = 'p-1.5 rounded-lg transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed';
+  // Tap target ~36px (was ~28px). Below the 44×44 ideal but
+  // significantly more comfortable on phones than the previous tight
+  // padding. Going to a full 44px would visibly chunk the desktop UI;
+  // 36 + the focus ring give a usable target without that.
+  const btnBase = 'inline-flex items-center justify-center min-w-[36px] min-h-[36px] p-2 rounded-lg transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed';
 
   return (
     <div className="px-4 py-3 border-t border-[var(--color-border)] flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -69,10 +73,14 @@ const Pagination = ({ page, totalPages, total, label = 'items', onPageChange }: 
               onClick={() => onPageChange(p as number)}
               aria-current={p === page ? 'page' : undefined}
               className={cn(
-                'px-3 py-1 rounded-lg text-sm font-medium transition-all duration-200',
+                // Match the chevron button minimums so the row reads
+                // as a uniform tap-strip on phones. Active page uses
+                // brand fill (was bg-white text-black, which was the
+                // one rogue light-on-dark combo in the dark theme).
+                'inline-flex items-center justify-center min-w-[36px] min-h-[36px] px-3 rounded-lg text-sm font-medium transition-all duration-200',
                 p === page
-                  ? 'bg-white text-black'
-                  : 'text-secondary hover:text-primary hover:bg-hover'
+                  ? 'bg-brand text-white'
+                  : 'text-secondary hover:text-primary hover:bg-hover',
               )}
             >
               {p}

@@ -96,7 +96,11 @@ const HashDisplay: React.FC<HashDisplayProps> = ({
       {showCopyButton && (
         <button
           onClick={handleCopy}
-          className="p-1 rounded-md hover:bg-hover transition-colors"
+          // Negative-margin + larger padding doubles the hit-area
+          // (~28×28 px) without changing the visual size of the icon.
+          // Same trick InfoTip uses; matters in dense table rows
+          // where the bare 13×13 icon was unhittable on phones.
+          className="-m-1 p-2 rounded-md hover:bg-hover transition-colors inline-flex items-center justify-center"
           title={copied ? 'Copied!' : 'Copy to clipboard'}
           aria-label={copied ? 'Copied' : 'Copy hash to clipboard'}
         >

@@ -215,7 +215,35 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, r)
 	}
+	// Empty candidate list: distinguish a future / live-voting term
+	// (no rows yet, but the URL is valid — render "voting open, no
+	// candidates seen yet") from a past term with missing data.
+	//
+	// Heuristic: peek at the chain tip via getbestblockhash. If the
+	// term's on-duty start (termStart) is in the FUTURE — i.e. voting
+	// hasn't even theoretically opened yet, or has just opened and no
+	// vote has landed — return 200 with an empty candidates array.
+	// Otherwise the term is past and a missing tally is a real data
+	// gap → 404.
+	//
+	// Without this, the moment T7 voting opens (May 3 2026) the
+	// Elections page would hit this endpoint, get 404, and render "no
+	// election data for this term" until the very first TxVoting
+	// lands and the aggregator populates a row.
 	if len(results) == 0 {
+		ns, ne, termStart := crElectionWindow(int64(term))
+		chainHeight := s.syncer.LastHeight()
+		if chainHeight > 0 && chainHeight < termStart {
+			writeJSON(w, 200, APIResponse{Data: map[string]any{
+				"term":              term,
+				"votingStartHeight": ns,
+				"votingEndHeight":   ne,
+				"legacyEra":         false,
+				"uniqueVoterCount":  0,
+				"candidates":        []map[string]any{},
+			}})
+			return
+		}
 		writeError(w, 404, "no election data for this term")
 		return
 	}
@@ -722,6 +750,20 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// `cr_members.last_updated` is dual-purpose: tx_processor stores
+	// the registration block height; the aggregator overwrites with
+	// `EXTRACT(EPOCH FROM NOW())` on every CR refresh. Block heights
+	// are < 1e9; Unix epochs are >= 1e9. Surface `lastUpdatedKind` so
+	// the frontend doesn't have to re-derive the heuristic — and so a
+	// future consumer can tell at a glance whether the value is a
+	// height or a timestamp.
+	lastUpdatedKind := "epoch"
+	if lastUpdated > 0 && lastUpdated < 1_000_000_000 {
+		lastUpdatedKind = "block"
+	} else if lastUpdated <= 0 {
+		lastUpdatedKind = "unknown"
+	}
+
 	member := map[string]any{
 		"cid":              cid,
 		"did":              did,
@@ -736,6 +778,7 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 		"penalty":          selaToELA(penalty),
 		"registerHeight":   registerHeight,
 		"lastUpdated":      lastUpdated,
+		"lastUpdatedKind":  lastUpdatedKind,
 		"location":         location,
 	}
 	if claimedNode != nil && *claimedNode != "" {

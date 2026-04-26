@@ -17,7 +17,7 @@ import { formatEla } from '../utils/format';
 import { getTypeLabel, getTypeInfo, getTypeIconName } from '../utils/txTypeHelper';
 import { TxTypeIcon } from '../components/TxTypeIcon';
 import { cn } from '../lib/cn';
-import { getAddressInfo } from '../constants/addressLabels';
+import { getAddressInfo, isSystemAggregateAddress } from '../constants/addressLabels';
 import SEO from '../components/SEO';
 import { truncateHash } from '../utils/seo';
 
@@ -58,17 +58,11 @@ const AddressDetails = () => {
   const pageSize = 20;
 
   const rawTab = searchParams.get('tab') as TabId | null;
-  // Network aggregates — pools and reward-distribution accounts. These
-  // are system identities, not user wallets, so they can't stake or
-  // vote and their Staking / Governance tabs should disappear entirely
-  // (not render empty-zero panels that confuse people into thinking
-  // the pool itself is a staker).
-  const SYSTEM_S_ADDRESSES = new Set([
-    'STAKEPooLXXXXXXXXXXXXXXXXXXXpP1PQ2',
-    'STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU',
-    'STAKEREWARDXXXXXXXXXXXXXXXXXTw4VB4',
-  ]);
-  const isSystemAddress = address != null && SYSTEM_S_ADDRESSES.has(address);
+  // Network aggregates (pools, reward-distribution accounts) live in
+  // SYSTEM_AGGREGATE_ADDRESSES — single source of truth in
+  // `constants/addressLabels.ts`. Hide staking / governance tabs for
+  // them so users aren't shown empty zero-state panels.
+  const isSystemAddress = isSystemAggregateAddress(address);
   const isStakeAddress = (address?.startsWith('S') && !isSystemAddress) ?? false;
 
   const visibleTabs = TABS.filter(t => {

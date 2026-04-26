@@ -552,6 +552,14 @@ export interface CandidateProfileMember {
   penalty: string;
   registerHeight: number;
   lastUpdated: number;
+  /**
+   * Discriminator for the dual-purpose `lastUpdated` value. The indexer
+   * writes block heights from tx_processor and Unix epochs from the
+   * aggregator into the same column; the backend tags whichever it is
+   * so the frontend doesn't have to guess. "unknown" means the row
+   * never received either write (post-reorg reset).
+   */
+  lastUpdatedKind?: 'epoch' | 'block' | 'unknown';
   location: number;
 }
 

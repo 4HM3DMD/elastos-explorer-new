@@ -11,6 +11,7 @@ import {
 import HashDisplay from '../components/HashDisplay';
 import MarkdownContent from '../components/MarkdownContent';
 import AddressAvatar from '../components/AddressAvatar';
+import GovernanceBreadcrumb from '../components/GovernanceBreadcrumb';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import { fmtEla, fmtElaSmart, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
@@ -582,6 +583,12 @@ const ProposalDetail = () => {
         title={proposal ? (proposal.title || `Proposal #${proposal.proposalNumber ?? ''}`) : 'Proposal Details'}
         description={proposal ? `DAO proposal on Elastos: ${proposal.title || 'Untitled'}. Status: ${proposal.status}. ${proposal.voteCount} support, ${proposal.rejectCount} reject.` : 'DAO proposal details on the Elastos network.'}
         path={`/governance/proposal/${hash}`}
+      />
+      <GovernanceBreadcrumb
+        items={[
+          { label: 'Proposals', to: '/governance/proposals' },
+          { label: proposal?.title || `Proposal #${proposal?.proposalNumber ?? ''}` },
+        ]}
       />
       {/* Page header card */}
       <div className="card relative overflow-hidden p-4 md:p-6">

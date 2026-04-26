@@ -31,6 +31,7 @@ const LABELED_ADDRESSES: Record<string, AddressLabelInfo> = {
   'ELANULLXXXXXXXXXXXXXXXXXXXXXYvs3rr': { label: 'Burn Address', category: 'Network' },
   'STAKEPooLXXXXXXXXXXXXXXXXXXXpP1PQ2': { label: 'Staking Pool', category: 'Network' },
   'STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU': { label: 'Staking Rewards Pool', category: 'Network' },
+  'STAKEREWARDXXXXXXXXXXXXXXXXXTw4VB4': { label: 'Staking Rewards Pool (BPoS)', category: 'Network' },
 
   // Sidechains
   'XVbCTM7vqM1qHKsABSFH4xKN1qbp7ijpWf': { label: 'ESC Sidechain', category: 'Sidechain' },
@@ -117,3 +118,21 @@ export function getCategoryIcon(address: string): LucideIcon | null {
 }
 
 export const BURN_ADDRESS = 'ELANULLXXXXXXXXXXXXXXXXXXXXXYvs3rr';
+
+/**
+ * System-aggregate addresses (network pools, reward distribution
+ * accounts) — these can't stake or vote. Their staking/governance tabs
+ * should be hidden so users aren't shown empty zero-state panels.
+ *
+ * Single source of truth for "is this a pool / reward sink?". Pages
+ * that previously hardcoded the set inline now import this.
+ */
+export const SYSTEM_AGGREGATE_ADDRESSES = new Set<string>([
+  'STAKEPooLXXXXXXXXXXXXXXXXXXXpP1PQ2',
+  'STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU',
+  'STAKEREWARDXXXXXXXXXXXXXXXXXTw4VB4',
+]);
+
+export function isSystemAggregateAddress(address: string | null | undefined): boolean {
+  return address != null && SYSTEM_AGGREGATE_ADDRESSES.has(address);
+}

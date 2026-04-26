@@ -3,18 +3,38 @@ import { Copy, Check } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { copyToClipboard } from '../utils/clipboard';
 
+/**
+ * Documented length presets. Use `size` instead of raw `length` so
+ * choices are consistent across the codebase. Falls through to
+ * `length` if a preset doesn't fit (we keep `length` for legacy
+ * call sites and unusual contexts).
+ *
+ * The number is the LEADING char count; `truncateHash` always keeps
+ * 8 trailing chars + the ellipsis. So `compact` shows 6 + ... + 8 = 17
+ * visible chars total.
+ */
+export const HASH_SIZE: Record<'compact' | 'short' | 'standard' | 'long', number> = {
+  compact: 6,    // tight table cells, mobile-first list rows
+  short:   10,   // standard table cells (term tally, voters list)
+  standard: 14,  // identity cards, form fields
+  long:    24,   // long-form detail (block hashes, full proposal hashes)
+};
+
 interface HashDisplayProps {
   hash: string;
   length?: number;
+  /**
+   * Named preset for the leading char count. Preferred over `length`
+   * for consistency. Maps via `HASH_SIZE`. Ignored if `truncate=false`.
+   */
+  size?: keyof typeof HASH_SIZE;
   className?: string;
   showCopyButton?: boolean;
   isClickable?: boolean;
   /**
    * If false, render the full hash with no truncation regardless of
-   * `length`. Use this when the value is short enough to display
-   * verbatim (e.g. ELA addresses are 34 chars). Cleaner than the
-   * historical workaround of passing an artificially huge `length`
-   * value to trick the early-return inside `truncateHash`.
+   * `length`/`size`. Use this when the value is short enough to display
+   * verbatim (e.g. ELA addresses are 34 chars).
    */
   truncate?: boolean;
 }
@@ -26,12 +46,14 @@ function truncateHash(h: string, len: number): string {
 
 const HashDisplay: React.FC<HashDisplayProps> = ({
   hash,
-  length = 16,
+  length,
+  size,
   className = '',
   showCopyButton = true,
   isClickable = true,
   truncate = true,
 }) => {
+  const effectiveLength = size != null ? HASH_SIZE[size] : (length ?? 16);
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -69,7 +91,7 @@ const HashDisplay: React.FC<HashDisplayProps> = ({
         tabIndex={isClickable ? 0 : -1}
         aria-label={`Hash: ${hash.slice(0, 8)}…`}
       >
-        {truncate ? truncateHash(hash, length) : hash}
+        {truncate ? truncateHash(hash, effectiveLength) : hash}
       </button>
       {showCopyButton && (
         <button

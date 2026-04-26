@@ -1,10 +1,10 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Users, FileText, Vote, Radio } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { blockchainApi } from '../services/api';
 import type { ElectionPhase } from '../types/blockchain';
 import { cn } from '../lib/cn';
+import { useElectionStatus } from '../contexts/ElectionStatusContext';
 
 const LABEL_BY_PHASE: Record<ElectionPhase, string> = {
   duty: 'Council Members',
@@ -34,35 +34,15 @@ export interface GovernanceNavProps {
  * Unified two-tab navigation for the governance surface.
  *
  * The /governance tab's label and icon follow the chain's election
- * phase. We fetch `/cr/election/status` on mount unless the parent
- * already has a status to share, so the tab renders instantly when
- * embedded inside a page that fetched status itself (Elections.tsx).
- *
- * Pages that don't deal with election state (CRProposals.tsx,
- * ElectionDetail.tsx) omit the prop and let the component resolve its
- * own label. 30s server cache makes the extra request cheap.
+ * phase. Status is read from the app-level `ElectionStatusContext` so
+ * navigating between governance pages doesn't refire the request once
+ * per render. Pages that already have status from a different fetch
+ * path (e.g. Elections.tsx, which polls on every block during voting)
+ * can pass a `phase` prop to override the cached value.
  */
 const GovernanceNav: React.FC<GovernanceNavProps> = ({ activePath, phase: externalPhase }) => {
-  const [phase, setPhase] = useState<ElectionPhase | undefined>(externalPhase);
-
-  useEffect(() => {
-    if (externalPhase !== undefined) {
-      setPhase(externalPhase);
-      return;
-    }
-    let cancelled = false;
-    blockchainApi
-      .getElectionStatus()
-      .then((s) => {
-        if (!cancelled) setPhase(s.phase);
-      })
-      .catch(() => {
-        if (!cancelled) setPhase('duty');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [externalPhase]);
+  const { status } = useElectionStatus();
+  const phase: ElectionPhase | undefined = externalPhase ?? status?.phase;
 
   const tabs = useMemo(() => {
     const resolvedPhase: ElectionPhase = phase ?? 'duty';

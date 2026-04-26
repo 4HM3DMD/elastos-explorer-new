@@ -56,6 +56,11 @@ const STATUS_BORDER_COLORS: Record<string, string> = {
   Aborted:       'border-l-gray-600',
 };
 
+// Active states get a coloured glow that mirrors their status pill.
+// Terminal states (passed, cancelled, vetoed, etc) get a subdued
+// neutral glow so hovering still gives feedback — without it, those
+// cards felt "dead" compared to active siblings, leading users to
+// think they weren't clickable.
 const STATUS_CARD_STYLES: Record<string, { base: CSSProperties; hover: CSSProperties }> = {
   Registered: {
     base:  { boxShadow: '0 0 12px rgba(59,130,246,0.08), inset 0 1px 0 rgba(59,130,246,0.06)', borderColor: 'rgba(59,130,246,0.25)' },
@@ -72,6 +77,13 @@ const STATUS_CARD_STYLES: Record<string, { base: CSSProperties; hover: CSSProper
     base:  { boxShadow: '0 0 12px rgba(168,85,247,0.08), inset 0 1px 0 rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.25)' },
     hover: { boxShadow: '0 0 16px rgba(168,85,247,0.15), inset 0 1px 0 rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.4)' },
   },
+};
+
+// Subdued neutral hover for any status not in STATUS_CARD_STYLES.
+// Reuses the same shape so the rendering code stays uniform.
+const STATUS_CARD_DEFAULT: { base: CSSProperties; hover: CSSProperties } = {
+  base:  { boxShadow: 'none', borderColor: 'var(--color-border)' },
+  hover: { boxShadow: '0 0 14px rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.04)', borderColor: 'var(--color-border-strong)' },
 };
 
 function formatBudgetList(budgetTotal?: string, budgets?: CRProposal['budgets']): string {
@@ -165,10 +177,13 @@ const ProposalCard = ({ p, currentHeight, padWidth }: { p: CRProposal; currentHe
   const countdown = getCountdown(p.status, p.registerHeight, currentHeight);
 
   const [hovered, setHovered] = useState(false);
-  const cardGlow = STATUS_CARD_STYLES[p.status];
-  const glowStyle: CSSProperties | undefined = cardGlow
-    ? (hovered ? { ...cardGlow.base, ...cardGlow.hover } : cardGlow.base)
-    : undefined;
+  // Active proposal statuses get a coloured glow; everything else
+  // falls through to the subdued neutral treatment so all cards have
+  // SOME hover feedback.
+  const cardGlow = STATUS_CARD_STYLES[p.status] ?? STATUS_CARD_DEFAULT;
+  const glowStyle: CSSProperties = hovered
+    ? { ...cardGlow.base, ...cardGlow.hover }
+    : cardGlow.base;
 
   const proposalNum = p.proposalNumber;
 
@@ -177,12 +192,11 @@ const ProposalCard = ({ p, currentHeight, padWidth }: { p: CRProposal; currentHe
       to={`/governance/proposal/${hash}`}
       className={cn(
         'card block p-3 sm:p-3.5 border-l-[3px] transition-all duration-200 group',
-        !cardGlow && 'hover:border-[var(--color-border-strong)]',
         borderColor
       )}
       style={glowStyle}
-      onMouseEnter={cardGlow ? () => setHovered(true) : undefined}
-      onMouseLeave={cardGlow ? () => setHovered(false) : undefined}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <div className="flex items-center justify-between gap-2.5 mb-2">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">

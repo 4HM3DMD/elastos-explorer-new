@@ -19,11 +19,12 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { blockchainApi } from '../services/api';
 import type { ElectionTermDetail, ElectionCandidate } from '../types/blockchain';
-import { Vote, Users, ChevronLeft, Trophy, Coins } from 'lucide-react';
+import { Vote, Users, Trophy, Coins } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
+import GovernanceBreadcrumb from '../components/GovernanceBreadcrumb';
 import GovernanceNav from '../components/GovernanceNav';
 import { formatVotes } from '../utils/format';
 
@@ -147,17 +148,11 @@ const ElectionDetail = () => {
         <GovernanceNav activePath="/governance" />
       </div>
 
-      {/* Back nav + drilldown link to the all-voters list. The
-          all-voters page only makes sense for non-legacy terms; for
-          T1-T3 it would just say "Pre-BPoS era — unavailable". */}
+      {/* Breadcrumb replaces the old single back-link. The all-voters
+          drilldown stays on the right (legacy terms hide it since
+          they have no parseable voter data). */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link
-          to="/governance"
-          className="inline-flex items-center gap-1 text-xs text-secondary hover:text-brand transition-colors"
-        >
-          <ChevronLeft size={12} />
-          Back to governance
-        </Link>
+        <GovernanceBreadcrumb items={[{ label: `Term ${term}` }]} />
         {!legacyEra && (
           <Link
             to={`/governance/elections/${term}/voters`}
@@ -343,11 +338,11 @@ function CandidateRow({
         {/* CID column hides on phone — surface a short copy under the
             name so it's still inspectable without horizontal scroll. */}
         <div className="md:hidden mt-1">
-          <HashDisplay hash={candidate.cid} length={6} showCopyButton isClickable={false} />
+          <HashDisplay hash={candidate.cid} size="compact" showCopyButton isClickable={false} />
         </div>
       </td>
       <td className="hidden md:table-cell align-top" style={{ textAlign: 'left' }}>
-        <HashDisplay hash={candidate.cid} length={10} showCopyButton isClickable={false} />
+        <HashDisplay hash={candidate.cid} size="short" showCopyButton isClickable={false} />
       </td>
       {!hideVotes && (
         <td className="align-top" style={{ textAlign: 'right' }}>

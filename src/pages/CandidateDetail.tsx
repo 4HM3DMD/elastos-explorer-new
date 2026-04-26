@@ -41,6 +41,7 @@ import OpinionBar from '../components/OpinionBar';
 import { formatVotes, safeExternalUrl, getLocation } from '../utils/format';
 import { copyToClipboard } from '../utils/clipboard';
 import { BLOCK_TIME_SECONDS } from '../constants/governance';
+import GovernanceBreadcrumb from '../components/GovernanceBreadcrumb';
 
 const PAGE_SIZE = 25;
 
@@ -146,6 +147,13 @@ const CandidateDetail = () => {
         path={`/governance/elections/${term}/candidate/${cid}`}
       />
 
+      <GovernanceBreadcrumb
+        items={[
+          { label: `Term ${term}`, to: `/governance/elections/${term}` },
+          { label: m.nickname || 'Candidate' },
+        ]}
+      />
+
       {/* 1. HERO */}
       <div className="card relative overflow-hidden p-4 sm:p-5 md:p-6">
         <div className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-brand" />
@@ -240,21 +248,21 @@ const CandidateDetail = () => {
       <div className="card p-3 md:p-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <IdentityRow label="CID">
-            <HashDisplay hash={m.cid} length={14} showCopyButton />
+            <HashDisplay hash={m.cid} size="standard" showCopyButton />
           </IdentityRow>
           <IdentityRow label="DID">
-            {m.did ? <HashDisplay hash={m.did} length={14} showCopyButton /> : <Muted>Not set</Muted>}
+            {m.did ? <HashDisplay hash={m.did} size="standard" showCopyButton /> : <Muted>Not set</Muted>}
           </IdentityRow>
           <IdentityRow label="DPoS pubkey">
             {m.dposPubkey ? (
-              <HashDisplay hash={m.dposPubkey} length={14} showCopyButton />
+              <HashDisplay hash={m.dposPubkey} size="standard" showCopyButton />
             ) : (
               <Muted>Not set</Muted>
             )}
           </IdentityRow>
           <IdentityRow label="Claimed node">
             {m.claimedNode ? (
-              <HashDisplay hash={m.claimedNode} length={14} showCopyButton />
+              <HashDisplay hash={m.claimedNode} size="standard" showCopyButton />
             ) : (
               <Muted>Not claimed</Muted>
             )}
@@ -265,7 +273,7 @@ const CandidateDetail = () => {
                 to={`/address/${encodeURIComponent(m.depositAddress)}`}
                 className="text-brand hover:text-brand-200"
               >
-                <HashDisplay hash={m.depositAddress} length={14} showCopyButton isClickable={false} />
+                <HashDisplay hash={m.depositAddress} size="standard" showCopyButton isClickable={false} />
               </Link>
             ) : (
               <Muted>Not set</Muted>
@@ -287,7 +295,7 @@ const CandidateDetail = () => {
             </span>
           </IdentityRow>
           <IdentityRow label="Last updated">
-            <LastUpdatedValue value={m.lastUpdated} />
+            <LastUpdatedValue value={m.lastUpdated} kind={m.lastUpdatedKind} />
           </IdentityRow>
         </div>
       </div>
@@ -417,15 +425,21 @@ function formatTenureSpan(blockSpan: number): string {
   return `~${years.toFixed(1)} year${years >= 1.5 ? 's' : ''} tenure`;
 }
 
-// `cr_members.last_updated` is dual-purpose in the indexer:
-//   - tx_processor.go writes the registration block height
-//   - aggregator.go overwrites with `EXTRACT(EPOCH FROM NOW())`
-// Block heights are always well below 1e9; Unix epochs are ≥ 1e9.
-// Render whichever the value actually is rather than blindly multiplying
-// a height by 1000 and getting "Jan 1970".
-function LastUpdatedValue({ value }: { value: number }) {
-  if (!value || value <= 0) return <Muted>—</Muted>;
-  if (value < 1_000_000_000) {
+// `cr_members.last_updated` is dual-purpose in the indexer (tx_processor
+// writes block heights; the aggregator writes Unix epochs). The backend
+// now tags the value with `lastUpdatedKind` so we can render the right
+// thing without re-deriving the heuristic. We still keep a fallback
+// numeric guard for older API versions that don't ship the kind field.
+function LastUpdatedValue({
+  value,
+  kind,
+}: {
+  value: number;
+  kind?: 'epoch' | 'block' | 'unknown';
+}) {
+  if (!value || value <= 0 || kind === 'unknown') return <Muted>—</Muted>;
+  const resolvedKind = kind ?? (value >= 1_000_000_000 ? 'epoch' : 'block');
+  if (resolvedKind === 'block') {
     return (
       <span
         className="text-xs text-secondary font-mono"
@@ -866,7 +880,7 @@ function VoterRow({
               <Link to={`/address/${encodeURIComponent(voter.address)}`} className="min-w-0">
                 <HashDisplay
                   hash={voter.address}
-                  length={18}
+                  size="standard"
                   showCopyButton={false}
                   isClickable={false}
                 />

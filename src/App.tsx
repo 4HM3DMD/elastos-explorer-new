@@ -6,6 +6,7 @@ import { Toaster } from 'sonner';
 import Layout from './components/Layout.js';
 import ScrollToTop from './components/ScrollToTop.js';
 import DegradedBanner from './components/DegradedBanner.js';
+import { ElectionStatusProvider } from './contexts/ElectionStatusContext.js';
 
 const Home = lazy(() => import('./pages/Home.js'));
 const BlocksList = lazy(() => import('./pages/BlocksList.js'));
@@ -159,18 +160,20 @@ function App() {
   return (
     <HelmetProvider>
       <Router>
-        <ScrollToTop />
-        <DegradedBanner />
-        <Layout>
-          <ErrorBoundary>
-            <AnimatedRoutes />
-          </ErrorBoundary>
-        </Layout>
-        <Toaster
-          position="bottom-right"
-          theme="dark"
-          toastOptions={TOAST_OPTIONS}
-        />
+        <ElectionStatusProvider>
+          <ScrollToTop />
+          <DegradedBanner />
+          <Layout>
+            <ErrorBoundary>
+              <AnimatedRoutes />
+            </ErrorBoundary>
+          </Layout>
+          <Toaster
+            position="bottom-right"
+            theme="dark"
+            toastOptions={TOAST_OPTIONS}
+          />
+        </ElectionStatusProvider>
       </Router>
     </HelmetProvider>
   );

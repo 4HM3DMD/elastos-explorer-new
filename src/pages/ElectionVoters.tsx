@@ -14,7 +14,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Users, ChevronLeft } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import type { ElectionVoter, ElectionTermDetail } from '../types/blockchain';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -22,6 +22,7 @@ import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
 import Pagination from '../components/Pagination';
 import GovernanceNav from '../components/GovernanceNav';
+import GovernanceBreadcrumb from '../components/GovernanceBreadcrumb';
 import { formatVotes } from '../utils/format';
 
 const PAGE_SIZE = 25;
@@ -194,15 +195,12 @@ function Header({
         <GovernanceNav activePath="/governance" />
       </div>
 
-      <div>
-        <Link
-          to={`/governance/elections/${term}`}
-          className="inline-flex items-center gap-1 text-xs text-secondary hover:text-brand transition-colors"
-        >
-          <ChevronLeft size={12} />
-          Back to Term {term}
-        </Link>
-      </div>
+      <GovernanceBreadcrumb
+        items={[
+          { label: `Term ${term}`, to: `/governance/elections/${term}` },
+          { label: 'All voters' },
+        ]}
+      />
     </>
   );
 }
@@ -215,7 +213,7 @@ function VoterRow({ voter }: { voter: ElectionVoter }) {
           to={`/address/${voter.address}`}
           className="font-mono text-xs text-primary hover:text-brand transition-colors"
         >
-          <HashDisplay hash={voter.address} length={10} showCopyButton={false} isClickable={false} />
+          <HashDisplay hash={voter.address} size="short" showCopyButton={false} isClickable={false} />
         </Link>
       </td>
       <td className="align-top" style={{ textAlign: 'right' }}>

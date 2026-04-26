@@ -15,12 +15,12 @@
 // Term-agnostic — every section reads via formula or by-cid query.
 // T7/T8 candidates render identically.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Activity, ArrowLeft, Coins, ChevronDown, ChevronRight,
   Copy, Check, ExternalLink, Hash, Landmark, ScrollText, ShieldCheck,
-  ThumbsUp, ThumbsDown, Scale, Trophy, Users, X,
+  ThumbsUp, ThumbsDown, Scale, Trophy, Users, X, XCircle,
 } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import type {
@@ -69,7 +69,18 @@ const CandidateDetail = () => {
   const [votersLoading, setVotersLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Profile (single roll-up across terms + governance)
+  // Profile (single roll-up across terms + governance). Keyed on cid
+  // ONLY — the term param doesn't change what comes back, so re-firing
+  // this effect on every pill click would needlessly cancel-and-restart
+  // the same fetch and flash the page skeleton between clicks.
+  // We read `resolvedTerm` via ref inside the .then() so the bootstrap
+  // path (default to latest term when URL has none) still works without
+  // making `resolvedTerm` a dep.
+  const resolvedTermRef = useRef(resolvedTerm);
+  useEffect(() => {
+    resolvedTermRef.current = resolvedTerm;
+  }, [resolvedTerm]);
+
   useEffect(() => {
     if (!cid) {
       setError('Invalid candidate');
@@ -88,7 +99,7 @@ const CandidateDetail = () => {
         // participation. The terms array comes back ASC-sorted from
         // the backend, so the last element is the latest. This makes
         // /governance/candidate/{cid} a useful entry point on its own.
-        if (!resolvedTerm && p.terms.length > 0) {
+        if (!resolvedTermRef.current && p.terms.length > 0) {
           const latest = p.terms[p.terms.length - 1].term;
           setResolvedTerm(latest);
         }
@@ -102,7 +113,7 @@ const CandidateDetail = () => {
     return () => {
       cancelled = true;
     };
-  }, [cid, resolvedTerm]);
+  }, [cid]);
 
   // Sync the URL's `?term=` (or legacy `:term` segment) BACK into
   // local state when it changes. Without this, clicking a TermPill
@@ -114,14 +125,19 @@ const CandidateDetail = () => {
     setResolvedTerm(explicitTerm);
   }, [explicitTerm, resolvedTerm]);
 
-  // Sync `resolvedTerm` back into the URL as ?term= so the page is
-  // bookmarkable in whatever term the user lands on. `replace` avoids
-  // adding a history entry for the auto-resolution case (only the
-  // initial render bumps it from 0 to the latest term).
+  // BOOTSTRAP-ONLY URL writer. When the user lands on the flat URL
+  // /governance/candidate/{cid} with no ?term=, the profile-fetch
+  // effect picks the candidate's latest term and stores it in state.
+  // We mirror that into the URL once so the page is bookmarkable,
+  // but ONLY in the bootstrap case (queryTerm absent). If we ran
+  // unconditionally, every pill click would race: the user navigates
+  // to ?term=3, this effect reads stale resolvedTerm=6, writes URL
+  // back to ?term=6, undoing the click. Past test sessions hit
+  // exactly that infinite-loading-loop.
   useEffect(() => {
     if (!resolvedTerm) return;
-    if (queryTerm === String(resolvedTerm)) return;
-    if (termParam) return; // legacy URL — App.tsx already redirected, don't re-write
+    if (queryTerm) return;        // URL already has a term — never overwrite
+    if (termParam) return;        // legacy URL — App.tsx already redirected
     const next = new URLSearchParams(searchParams);
     next.set('term', String(resolvedTerm));
     setSearchParams(next, { replace: true });
@@ -164,11 +180,17 @@ const CandidateDetail = () => {
 
   if (loading) return <PageSkeleton />;
   if (error || !profile) {
+    // The back link can't always say "Back to Term N" — if the URL had
+    // no `?term=` and the profile fetch failed before we could pick a
+    // default, `term` is still 0. Fall back to the governance landing
+    // in that case so the user has a working escape route.
+    const backTo = term > 0 ? `/governance/elections/${term}` : '/governance';
+    const backLabel = term > 0 ? `Back to Term ${term}` : 'Back to governance';
     return (
       <div className="px-4 lg:px-6 py-6 text-center">
         <p className="text-accent-red mb-4">{error || 'Profile unavailable'}</p>
-        <Link to={`/governance/elections/${term}`} className="btn-primary inline-block">
-          Back to Term {term}
+        <Link to={backTo} className="btn-primary inline-block">
+          {backLabel}
         </Link>
       </div>
     );
@@ -559,14 +581,21 @@ function TermPills({
   activeTerm: number;
 }) {
   const electedTerms = terms.filter((t) => t.elected);
+  const nomineeTerms = terms.filter((t) => !t.elected);
   const electedCount = electedTerms.length;
+  const nomineeCount = nomineeTerms.length;
   // "Council since" must be the first ELECTED term, not the first
   // term they ran. A nominee who lost T2 then was elected T3 joined
   // council at T3 — saying "since T2" would be wrong.
   const firstElectedTerm = electedTerms[0]?.term;
-  const labelText = firstElectedTerm
-    ? `Council since Term ${firstElectedTerm} · ${electedCount} term${electedCount === 1 ? '' : 's'} elected`
-    : `Ran in ${terms.length} term${terms.length === 1 ? '' : 's'} · Never elected`;
+  const labelText = (() => {
+    if (!firstElectedTerm) {
+      return `Ran in ${terms.length} term${terms.length === 1 ? '' : 's'} · Never elected`;
+    }
+    const base = `Council since Term ${firstElectedTerm} · ${electedCount} term${electedCount === 1 ? '' : 's'} elected`;
+    if (nomineeCount === 0) return base;
+    return `${base} · ${nomineeCount} unsuccessful nomination${nomineeCount === 1 ? '' : 's'}`;
+  })();
 
   return (
     <div className="card p-3 sm:p-4 relative overflow-hidden">
@@ -581,52 +610,80 @@ function TermPills({
                 key={t.term}
                 to={`/governance/candidate/${cid}?term=${t.term}`}
                 className={cn(
-                  'group flex flex-col items-center min-w-[60px] px-3 py-2 rounded-md text-xs transition-colors border',
-                  isActive
-                    ? 'bg-brand/15 text-brand border-brand/40'
-                    : 'text-secondary border-[var(--color-border)] hover:text-primary hover:border-[var(--color-border-strong)]',
+                  'group relative flex flex-col items-center min-w-[64px] px-3 pt-2 pb-1.5 rounded-md text-xs transition-all border',
+                  // Active term: brand fill regardless of elected/not
+                  // — user is INSPECTING this term, so it gets focus.
+                  isActive && 'bg-brand/15 text-brand border-brand/40',
+                  // Inactive elected: subtle emerald accent border
+                  // bottom + brand-on-hover. Confirms "this counted."
+                  !isActive && t.elected &&
+                    'text-secondary border-[var(--color-border)] hover:text-primary hover:border-brand/50 hover:bg-brand/[0.04]',
+                  // Inactive nominee: muted styling, dotted border
+                  // hint, dimmer background. Reads as "tried, didn't
+                  // make it" without being graphically aggressive.
+                  !isActive && !t.elected &&
+                    'text-muted/80 border-dashed border-[var(--color-border)]/60 hover:text-secondary hover:border-[var(--color-border-strong)]',
                 )}
                 title={(() => {
                   if (t.legacyEra) return `Term ${t.term} · Pre-BPoS council member`;
                   if (t.elected) return `Term ${t.term} · Rank #${t.rank} · Elected`;
-                  return `Term ${t.term} · Rank #${t.rank} · Not elected`;
+                  return `Term ${t.term} · Rank #${t.rank} · Did not win election`;
                 })()}
               >
+                {/* Status corner glyph — Trophy for elected, X for
+                    non-elected. Always rendered so the row reads as
+                    a key visually scannable column rather than an
+                    arbitrary mix of pills. Legacy elected shows a
+                    half-opacity Trophy (still elected, just no
+                    rank to display). */}
+                <span className="absolute top-1 right-1 inline-flex items-center justify-center">
+                  {t.elected ? (
+                    <Trophy size={10} className={cn('text-brand', t.legacyEra && 'opacity-70')} />
+                  ) : (
+                    <XCircle size={10} className="text-red-400/70" />
+                  )}
+                </span>
                 <span className="font-semibold tracking-wider">T{t.term}</span>
                 <span
-                  className={cn(
-                    'text-[10px] mt-0.5 inline-flex items-center gap-1',
-                    !t.elected && !t.legacyEra
-                      ? 'text-muted/70'
-                      : 'text-muted group-hover:text-secondary',
-                  )}
+                  className="text-[10px] mt-0.5 inline-flex items-center gap-1"
                   style={{ fontVariantNumeric: 'tabular-nums' }}
                 >
-                  {/* Pre-BPoS terms have no vote-based ranks — show
-                      Trophy alone (still elected) instead of misleading
-                      "#5" / "#10" synthetic numbers. Non-elected
-                      candidates need an explicit signal so the user
-                      doesn't read "#10" as "elected at rank 10".  */}
+                  {/* Pre-BPoS terms have no vote-based ranks. Modern
+                      terms always show #N — for non-elected we add
+                      "ran" small caps so the rank doesn't read as
+                      a winning placement. */}
                   {t.legacyEra ? (
-                    t.elected && <Trophy size={11} className="text-brand" />
+                    <span className="text-muted/70 text-[9px] uppercase tracking-wider">
+                      pre-BPoS
+                    </span>
                   ) : t.elected ? (
-                    <>
-                      #{t.rank}
-                      <Trophy size={9} className="text-brand" />
-                    </>
+                    <span className="text-muted group-hover:text-secondary">#{t.rank}</span>
                   ) : (
-                    <span className="inline-flex items-center gap-0.5">
-                      #{t.rank}
-                      <span className="text-[8px] uppercase tracking-wider text-muted/80 ml-1">
+                    <>
+                      <span className="text-muted/80">#{t.rank}</span>
+                      <span className="text-[8px] uppercase tracking-wider text-red-400/60 ml-0.5">
                         ran
                       </span>
-                    </span>
+                    </>
                   )}
                 </span>
               </Link>
             );
           })}
         </div>
+        {/* Compact legend so the icon language is obvious. Hidden when
+            the candidate has only one status type — no need to label
+            the only thing on screen. */}
+        {electedCount > 0 && nomineeCount > 0 && (
+          <div className="flex flex-wrap items-center gap-3 pt-1 text-[10px] text-muted">
+            <span className="inline-flex items-center gap-1">
+              <Trophy size={9} className="text-brand" /> elected
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <XCircle size={9} className="text-red-400/70" /> ran · not elected
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

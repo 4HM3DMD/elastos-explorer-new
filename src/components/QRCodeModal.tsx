@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { X, Copy, Check } from 'lucide-react';
+import { cn } from '../lib/cn';
 import { copyToClipboard } from '../utils/clipboard';
 
 interface QRCodeModalProps {
@@ -119,11 +120,10 @@ const QRCodeModal = ({ address, open, onClose }: QRCodeModalProps) => {
 
         <button
           onClick={copyAddress}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors w-full"
-          style={{
-            background: copied ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 159, 24, 0.1)',
-            color: copied ? '#10b981' : 'var(--color-brand)',
-          }}
+          className={cn(
+            'inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors w-full',
+            copied ? 'bg-accent-green/10 text-accent-green' : 'bg-brand/10 text-brand',
+          )}
         >
           {copied ? <><Check size={15} /> Copied</> : <><Copy size={15} /> Copy Address</>}
         </button>

@@ -59,7 +59,7 @@ const socialLinks = [
 
 const Footer = () => {
   return (
-    <footer className="mt-auto border-t border-[rgba(255,255,255,0.06)]" style={{ background: '#0f0f0f' }}>
+    <footer className="mt-auto border-t border-[rgba(255,255,255,0.06)]" style={{ background: 'var(--color-surface)' }}>
       <div className="max-w-container mx-auto px-4 lg:px-6 py-10">
         <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-8">
           {/* Brand */}

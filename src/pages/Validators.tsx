@@ -103,7 +103,7 @@ const Validators = () => {
               className={cn(
                 'px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200',
                 activeTab === tab.value
-                  ? 'bg-white text-black'
+                  ? 'bg-brand text-white'
                   : 'text-secondary hover:text-primary'
               )}
             >

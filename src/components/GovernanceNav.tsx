@@ -68,7 +68,7 @@ const GovernanceNav: React.FC<GovernanceNavProps> = ({ activePath, phase: extern
             to={tab.path}
             className={cn(
               'px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors relative',
-              isActive ? 'bg-white text-black' : 'text-secondary hover:text-brand',
+              isActive ? 'bg-brand text-white' : 'text-secondary hover:text-brand',
             )}
             aria-current={isActive ? 'page' : undefined}
           >

@@ -48,7 +48,7 @@ const Header = () => {
   }, [location.pathname]);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-[rgba(255,255,255,0.06)]" style={{ background: '#0f0f0f' }}>
+    <header className="sticky top-0 z-50 border-b border-[rgba(255,255,255,0.06)]" style={{ background: 'var(--color-surface)' }}>
       <div className="max-w-container mx-auto px-4 lg:px-6">
         {/* Main bar: logo + nav + search */}
         <div className="flex items-center justify-between h-14 gap-4">

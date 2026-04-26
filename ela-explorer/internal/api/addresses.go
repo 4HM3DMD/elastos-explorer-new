@@ -24,16 +24,38 @@ func (s *Server) getAddress(w http.ResponseWriter, r *http.Request) {
 	pageSize := clampPageSize(parseInt(r.URL.Query().Get("pageSize"), 20), 100)
 	offset := (page - 1) * pageSize
 
-	var balance, totalReceived, totalSent, firstSeen, lastSeen int64
+	var balance, firstSeen, lastSeen int64
 	var txCount int
 	err := s.db.API.QueryRow(r.Context(), `
-		SELECT balance_sela, total_received, total_sent, first_seen, last_seen
+		SELECT balance_sela, first_seen, last_seen
 		FROM address_balances WHERE address = $1`, address,
-	).Scan(&balance, &totalReceived, &totalSent, &firstSeen, &lastSeen)
+	).Scan(&balance, &firstSeen, &lastSeen)
 	if err != nil {
 		writeError(w, 404, "address not found")
 		return
 	}
+
+	// Compute Total Received / Total Sent by summing
+	// address_transactions.value_sela per direction. The
+	// address_balances.total_received and total_sent columns count
+	// GROSS input/output volume — every change output back to self,
+	// every self-transfer input — so they balloon far above what the
+	// user can verify by adding up the rows on the page. The
+	// per-transaction values_sela in address_transactions is computed
+	// net (sent = inputs - change; received rows skipped entirely
+	// when the address also appears in inputs), so summing them
+	// reproduces exactly what the visible tx list shows. Stored
+	// totals in address_balances are left untouched for now: the
+	// (gross) numbers may have other consumers but they're never
+	// surfaced in the address API again.
+	var totalReceived, totalSent int64
+	_ = s.db.API.QueryRow(r.Context(), `
+		SELECT
+			COALESCE(SUM(value_sela) FILTER (WHERE direction = 'received'), 0),
+			COALESCE(SUM(value_sela) FILTER (WHERE direction = 'sent'),     0)
+		FROM address_transactions
+		WHERE address = $1`, address,
+	).Scan(&totalReceived, &totalSent)
 
 	if err := s.db.API.QueryRow(r.Context(),
 		"SELECT tx_count FROM address_tx_counts WHERE address=$1", address).Scan(&txCount); err != nil {

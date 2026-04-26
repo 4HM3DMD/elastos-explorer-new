@@ -17,6 +17,17 @@ const Layout = ({ children }: LayoutProps) => {
   return (
     <SyncGuard>
       <div className="min-h-screen flex flex-col bg-base">
+        {/* Skip link — visible only when keyboard-focused (sr-only +
+            focus:not-sr-only). Lets screen-reader / Tab users jump
+            past the TopInfoBar / Header / sticky-search chrome
+            straight to the page body. Standard a11y pattern; no
+            visual change for mouse users. */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-2 focus:rounded-md focus:bg-brand focus:text-white focus:font-medium"
+        >
+          Skip to main content
+        </a>
         <TopInfoBar />
         <Header />
         {!isHome && (
@@ -24,7 +35,7 @@ const Layout = ({ children }: LayoutProps) => {
             <InlineSearch compact />
           </div>
         )}
-        <main className="flex-1 w-full max-w-container mx-auto">
+        <main id="main-content" className="flex-1 w-full max-w-container mx-auto">
           {children}
         </main>
         <Footer />

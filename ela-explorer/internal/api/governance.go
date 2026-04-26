@@ -709,7 +709,86 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 		groups[i].TotalEla = selaToELA(totalSelaPerTerm[groups[i].Term])
 	}
 
-	writeJSON(w, 200, APIResponse{Data: groups})
+	// Impeachment votes — vote_type=2 in the votes table, cast BY this
+	// address against a council member CID. JOINs cr_members for the
+	// nickname display so the frontend doesn't have to round-trip per
+	// row. Distinct on candidate (the impeached member): an address may
+	// re-cast impeachment votes; we keep only the latest.
+	impeachRows, err := s.db.API.Query(r.Context(), `
+		SELECT DISTINCT ON (v.candidate)
+		       v.candidate, COALESCE(cm.nickname, '') AS nickname,
+		       v.amount_sela, v.stake_height, v.txid
+		FROM votes v
+		LEFT JOIN cr_members cm ON cm.cid = v.candidate
+		WHERE v.vote_type = 2 AND v.address = $1
+		ORDER BY v.candidate, v.stake_height DESC`, address)
+	type impeachRow struct {
+		Candidate string `json:"candidate"`
+		Nickname  string `json:"nickname,omitempty"`
+		AmountEla string `json:"ela"`
+		Height    int64  `json:"voteHeight"`
+		Txid      string `json:"txid"`
+	}
+	impeachments := []impeachRow{}
+	if err == nil {
+		defer impeachRows.Close()
+		for impeachRows.Next() {
+			var ir impeachRow
+			var amountSela int64
+			if err := impeachRows.Scan(&ir.Candidate, &ir.Nickname, &amountSela, &ir.Height, &ir.Txid); err != nil {
+				continue
+			}
+			ir.AmountEla = selaToELA(amountSela)
+			ir.Txid = strings.TrimSpace(ir.Txid)
+			impeachments = append(impeachments, ir)
+		}
+	}
+
+	// Proposal reviews — only relevant when this address is a council
+	// member's deposit_address. Resolve address → DID → reviews. The
+	// JOIN against cr_proposals gets the title for context. Skipping
+	// the SELECT entirely when no DID match avoids a wasted query for
+	// non-council addresses.
+	type reviewRow struct {
+		ProposalHash string `json:"proposalHash"`
+		Title        string `json:"title"`
+		Opinion      string `json:"opinion"`
+		ReviewHeight int64  `json:"reviewHeight"`
+		Txid         string `json:"txid"`
+	}
+	reviews := []reviewRow{}
+	var memberDID string
+	_ = s.db.API.QueryRow(r.Context(),
+		`SELECT did FROM cr_members WHERE deposit_address = $1 LIMIT 1`, address).Scan(&memberDID)
+	if memberDID != "" {
+		reviewRows, err := s.db.API.Query(r.Context(), `
+			SELECT pr.proposal_hash,
+			       COALESCE(NULLIF(pr.title, ''), p.title, '') AS title,
+			       pr.opinion, pr.review_height, pr.txid
+			FROM cr_proposal_reviews pr
+			LEFT JOIN cr_proposals p ON p.proposal_hash = pr.proposal_hash
+			WHERE pr.did = $1
+			ORDER BY pr.review_height DESC
+			LIMIT 50`, memberDID)
+		if err == nil {
+			defer reviewRows.Close()
+			for reviewRows.Next() {
+				var rr reviewRow
+				if err := reviewRows.Scan(&rr.ProposalHash, &rr.Title, &rr.Opinion, &rr.ReviewHeight, &rr.Txid); err != nil {
+					continue
+				}
+				rr.Txid = strings.TrimSpace(rr.Txid)
+				reviews = append(reviews, rr)
+			}
+		}
+	}
+
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
+		"elections":       groups,
+		"impeachments":    impeachments,
+		"proposalReviews": reviews,
+		"councilDid":      memberDID,
+	}})
 }
 
 // getCandidateProfile returns a single roll-up of every chain fact

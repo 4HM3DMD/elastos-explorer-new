@@ -104,6 +104,16 @@ const CandidateDetail = () => {
     };
   }, [cid, resolvedTerm]);
 
+  // Sync the URL's `?term=` (or legacy `:term` segment) BACK into
+  // local state when it changes. Without this, clicking a TermPill
+  // updates the URL but `useState` only ran once on mount, so the
+  // page stays stuck on whatever term it first resolved to.
+  useEffect(() => {
+    if (!Number.isFinite(explicitTerm) || explicitTerm <= 0) return;
+    if (explicitTerm === resolvedTerm) return;
+    setResolvedTerm(explicitTerm);
+  }, [explicitTerm, resolvedTerm]);
+
   // Sync `resolvedTerm` back into the URL as ?term= so the page is
   // bookmarkable in whatever term the user lands on. `replace` avoids
   // adding a history entry for the auto-resolution case (only the
@@ -584,19 +594,33 @@ function TermPills({
               >
                 <span className="font-semibold tracking-wider">T{t.term}</span>
                 <span
-                  className="text-[10px] mt-0.5 text-muted group-hover:text-secondary inline-flex items-center gap-1"
+                  className={cn(
+                    'text-[10px] mt-0.5 inline-flex items-center gap-1',
+                    !t.elected && !t.legacyEra
+                      ? 'text-muted/70'
+                      : 'text-muted group-hover:text-secondary',
+                  )}
                   style={{ fontVariantNumeric: 'tabular-nums' }}
                 >
                   {/* Pre-BPoS terms have no vote-based ranks — show
                       Trophy alone (still elected) instead of misleading
-                      "#5" / "#10" synthetic numbers. */}
+                      "#5" / "#10" synthetic numbers. Non-elected
+                      candidates need an explicit signal so the user
+                      doesn't read "#10" as "elected at rank 10".  */}
                   {t.legacyEra ? (
                     t.elected && <Trophy size={11} className="text-brand" />
-                  ) : (
+                  ) : t.elected ? (
                     <>
                       #{t.rank}
-                      {t.elected && <Trophy size={9} className="text-brand" />}
+                      <Trophy size={9} className="text-brand" />
                     </>
+                  ) : (
+                    <span className="inline-flex items-center gap-0.5">
+                      #{t.rank}
+                      <span className="text-[8px] uppercase tracking-wider text-muted/80 ml-1">
+                        ran
+                      </span>
+                    </span>
                   )}
                 </span>
               </Link>

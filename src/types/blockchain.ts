@@ -534,6 +534,36 @@ export interface AddressCRVoteTerm {
   }[];
 }
 
+/** Single impeachment vote cast BY this address against a council
+ *  member's CID (vote_type=2 in the votes table). */
+export interface AddressImpeachmentVote {
+  candidate: string;
+  nickname?: string;
+  ela: string;
+  voteHeight: number;
+  txid: string;
+}
+
+/** Proposal review filed BY this address — only present when the
+ *  address is a council member's deposit_address. */
+export interface AddressProposalReview {
+  proposalHash: string;
+  title: string;
+  opinion: 'approve' | 'reject' | 'abstain' | string;
+  reviewHeight: number;
+  txid: string;
+}
+
+/** Full governance roll-up for an address. `councilDid` is non-empty
+ *  when the address is a council member's deposit_address — it tells
+ *  the UI to surface the "council member" section. */
+export interface AddressGovernanceSummary {
+  elections: AddressCRVoteTerm[];
+  impeachments: AddressImpeachmentVote[];
+  proposalReviews: AddressProposalReview[];
+  councilDid: string;
+}
+
 // /api/v1/cr/members/{cid}/profile — single roll-up of every chain
 // fact about a CR member: metadata, every term they ran in, full
 // proposal-review record.

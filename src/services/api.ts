@@ -8,7 +8,7 @@ import type {
   BalanceHistoryPoint, VoteHistoryEntry, GovernanceActivity,
   ElectionStatus, ElectionSummary, ElectionTermDetail,
   ElectionReplayEventsResponse,
-  ElectionVoter, CandidateVoter, AddressCRVoteTerm,
+  ElectionVoter, CandidateVoter, AddressGovernanceSummary,
   CandidateProfile, VoterTxHistoryEntry, CandidateReview,
 } from '../types/blockchain';
 import { getCurrentNetworkConfig } from '../hooks/useNetwork';
@@ -240,11 +240,14 @@ export const blockchainApi = {
     );
   },
 
-  // Full CR voting history for an address — every term they
-  // participated in. Term-agnostic: scans every term where this
-  // address has at least one CRC vote.
-  getAddressCRVotes: async (address: string): Promise<AddressCRVoteTerm[]> => {
-    return unwrap<AddressCRVoteTerm[]>(await api.get(`/address/${address}/cr-votes`));
+  // Full governance summary for an address: CR election votes,
+  // impeachment votes, and (when this address is a council member's
+  // deposit_address) every proposal review filed by that member.
+  // Distinct from `getAddressGovernance` above which is the paginated
+  // raw event stream — this is the rolled-up "governance footprint"
+  // used by the address page's summary panel.
+  getAddressGovernanceSummary: async (address: string): Promise<AddressGovernanceSummary> => {
+    return unwrap<AddressGovernanceSummary>(await api.get(`/address/${address}/cr-votes`));
   },
 
   // Single roll-up of every chain fact about a CR member: metadata,

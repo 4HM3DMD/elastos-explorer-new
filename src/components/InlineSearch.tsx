@@ -311,7 +311,7 @@ const InlineSearch = ({ className, compact }: InlineSearchProps) => {
           {notFound && !searching && (
             <div className="px-3 py-4 text-center">
               <XCircle size={20} className="text-accent-red mx-auto mb-1.5" />
-              <p className="text-xs text-muted">No matching block, transaction, address, or validator found.</p>
+              <p className="text-xs text-muted">No matching block, transaction, address, validator, council member, or proposal found.</p>
             </div>
           )}
 

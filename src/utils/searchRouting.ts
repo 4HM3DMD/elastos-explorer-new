@@ -2,7 +2,7 @@ import type { SearchResult } from '../types/blockchain';
 
 export type SearchInputHint =
   | { type: 'block_height'; label: 'Block Height' }
-  | { type: 'tx_or_block_hash'; label: 'Transaction / Block Hash' }
+  | { type: 'tx_or_block_hash'; label: 'Transaction / Block / Proposal Hash' }
   | { type: 'staking_address'; label: 'Staking Address' }
   | { type: 'address'; label: 'Address' }
   | { type: 'text'; label: 'Validator or Council Member' }
@@ -54,6 +54,8 @@ export function getRouteForResult(result: SearchResult): string | null {
       return `/address/${value}`;
     case 'producer':
       return `/validator/${value}`;
+    case 'proposal':
+      return `/governance/proposal/${value}`;
     case 'crMember': {
       // Canonical flat URL (PR 4) — candidates span terms, so they
       // get a stable URL and an optional ?term= query for the
@@ -76,6 +78,7 @@ export function getTypeIcon(type: SearchResult['type']): string {
     case 'address': return 'Wallet';
     case 'producer': return 'Shield';
     case 'crMember': return 'Landmark';
+    case 'proposal': return 'FileText';
     default: return 'Search';
   }
 }
@@ -87,6 +90,7 @@ export function getTypeLabel(type: SearchResult['type']): string {
     case 'address': return 'Address';
     case 'producer': return 'Validator';
     case 'crMember': return 'Council Member';
+    case 'proposal': return 'Proposal';
     default: return 'Unknown';
   }
 }

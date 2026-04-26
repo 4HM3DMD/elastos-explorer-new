@@ -577,6 +577,18 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, APIResponse{Data: map[string]any{"type": "block", "value": q}})
 			return
 		}
+		// 64-char hex could also be a CR proposal hash. Checked last so a
+		// txid-collision (astronomically unlikely) still wins, but a real
+		// proposal hash is now resolvable instead of returning {type:"none"}.
+		// The OpenAPI spec already documents this branch — implementing
+		// it closes that gap.
+		if err := s.db.API.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM cr_proposals WHERE proposal_hash=$1)", q).Scan(&exists); err != nil {
+			slog.Warn("search: proposal hash check failed", "error", err)
+		}
+		if exists {
+			writeJSON(w, 200, APIResponse{Data: map[string]any{"type": "proposal", "value": q}})
+			return
+		}
 	}
 
 	// Try address

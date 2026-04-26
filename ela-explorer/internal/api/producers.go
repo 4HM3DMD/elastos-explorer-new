@@ -106,6 +106,9 @@ func (s *Server) getProducers(w http.ResponseWriter, r *http.Request) {
 		producers = append(producers, p)
 		rank++
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 
 	var producerTotal int64
 	if isAll {
@@ -216,6 +219,9 @@ func (s *Server) getProducerDetail(w http.ResponseWriter, r *http.Request) {
 				"txid":          txid,
 			})
 		}
+		if err := stakers.Err(); err != nil {
+			slog.Warn("stakers iter failed", "error", err)
+		}
 		result["stakers"] = voters
 	}
 
@@ -265,6 +271,9 @@ func (s *Server) getProducerStakers(w http.ResponseWriter, r *http.Request) {
 			"txid":          txid,
 			"voteType":      4,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 
 	writeJSON(w, 200, APIResponse{Data: stakers, Total: total, Page: page, Size: pageSize})

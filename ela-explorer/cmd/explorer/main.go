@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -201,8 +203,16 @@ func selfTest(ctx context.Context, database *db.DB, listenAddr string) {
 		slog.Info("self-test: SEO template loaded")
 	}
 
-	// 3. Verify API is responding on listen address
-	url := fmt.Sprintf("http://127.0.0.1%s/health", listenAddr)
+	// 3. Verify API is responding on listen address. listenAddr can be
+	// either ":8339" (port-only, listens on 0.0.0.0) or
+	// "127.0.0.1:8339" (host:port). Naive `127.0.0.1` + listenAddr
+	// concatenation built "127.0.0.1127.0.0.1:8339" once we clamped
+	// the bind to loopback. Extract the port and rebuild from it.
+	_, port, splitErr := net.SplitHostPort(listenAddr)
+	if splitErr != nil || port == "" {
+		port = strings.TrimPrefix(listenAddr, ":")
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%s/health", port)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {

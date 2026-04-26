@@ -105,6 +105,9 @@ func (s *Server) getAddress(w http.ResponseWriter, r *http.Request) {
 			}
 			txs = append(txs, entry)
 		}
+		if err := txRows.Err(); err != nil {
+			slog.Warn("txRows iter failed", "error", err)
+		}
 	}
 
 	if len(needCounterparties) > 0 {
@@ -132,6 +135,9 @@ func (s *Server) getAddress(w http.ResponseWriter, r *http.Request) {
 				"txid": txid, "n": n, "value": selaToELA(valueSela),
 				"outputLock": outputLock, "type": outputType,
 			})
+		}
+		if err := utxoRows.Err(); err != nil {
+			slog.Warn("utxoRows iter failed", "error", err)
 		}
 	}
 
@@ -192,6 +198,9 @@ func resolveCounterpartiesForPage(ctx context.Context, pool *pgxpool.Pool, addre
 				}
 			}
 		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("rows iter failed", "error", err)
+		}
 	}
 
 	// Input addresses per tx (for received counterparties)
@@ -209,6 +218,9 @@ func resolveCounterpartiesForPage(ctx context.Context, pool *pgxpool.Pool, addre
 					recvAddrs[txid] = append(recvAddrs[txid], addr)
 				}
 			}
+		}
+		if err := rows2.Err(); err != nil {
+			slog.Warn("rows2 iter failed", "error", err)
 		}
 	}
 
@@ -298,6 +310,9 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 			entry["producerName"] = producerName
 		}
 		stakes = append(stakes, entry)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 
 	result := map[string]any{
@@ -411,6 +426,9 @@ func (s *Server) getAddressStaking(w http.ResponseWriter, r *http.Request) {
 					stakeAddrs = append(stakeAddrs, sa)
 				}
 			}
+			if err := stakeRows.Err(); err != nil {
+				slog.Warn("stakeRows iter failed", "error", err)
+			}
 			if len(stakeAddrs) > 0 {
 				result["stakeAddresses"] = stakeAddrs
 			}
@@ -467,6 +485,9 @@ func (s *Server) getRichList(w http.ResponseWriter, r *http.Request) {
 		}
 		addresses = append(addresses, entry)
 		rank++
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 
 	writeJSON(w, 200, APIResponse{Data: addresses, Total: total, Page: page, Size: pageSize})
@@ -577,6 +598,9 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 		stakers = append(stakers, entry)
 		rank++
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 
 	// Batch-resolve origin wallet addresses for all stake addresses
 	if len(stakers) > 0 {
@@ -605,6 +629,9 @@ func (s *Server) getTopStakers(w http.ResponseWriter, r *http.Request) {
 				if origRows.Scan(&sAddr, &oAddr) == nil && oAddr != "" {
 					originMap[sAddr] = oAddr
 				}
+			}
+			if err := origRows.Err(); err != nil {
+				slog.Warn("origRows iter failed", "error", err)
 			}
 		}
 		for i := range stakers {
@@ -680,6 +707,9 @@ func (s *Server) getAddressBalanceHistory(w http.ResponseWriter, r *http.Request
 		}
 		deltas = append(deltas, dayDelta{day: day.Format("2006-01-02"), delta: delta})
 		totalDeltaInWindow += delta
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 
 	// Starting balance = current balance minus sum of all deltas in window
@@ -867,6 +897,9 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 
 		entries = append(entries, entry)
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 
 	writeJSON(w, 200, APIResponse{Data: entries, Total: total, Page: page, Size: pageSize})
 }
@@ -978,6 +1011,9 @@ func (s *Server) getAddressGovernanceActivity(w http.ResponseWriter, r *http.Req
 			entry["budget"] = budget
 		}
 		events = append(events, entry)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 
 	writeJSON(w, 200, APIResponse{Data: events, Total: total, Page: page, Size: pageSize})

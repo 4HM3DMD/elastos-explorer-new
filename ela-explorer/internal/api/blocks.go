@@ -248,6 +248,9 @@ func (s *Server) getBlock(w http.ResponseWriter, r *http.Request) {
 				"vinCount": vinCount, "voutCount": voutCount,
 			})
 		}
+		if err := txRows.Err(); err != nil {
+			slog.Warn("txRows iter failed", "error", err)
+		}
 		enrichTxsWithValues(r.Context(), s.db.API, txs)
 		block["transactions"] = txs
 	}
@@ -308,6 +311,9 @@ func (s *Server) getBlockTransactions(w http.ResponseWriter, r *http.Request) {
 			"fee": selaToELAOrNull(fee), "timestamp": timestamp,
 			"vinCount": vinCount, "voutCount": voutCount,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 	enrichTxsWithValues(r.Context(), s.db.API, txs)
 
@@ -431,6 +437,9 @@ func resolvePubkeyNames(ctx context.Context, pool *pgxpool.Pool, pubkeys []strin
 				}
 			}
 		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("rows iter failed", "error", err)
+		}
 	}
 
 	// CR Council members: check dpos_pubkey for any keys still unresolved
@@ -455,6 +464,9 @@ func resolvePubkeyNames(ctx context.Context, pool *pgxpool.Pool, pubkeys []strin
 				if nick != "" {
 					result[pk] = nick + " (CR)"
 				}
+			}
+			if err := crRows.Err(); err != nil {
+				slog.Warn("crRows iter failed", "error", err)
 			}
 		}
 	}

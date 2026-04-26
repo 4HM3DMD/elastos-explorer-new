@@ -67,6 +67,9 @@ func (s *Server) getTransaction(w http.ResponseWriter, r *http.Request) {
 				"sequence": seq, "address": addr, "value": selaToELA(valueSela),
 			})
 		}
+		if err := vinRows.Err(); err != nil {
+			slog.Warn("vinRows iter failed", "error", err)
+		}
 	}
 
 	voutRows, voutErr := s.db.API.Query(r.Context(), `
@@ -103,6 +106,9 @@ func (s *Server) getTransaction(w http.ResponseWriter, r *http.Request) {
 			vout["spentVinN"] = *spentVinN
 		}
 			vouts = append(vouts, vout)
+		}
+		if err := voutRows.Err(); err != nil {
+			slog.Warn("voutRows iter failed", "error", err)
 		}
 	}
 
@@ -286,6 +292,9 @@ func (s *Server) traceTransaction(w http.ResponseWriter, r *http.Request) {
 				n.Inputs = append(n.Inputs, trace(ctx, prevID, d-1))
 			}
 		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("rows iter failed", "error", err)
+		}
 		return n
 	}
 
@@ -398,6 +407,9 @@ func enrichTxAddressLabels(ctx context.Context, pool *pgxpool.Pool, result map[s
 		if rows.Scan(&addr, &label, &category) == nil {
 			labels[addr] = map[string]string{"label": label, "category": category}
 		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 	if len(labels) > 0 {
 		result["addressLabels"] = labels

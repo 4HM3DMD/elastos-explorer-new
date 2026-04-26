@@ -133,6 +133,9 @@ func (s *Server) getCRElections(w http.ResponseWriter, r *http.Request) {
 			"legacyEra": term <= 3,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 	writeJSON(w, 200, APIResponse{Data: elections})
 }
 
@@ -231,6 +234,9 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			r["depositAmount"] = selaToELA(depositSela)
 		}
 		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 	// Empty candidate list: distinguish a future / live-voting term
 	// (no rows yet, but the URL is valid — render "voting open, no
@@ -415,6 +421,9 @@ func (s *Server) getCRElectionReplayEvents(w http.ResponseWriter, r *http.Reques
 			AmountSela: amount,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 	if current != nil {
 		events = append(events, *current)
 	}
@@ -532,6 +541,9 @@ func (s *Server) getCRElectionVoters(w http.ResponseWriter, r *http.Request) {
 			"sampleTxid":         strings.TrimSpace(sampleTxid),
 		})
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 
 	writeJSON(w, 200, APIResponse{
 		Data:  voters,
@@ -627,6 +639,9 @@ func (s *Server) getCRCandidateVoters(w http.ResponseWriter, r *http.Request) {
 			"txid":       strings.TrimSpace(txid),
 			"txCount":    txCount,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 
 	writeJSON(w, 200, APIResponse{
@@ -725,6 +740,9 @@ func (s *Server) getAddressCRVotes(w http.ResponseWriter, r *http.Request) {
 			Txid:      strings.TrimSpace(txid),
 		})
 		totalSelaPerTerm[term] += amountSela
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 	for i := range groups {
 		groups[i].TotalEla = selaToELA(totalSelaPerTerm[groups[i].Term])
@@ -960,6 +978,9 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 		t.LegacyEra = t.Term <= 3
 		terms = append(terms, t)
 	}
+	if err := termRows.Err(); err != nil {
+		slog.Warn("termRows iter failed", "error", err)
+	}
 
 	// 3. Governance record. Aggregated counts + recent reviews.
 	// Reviews are keyed by DID, not CID — so we use the DID we
@@ -1017,6 +1038,9 @@ func (s *Server) getCandidateProfile(w http.ResponseWriter, r *http.Request) {
 					"reviewHeight": reviewH,
 					"txid":         strings.TrimSpace(txid),
 				})
+			}
+			if err := recentRows.Err(); err != nil {
+				slog.Warn("recentRows iter failed", "error", err)
 			}
 			governance["recentReviews"] = recent
 		}
@@ -1094,6 +1118,9 @@ func (s *Server) getCandidateReviews(w http.ResponseWriter, r *http.Request) {
 			"proposalStatus":  pStatus,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 
 	writeJSON(w, 200, APIResponse{
 		Data:  reviews,
@@ -1157,6 +1184,9 @@ func (s *Server) getVoterTxHistory(w http.ResponseWriter, r *http.Request) {
 			VoteHeight: h,
 			Txid:       strings.TrimSpace(txid),
 		})
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
 	}
 	// The LAST entry (highest stake_height) is the one that counted
 	// under UsedCRVotes. Mark it.
@@ -1485,6 +1515,9 @@ func (s *Server) getCRProposals(w http.ResponseWriter, r *http.Request) {
 		}
 		proposals = append(proposals, p)
 	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("rows iter failed", "error", err)
+	}
 
 	writeJSON(w, 200, APIResponse{Data: proposals, Total: total, Page: page, Size: pageSize})
 }
@@ -1581,6 +1614,9 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 				rev["opinionMessage"] = opinionMessage
 			}
 			reviews = append(reviews, rev)
+		}
+		if err := reviewRows.Err(); err != nil {
+			slog.Warn("reviewRows iter failed", "error", err)
 		}
 	}
 

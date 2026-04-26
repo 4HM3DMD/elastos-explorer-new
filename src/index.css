@@ -83,6 +83,38 @@
     background-color: rgba(255, 158, 24, 0.25);
     color: inherit;
   }
+
+  /* Visible focus ring on every interactive element when navigated by
+     keyboard. `:focus-visible` (vs `:focus`) means the ring doesn't
+     show up on mouse clicks where it'd be redundant — only on Tab /
+     Shift-Tab navigation, screen-reader virtual cursor, etc. Matches
+     the brand colour so it's clearly intentional and reads as part
+     of the design.
+
+     Targets every interactive native element + ARIA-tagged buttons.
+     Components that disable the default outline still get a ring via
+     this rule because focus-visible cascade applies before any
+     element-specific outline:none. If a future component needs a
+     custom focus treatment it can override with `focus-visible:ring-0`
+     and add its own. */
+  *:focus {
+    outline: none;
+  }
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  [role="button"]:focus-visible,
+  [role="link"]:focus-visible,
+  [role="tab"]:focus-visible,
+  [role="menuitem"]:focus-visible,
+  [tabindex]:not([tabindex="-1"]):focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
 @layer components {

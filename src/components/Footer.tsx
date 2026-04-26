@@ -10,7 +10,7 @@ const exploreLinks = [
 ];
 
 const governanceLinks = [
-  { to: '/governance', label: 'Elastos DAO' },
+  { to: '/governance', label: 'Council' },
   { to: '/governance/proposals', label: 'Proposals' },
   { to: '/mempool', label: 'Mempool' },
 ];

@@ -24,8 +24,8 @@ const NAV_GROUPS: { label: string; items: { path: string; label: string; descrip
   {
     label: 'Governance',
     items: [
-      { path: '/governance', label: 'Elastos DAO', description: 'Council members & elections' },
-      { path: '/governance/proposals', label: 'Proposals', description: 'Community proposals' },
+      { path: '/governance', label: 'Council', description: 'Live council members + election history' },
+      { path: '/governance/proposals', label: 'Proposals', description: 'Community proposals & council reviews' },
     ],
   },
   {

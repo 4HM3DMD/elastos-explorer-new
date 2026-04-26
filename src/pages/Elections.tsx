@@ -270,7 +270,11 @@ const Elections = () => {
 
       {/* Body — depends on phase. */}
       {(phase === 'duty' || phase === 'pre-genesis' || phase === 'failed_restart') && (
-        <CouncilMembersTable members={members} loading={loading} />
+        <CouncilMembersTable
+          members={members}
+          loading={loading}
+          term={status?.currentCouncilTerm}
+        />
       )}
 
       {phase === 'voting' && (
@@ -291,6 +295,7 @@ const Elections = () => {
           <CouncilMembersTable
             members={members}
             loading={loading}
+            term={status?.currentCouncilTerm}
             headline={`Current Term ${status?.currentCouncilTerm} council (active until handover)`}
           />
         </>
@@ -516,10 +521,13 @@ export function CouncilMembersTable({
   members,
   loading,
   headline,
+  term,
 }: {
   members: CRMember[];
   loading: boolean;
   headline?: string;
+  /** Current council term — used to build the per-member profile link. */
+  term?: number;
 }) {
   return (
     <div className="card overflow-hidden">
@@ -569,7 +577,23 @@ export function CouncilMembersTable({
                     </td>
                     <td className="align-top">
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-primary text-xs">{m.nickname || 'Unnamed'}</span>
+                        {/* Council nicknames are now clickable — opens the
+                            member's full profile (identity, governance
+                            record, voters this term, multi-term pills).
+                            Was a `<span>` for ~all of project history,
+                            forcing users to scroll to "Election results"
+                            and drill in via the term card to learn anything
+                            about a member. Three-click discovery → one. */}
+                        {term && m.cid ? (
+                          <Link
+                            to={`/governance/elections/${term}/candidate/${m.cid}`}
+                            className="font-semibold text-primary text-xs hover:text-brand transition-colors"
+                          >
+                            {m.nickname || 'Unnamed'}
+                          </Link>
+                        ) : (
+                          <span className="font-semibold text-primary text-xs">{m.nickname || 'Unnamed'}</span>
+                        )}
                         {safeExternalUrl(m.url) && (
                           <a
                             href={safeExternalUrl(m.url)!}
@@ -699,7 +723,7 @@ export function CandidatesList({
  * For legacy terms (T1-T3), total-votes is displayed as "—" since the
  * pre-BPoS era's vote counts aren't reconstructable from UTXO data.
  */
-function TermCard({ term, isCurrent }: { term: ElectionSummary; isCurrent?: boolean }) {
+export function TermCard({ term, isCurrent }: { term: ElectionSummary; isCurrent?: boolean }) {
   const legacy = term.legacyEra === true;
   return (
     <Link

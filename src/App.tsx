@@ -19,6 +19,7 @@ const ValidatorDetail = lazy(() => import('./pages/ValidatorDetail.js'));
 const CRProposals = lazy(() => import('./pages/CRProposals.js'));
 const ProposalDetail = lazy(() => import('./pages/ProposalDetail.js'));
 const Elections = lazy(() => import('./pages/Elections.js'));
+const ElectionsArchive = lazy(() => import('./pages/ElectionsArchive.js'));
 const ElectionDetail = lazy(() => import('./pages/ElectionDetail.js'));
 const ElectionVoters = lazy(() => import('./pages/ElectionVoters.js'));
 const CandidateDetail = lazy(() => import('./pages/CandidateDetail.js'));
@@ -131,7 +132,11 @@ function AnimatedRoutes() {
           <Route path="/governance" element={<Elections />} />
           <Route path="/governance/proposals" element={<CRProposals />} />
           <Route path="/governance/proposal/:hash" element={<ProposalDetail />} />
-          <Route path="/governance/elections" element={<Navigate to="/governance" replace />} />
+          {/* Standalone, bookmarkable election archive — replaces the
+              earlier blanket redirect that pushed every /elections
+              request back to /governance and made the archive
+              non-shareable. */}
+          <Route path="/governance/elections" element={<ElectionsArchive />} />
           <Route path="/governance/elections/:term" element={<ElectionDetail />} />
           <Route path="/governance/elections/:term/voters" element={<ElectionVoters />} />
           <Route path="/governance/elections/:term/candidate/:cid" element={<CandidateDetail />} />

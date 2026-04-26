@@ -301,23 +301,29 @@ const Elections = () => {
         </>
       )}
 
-      {/* Election history — leads to per-term results pages
-          (candidates + votes + winners), not council rosters.
-          Renamed from "Past councils" because users were
-          interpreting the section as a member directory. */}
+      {/* Recent elections — preview the 3 most-recent terms, then link
+          out to the full archive. The landing page used to render the
+          whole archive grid here, which dominated the scroll. The
+          archive now lives at /governance/elections (own page,
+          bookmarkable) and is reachable via the Elections tab in
+          GovernanceNav. This section keeps "what just happened" one
+          glance away without burying the council content. */}
       {pastTerms.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold text-primary tracking-[0.02em] flex items-center gap-2">
               <Trophy size={13} className="text-brand" />
-              Election results
+              Recent elections
             </h2>
-            <span className="text-[10px] text-muted">
-              {pastTerms.length} term{pastTerms.length === 1 ? '' : 's'}
-            </span>
+            <Link
+              to="/governance/elections"
+              className="text-[11px] text-brand hover:underline"
+            >
+              View all {pastTerms.length} elections →
+            </Link>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {pastTerms.map((t) => (
+            {pastTerms.slice(0, 3).map((t) => (
               <TermCard
                 key={t.term}
                 term={t}

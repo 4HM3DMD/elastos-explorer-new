@@ -192,7 +192,7 @@ function Header({
             )}
           </div>
         </div>
-        <GovernanceNav activePath="/governance" />
+        <GovernanceNav activePath="/governance/elections" />
       </div>
 
       <GovernanceBreadcrumb

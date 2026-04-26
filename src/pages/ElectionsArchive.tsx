@@ -87,7 +87,7 @@ const ElectionsArchive = () => {
             </p>
           </div>
         </div>
-        <GovernanceNav activePath="/governance" phase={status?.phase} />
+        <GovernanceNav activePath="/governance/elections" phase={status?.phase} />
       </div>
 
       <GovernanceBreadcrumb items={[{ label: 'Elections' }]} />

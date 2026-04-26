@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, FileText } from 'lucide-react';
+import { Users, FileText, Trophy } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ElectionPhase } from '../types/blockchain';
 import { cn } from '../lib/cn';
@@ -28,7 +28,7 @@ const PHASE_INDICATES_LIVE: Record<ElectionPhase, boolean> = {
 };
 
 export interface GovernanceNavProps {
-  activePath: '/governance' | '/governance/proposals';
+  activePath: '/governance' | '/governance/elections' | '/governance/proposals';
   /** If provided, skip the internal status fetch and use this. */
   phase?: ElectionPhase;
 }
@@ -51,6 +51,7 @@ const GovernanceNav: React.FC<GovernanceNavProps> = ({ activePath, phase: extern
   const tabs = useMemo(
     () => [
       { label: COUNCIL_LABEL, path: '/governance' as const, icon: COUNCIL_ICON, live: isLive },
+      { label: 'Elections', path: '/governance/elections' as const, icon: Trophy, live: false },
       { label: 'Proposals', path: '/governance/proposals' as const, icon: FileText, live: false },
     ],
     [isLive],

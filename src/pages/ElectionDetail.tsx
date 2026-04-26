@@ -145,7 +145,7 @@ const ElectionDetail = () => {
             </p>
           </div>
         </div>
-        <GovernanceNav activePath="/governance" />
+        <GovernanceNav activePath="/governance/elections" />
       </div>
 
       {/* Breadcrumb replaces the old single back-link. The all-voters

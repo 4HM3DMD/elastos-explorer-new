@@ -14,6 +14,7 @@ import { PageSkeleton } from '../components/LoadingSkeleton';
 import { getLocation, formatVotes, fmtEla, safeExternalUrl } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
+import Breadcrumb from '../components/Breadcrumb';
 import { getRegistrationBadge } from '../utils/validatorBadge';
 
 function getStateDisplay(p: Pick<Producer, 'registrationType' | 'isCouncil' | 'state'>): { label: string; cls: string } {
@@ -98,6 +99,11 @@ const ValidatorDetail = () => {
         title={producer ? `Validator ${producer.nickname || 'Details'}` : 'Validator Details'}
         description={producer ? `${producer.nickname || 'Validator'} on the Elastos (ELA) network with ${formatVotes(producer.dposV2Votes)} ELA in votes.` : 'Validator details on the Elastos network.'}
         path={`/validator/${ownerPubKey}`}
+      />
+      <Breadcrumb
+        root={{ label: 'Validators', to: '/validators' }}
+        rootIcon={Shield}
+        items={[{ label: producer?.nickname || 'Validator' }]}
       />
       {/* Page header card */}
       <div className="card relative overflow-hidden p-4 md:p-6">

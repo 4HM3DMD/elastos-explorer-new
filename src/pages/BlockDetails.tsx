@@ -19,6 +19,7 @@ import { TxTypeIcon } from '../components/TxTypeIcon';
 import { cn } from '../lib/cn';
 import { getAddressInfo } from '../constants/addressLabels';
 import SEO from '../components/SEO';
+import Breadcrumb from '../components/Breadcrumb';
 import { truncateHash } from '../utils/seo';
 
 const BlockDetails = () => {
@@ -86,6 +87,11 @@ const BlockDetails = () => {
         title={block ? `Block #${Number(block.height).toLocaleString()}` : 'Block Details'}
         description={block ? `Block ${Number(block.height).toLocaleString()} on the Elastos (ELA) main chain with ${block.txCount} transactions.` : 'Block details on the Elastos main chain.'}
         path={`/block/${heightOrHash}`}
+      />
+      <Breadcrumb
+        root={{ label: 'Blocks', to: '/blocks' }}
+        rootIcon={Box}
+        items={[{ label: block ? `#${Number(block.height).toLocaleString()}` : 'Block' }]}
       />
       {/* Page header */}
       <div className="card relative overflow-hidden p-4 md:p-6">

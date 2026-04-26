@@ -12,6 +12,7 @@ import NodeAvatar from '../components/NodeAvatar';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import StakeBar from '../components/StakeBar';
 import SEO from '../components/SEO';
+import Breadcrumb from '../components/Breadcrumb';
 import { truncateHash } from '../utils/seo';
 
 const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -267,6 +268,11 @@ const StakerDetail = () => {
         title={`Staking for ${truncateHash(address ?? '')}`}
         description={`Staking positions and voting rights for Elastos (ELA) address ${truncateHash(address ?? '')}.`}
         path={`/staking/${address}`}
+      />
+      <Breadcrumb
+        root={{ label: 'Staking', to: '/staking' }}
+        rootIcon={Lock}
+        items={[{ label: address ? truncateHash(address) : 'Staker' }]}
       />
       {/* Page header card */}
       <div className="card relative overflow-hidden p-4 md:p-6">

@@ -6,7 +6,7 @@ import { TX_TYPE_MAP } from '../types/blockchain';
 import {
   ArrowLeft, ArrowRight, ArrowDown, Activity, Shield,
   Database, HardDrive, Layers, ChevronDown, ChevronUp, Code,
-  Coins, CheckCircle, Hash,
+  Coins, CheckCircle, Hash, Receipt,
 } from 'lucide-react';
 import HashDisplay from '../components/HashDisplay';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -20,6 +20,7 @@ import { summarizeTransaction } from '../utils/txSummary';
 import { sumSela } from '../utils/sela';
 import { getAddressInfo, type AddressLabelInfo } from '../constants/addressLabels';
 import SEO from '../components/SEO';
+import Breadcrumb from '../components/Breadcrumb';
 import { truncateHash } from '../utils/seo';
 
 function mergeLabel(address: string, apiLabels?: Record<string, AddressLabel>): AddressLabelInfo | undefined {
@@ -91,6 +92,11 @@ const TransactionDetails = () => {
         title={tx ? `Transaction ${truncateHash(txid ?? '')}` : 'Transaction Details'}
         description={tx ? `ELA transaction ${truncateHash(txid ?? '')} in block #${tx.blockHeight?.toLocaleString()}. Type: ${getTypeLabel(tx.typeName)}.` : 'Transaction details on the Elastos main chain.'}
         path={`/tx/${txid}`}
+      />
+      <Breadcrumb
+        root={{ label: 'Transactions', to: '/transactions' }}
+        rootIcon={Receipt}
+        items={[{ label: txid ? `${truncateHash(txid)}` : 'Transaction' }]}
       />
       {/* Page header card */}
       <div className="card relative overflow-hidden p-4 md:p-6">

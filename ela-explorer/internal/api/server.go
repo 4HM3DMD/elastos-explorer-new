@@ -79,6 +79,11 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/address/{address}/vote-history", s.getAddressVoteHistory)
 		r.Get("/address/{address}/governance", s.getAddressGovernanceActivity)
 		r.Get("/address/{address}/cr-votes", s.getAddressCRVotes)
+		// Public address-label lookup. Always 200 — empty fields if
+		// the address has no platform-known label. Lets third-party
+		// portals overlay their own labels on top of the canonical
+		// platform set without rebuilding the list themselves.
+		r.Get("/address/{address}/label", s.getAddressLabel)
 
 		r.Get("/richlist", s.getRichList)
 		r.Get("/stats", s.getStats)
@@ -94,8 +99,20 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/cr/members", s.getCRMembers)
 		r.Get("/cr/elections", s.getCRElections)
 		r.Get("/cr/elections/{term}", s.getCRElectionByTerm)
+		// Live (cache-bypassing) variant of the term endpoint. Same
+		// payload shape; no 60s server cache, no intermediate caching
+		// (Cache-Control: no-store). Built for third-party portals
+		// that need sub-second freshness during live voting.
+		r.Get("/cr/elections/{term}/live-tally", s.getCRElectionByTermLive)
 		r.Get("/cr/elections/{term}/replay-events", s.getCRElectionReplayEvents)
 		r.Get("/cr/elections/{term}/voters", s.getCRElectionVoters)
+		// Bulk dump of every voter + their full slice breakdown for
+		// the term, capped at 5000. One call instead of paginating
+		// /voters and then per-voter follow-ups.
+		r.Get("/cr/elections/{term}/voters/bulk", s.getCRElectionVotersBulk)
+		// Last N TxVotings for the term, in reverse-chronological
+		// order. Powers live activity-feed UX.
+		r.Get("/cr/elections/{term}/recent-events", s.getCRElectionRecentEvents)
 		r.Get("/cr/elections/{term}/voters/{cid}", s.getCRCandidateVoters)
 		r.Get("/cr/elections/{term}/voters/{cid}/{address}/history", s.getVoterTxHistory)
 		r.Get("/cr/members/{cid}/profile", s.getCandidateProfile)
@@ -106,6 +123,12 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 		r.Get("/cr/proposal-image/{draftHash}/{filename}", s.getProposalImage)
 
 		r.Get("/search", s.search)
+
+		// Self-describing OpenAPI 3.0 spec covering every public
+		// endpoint + WebSocket events. Lets third-party consumers
+		// (the unofficial elections portal, partner integrations)
+		// generate typed clients automatically.
+		r.Get("/openapi.json", s.getOpenAPISpec)
 		r.Get("/mempool", s.getMempool)
 		r.Get("/charts/{metric}", s.getChart)
 		r.Get("/tx/{txid}/trace", s.traceTransaction)

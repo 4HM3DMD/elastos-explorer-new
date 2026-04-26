@@ -1018,3 +1018,40 @@ func (s *Server) getAddressGovernanceActivity(w http.ResponseWriter, r *http.Req
 
 	writeJSON(w, 200, APIResponse{Data: events, Total: total, Page: page, Size: pageSize})
 }
+
+// getAddressLabel — public lookup for the platform's official label
+// + category for an address (Burn Address, KuCoin Exchange, ELA DAO
+// Assets, etc). Powers third-party portals that want to overlay
+// their own user-defined labels (e.g. "malicious", "scam") on top
+// of the canonical platform-known set, instead of rebuilding the
+// entire address-labels list themselves.
+//
+// Always returns 200. Unknown addresses get an empty label/category.
+// This is intentional: the consumer can call the endpoint for ANY
+// address and get a uniform shape back, instead of needing to
+// distinguish 404 from "no label."
+//
+// Response shape:
+//   { "address": "...", "label": "KuCoin Exchange", "category": "Exchange" }
+// or for unlabeled addresses:
+//   { "address": "...", "label": "", "category": "" }
+func (s *Server) getAddressLabel(w http.ResponseWriter, r *http.Request) {
+	address := chi.URLParam(r, "address")
+	if !isAddress(address) {
+		writeError(w, 400, "invalid address")
+		return
+	}
+	var label, category string
+	err := s.db.API.QueryRow(r.Context(),
+		`SELECT COALESCE(label, ''), COALESCE(category, '')
+		 FROM address_labels WHERE address = $1`, address,
+	).Scan(&label, &category)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		slog.Warn("getAddressLabel: lookup failed", "address", address, "error", err)
+	}
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
+		"address":  address,
+		"label":    label,
+		"category": category,
+	}})
+}

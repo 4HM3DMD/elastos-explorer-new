@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -147,12 +148,16 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 60s server-side cache. Per-term election results don't change
-	// between vote events, so the same payload is served to every
-	// visitor for the cache window. The frontend re-fetches cheaply
-	// on navigation; this absorbs the T7-launch traffic spike where
-	// every visitor lands on the current term page in the same
-	// minute. Cache key includes the term so each term has its own
-	// entry; entries auto-evict via the shared TTLCache.
+	// between vote events for the cache window, so the same payload
+	// serves every visitor in that window. Absorbs the T7-launch
+	// traffic spike where every visitor lands on the current term
+	// page in the same minute. Cache key includes the term so each
+	// term has its own entry; entries auto-evict via the shared
+	// TTLCache.
+	//
+	// Third-party portals that need sub-second freshness during live
+	// voting hit /cr/elections/{term}/live-tally instead — same shape
+	// of payload, same SQL, but bypasses the cache.
 	cacheKey := fmt.Sprintf("crElection:%d", term)
 	if cached, ok := s.cache.Get(cacheKey); ok {
 		if resp, ok := cached.(map[string]any); ok {
@@ -161,6 +166,52 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resp, status := s.buildElectionTermDetail(r.Context(), term)
+	if status == 404 {
+		writeError(w, 404, "no election data for this term")
+		return
+	}
+	if status != 200 {
+		writeError(w, status, "database error")
+		return
+	}
+	s.cache.Set(cacheKey, resp)
+	writeJSON(w, 200, APIResponse{Data: resp})
+}
+
+// getCRElectionByTermLive — same payload as getCRElectionByTerm but
+// bypasses the 60s cache. Built for live-voting dashboards that need
+// to see new TxVotings reflected within seconds, not within a minute.
+// Heavier on the DB (every call hits the SQL) so callers should
+// rate-limit themselves to ~1 req/sec; nginx's per-IP rate cap
+// (30 req/s) is the absolute backstop.
+func (s *Server) getCRElectionByTermLive(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	resp, status := s.buildElectionTermDetail(r.Context(), term)
+	if status == 404 {
+		writeError(w, 404, "no election data for this term")
+		return
+	}
+	if status != 200 {
+		writeError(w, status, "database error")
+		return
+	}
+	// Tell intermediaries (nginx, browsers, CDN) not to cache this
+	// response. The endpoint is meant for live polling and any
+	// stale-while-revalidate would defeat the purpose.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, 200, APIResponse{Data: resp})
+}
+
+// buildElectionTermDetail does the actual SQL + transformation for a
+// term's election state. Returned by both the cached and live
+// endpoints. Status codes: 200 = ok, 404 = no data and term isn't
+// "near future", 500 = DB error.
+func (s *Server) buildElectionTermDetail(ctx context.Context, term int) (map[string]any, int) {
 	// Filter to actual term-N participants: candidates who received
 	// votes during this term's voting window OR who were elected.
 	// Without this filter, prior-term candidates whose registration
@@ -168,7 +219,7 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	// 0-vote, non-elected rows (~30-50 noise rows per recent term).
 	// Legacy terms (T1-T3) have all rows with final_votes_sela = 0
 	// AND elected = true, so they pass the filter naturally.
-	rows, err := s.db.API.Query(r.Context(), `
+	rows, err := s.db.API.Query(ctx, `
 		SELECT et.candidate_cid,
 			COALESCE(NULLIF(et.nickname, ''), cm.nickname, '') AS nickname,
 			et.final_votes_sela, et.voter_count,
@@ -186,8 +237,7 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		  AND (et.final_votes_sela > 0 OR et.elected = TRUE)
 		ORDER BY et.rank ASC`, term)
 	if err != nil {
-		writeError(w, 500, "database error")
-		return
+		return nil, 500
 	}
 	defer rows.Close()
 
@@ -263,20 +313,16 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 		// data still 404 — that's a real data gap, not a UX state.
 		const futureTermSlack = 262_800
 		if chainHeight > 0 && chainHeight < termStart && termStart-chainHeight <= futureTermSlack {
-			emptyResp := map[string]any{
+			return map[string]any{
 				"term":              term,
 				"votingStartHeight": ns,
 				"votingEndHeight":   ne,
 				"legacyEra":         false,
 				"uniqueVoterCount":  0,
 				"candidates":        []map[string]any{},
-			}
-			s.cache.Set(cacheKey, emptyResp)
-			writeJSON(w, 200, APIResponse{Data: emptyResp})
-			return
+			}, 200
 		}
-		writeError(w, 404, "no election data for this term")
-		return
+		return nil, 404
 	}
 
 	// Real unique-voter count for the term — distinct addresses with
@@ -289,7 +335,7 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 	var uniqueVoterCount int64
 	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
 	if term > 3 {
-		_ = s.db.API.QueryRow(r.Context(), `
+		_ = s.db.API.QueryRow(ctx, `
 			WITH latest_per_voter AS (
 				SELECT address, MAX(stake_height) AS h
 				FROM votes
@@ -303,16 +349,14 @@ func (s *Server) getCRElectionByTerm(w http.ResponseWriter, r *http.Request) {
 			narrowStart, narrowEnd).Scan(&uniqueVoterCount)
 	}
 
-	resp := map[string]any{
+	return map[string]any{
 		"term":              term,
 		"votingStartHeight": firstVotingStart,
 		"votingEndHeight":   firstVotingEnd,
 		"legacyEra":         term <= 3,
 		"uniqueVoterCount":  uniqueVoterCount,
 		"candidates":        results,
-	}
-	s.cache.Set(cacheKey, resp)
-	writeJSON(w, 200, APIResponse{Data: resp})
+	}, 200
 }
 
 // getCRElectionReplayEvents returns the raw vote events for a term's
@@ -2000,4 +2044,272 @@ func (s *Server) refillCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.syncer.CancelRefill()
 	writeJSON(w, 200, map[string]any{"ok": true, "message": "cancel signal sent"})
+}
+
+// getCRElectionVotersBulk — one-shot dump of every voter in the term's
+// voting window with the full slice breakdown of who they voted for.
+// Built for third-party portals that want a snapshot of the whole
+// election state in a single call (the paginated /voters endpoint is
+// fine for UI but slow to walk for analytics / CSV export).
+//
+// Caps at 5000 voters per call to bound memory + latency. Pre-BPoS
+// terms (T1-T3) return an empty array since their per-voter data
+// isn't reconstructable from chain.
+//
+// Response shape:
+//   {
+//     "term": 6,
+//     "totalVoters": 253,
+//     "voters": [
+//       {
+//         "address": "EJUx...",
+//         "totalEla": "1234.56",
+//         "lastVoteHeight": 1962800,
+//         "candidates": [
+//           {"cid": "ip7R...", "nickname": "Sash | Elacity 🐘", "ela": "500.00"},
+//           {"cid": "iam...",  "nickname": "gelaxy",          "ela": "734.56"}
+//         ]
+//       }, ...
+//     ]
+//   }
+func (s *Server) getCRElectionVotersBulk(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	if term <= 3 {
+		writeJSON(w, 200, APIResponse{Data: map[string]any{
+			"term":        term,
+			"totalVoters": 0,
+			"voters":      []map[string]any{},
+			"legacyEra":   true,
+		}})
+		return
+	}
+
+	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
+	const maxVoters = 5000
+
+	// All slices for the term, deduped under the latest-TxVoting-per-
+	// voter (UsedCRVotes) semantic. JOINs cr_members for the nickname
+	// so the response is self-contained — no per-row round-trips on
+	// the client side.
+	rows, err := s.db.API.Query(r.Context(), `
+		WITH latest_per_voter AS (
+			SELECT address, MAX(stake_height) AS h
+			FROM votes
+			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
+		),
+		bounded_voters AS (
+			SELECT address, h FROM latest_per_voter
+			ORDER BY h DESC, address ASC
+			LIMIT $3
+		)
+		SELECT v.address, v.candidate, COALESCE(cm.nickname, '') AS nickname,
+		       v.amount_sela, v.stake_height, v.txid
+		FROM votes v
+		JOIN bounded_voters bv ON bv.address = v.address AND bv.h = v.stake_height
+		LEFT JOIN cr_members cm ON cm.cid = v.candidate
+		WHERE v.vote_type = 1 AND v.stake_height BETWEEN $1 AND $2
+		ORDER BY v.stake_height DESC, v.address ASC, v.amount_sela DESC`,
+		narrowStart, narrowEnd, maxVoters)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	type slice struct {
+		CID      string `json:"cid"`
+		Nickname string `json:"nickname,omitempty"`
+		Ela      string `json:"ela"`
+	}
+	type voter struct {
+		Address        string  `json:"address"`
+		TotalEla       string  `json:"totalEla"`
+		LastVoteHeight int64   `json:"lastVoteHeight"`
+		Txid           string  `json:"txid"`
+		Candidates     []slice `json:"candidates"`
+	}
+	voterIdx := map[string]int{}
+	totalSelaPerVoter := map[string]int64{}
+	voters := []voter{}
+
+	for rows.Next() {
+		var addr, cand, nickname, txid string
+		var amountSela, height int64
+		if err := rows.Scan(&addr, &cand, &nickname, &amountSela, &height, &txid); err != nil {
+			continue
+		}
+		idx, ok := voterIdx[addr]
+		if !ok {
+			voters = append(voters, voter{
+				Address:        addr,
+				LastVoteHeight: height,
+				Txid:           strings.TrimSpace(txid),
+				Candidates:     []slice{},
+			})
+			idx = len(voters) - 1
+			voterIdx[addr] = idx
+		}
+		voters[idx].Candidates = append(voters[idx].Candidates, slice{
+			CID:      cand,
+			Nickname: nickname,
+			Ela:      selaToELA(amountSela),
+		})
+		totalSelaPerVoter[addr] += amountSela
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("getCRElectionVotersBulk: rows iter failed", "term", term, "error", err)
+	}
+	for i := range voters {
+		voters[i].TotalEla = selaToELA(totalSelaPerVoter[voters[i].Address])
+	}
+
+	// Real total (not just what we returned) so callers know if we
+	// truncated. They can fall back to paginated /voters if so.
+	var totalVoters int64
+	_ = s.db.API.QueryRow(r.Context(), `
+		WITH latest_per_voter AS (
+			SELECT address, MAX(stake_height) AS h
+			FROM votes
+			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+			GROUP BY address
+		)
+		SELECT COUNT(*) FROM latest_per_voter`,
+		narrowStart, narrowEnd).Scan(&totalVoters)
+
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
+		"term":        term,
+		"totalVoters": totalVoters,
+		"returned":    len(voters),
+		"truncated":   int64(len(voters)) < totalVoters,
+		"voters":      voters,
+		"legacyEra":   false,
+	}})
+}
+
+// getCRElectionRecentEvents — last N TxVotings for the term, in
+// reverse-chronological order. Each event is one full TxVoting (a
+// single voter's complete allocation across candidates), the same
+// shape the dev simulator consumes from /replay-events but capped
+// at the most recent N for live activity-feed UX.
+//
+// Default limit 50, max 500. Pre-BPoS terms return an empty array.
+//
+// Response shape:
+//   {
+//     "term": 7,
+//     "events": [
+//       {
+//         "address": "EJUx...",
+//         "height": 2204120,
+//         "txid": "abc...",
+//         "totalEla": "500.00",
+//         "votes": [{"cid": "ip7R...", "nickname": "Sash...", "ela": "500.00"}]
+//       }, ...
+//     ]
+//   }
+func (s *Server) getCRElectionRecentEvents(w http.ResponseWriter, r *http.Request) {
+	term := parseInt(chi.URLParam(r, "term"), 0)
+	if term < 1 {
+		writeError(w, 400, "invalid term (must be >= 1)")
+		return
+	}
+	limit := clampPageSize(parseInt(r.URL.Query().Get("limit"), 50), 500)
+	if term <= 3 {
+		writeJSON(w, 200, APIResponse{Data: map[string]any{
+			"term":      term,
+			"events":    []map[string]any{},
+			"legacyEra": true,
+		}})
+		return
+	}
+
+	narrowStart, narrowEnd, _ := crElectionWindow(int64(term))
+	// Pull each (address, stake_height) — a single TxVoting can have
+	// multiple slice rows in the votes table, all sharing txid +
+	// height. We group by (address, stake_height, txid) so each
+	// "event" represents one TxVoting.
+	rows, err := s.db.API.Query(r.Context(), `
+		WITH recent_txs AS (
+			SELECT DISTINCT address, stake_height, txid
+			FROM votes
+			WHERE vote_type = 1 AND stake_height BETWEEN $1 AND $2
+			ORDER BY stake_height DESC, address ASC
+			LIMIT $3
+		)
+		SELECT v.address, v.stake_height, v.txid, v.candidate,
+		       COALESCE(cm.nickname, '') AS nickname, v.amount_sela
+		FROM votes v
+		JOIN recent_txs rt ON rt.address = v.address
+		                  AND rt.stake_height = v.stake_height
+		                  AND rt.txid = v.txid
+		LEFT JOIN cr_members cm ON cm.cid = v.candidate
+		WHERE v.vote_type = 1
+		ORDER BY v.stake_height DESC, v.address ASC, v.amount_sela DESC`,
+		narrowStart, narrowEnd, limit)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+
+	type slice struct {
+		CID      string `json:"cid"`
+		Nickname string `json:"nickname,omitempty"`
+		Ela      string `json:"ela"`
+	}
+	type event struct {
+		Address  string  `json:"address"`
+		Height   int64   `json:"height"`
+		Txid     string  `json:"txid"`
+		TotalEla string  `json:"totalEla"`
+		Votes    []slice `json:"votes"`
+	}
+	type key struct {
+		addr   string
+		height int64
+		txid   string
+	}
+	eventIdx := map[key]int{}
+	eventTotal := map[key]int64{}
+	events := []event{}
+
+	for rows.Next() {
+		var addr, txid, cand, nickname string
+		var height, amountSela int64
+		if err := rows.Scan(&addr, &height, &txid, &cand, &nickname, &amountSela); err != nil {
+			continue
+		}
+		k := key{addr, height, strings.TrimSpace(txid)}
+		idx, ok := eventIdx[k]
+		if !ok {
+			events = append(events, event{
+				Address: addr, Height: height, Txid: k.txid,
+				Votes: []slice{},
+			})
+			idx = len(events) - 1
+			eventIdx[k] = idx
+		}
+		events[idx].Votes = append(events[idx].Votes, slice{
+			CID: cand, Nickname: nickname, Ela: selaToELA(amountSela),
+		})
+		eventTotal[k] += amountSela
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("getCRElectionRecentEvents: rows iter failed", "term", term, "error", err)
+	}
+	for i := range events {
+		events[i].TotalEla = selaToELA(eventTotal[key{events[i].Address, events[i].Height, events[i].Txid}])
+	}
+
+	// Live endpoint — don't let intermediaries cache.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, 200, APIResponse{Data: map[string]any{
+		"term":   term,
+		"events": events,
+	}})
 }

@@ -50,7 +50,14 @@ services:
       # namespace), and the endpoint can be hit directly, bypassing
       # nginx caching, rate-limit, and any future WAF / TLS termination.
       LISTEN_ADDR: "127.0.0.1:8339"
-      CORS_ORIGINS: "https://explorer.elastos.io,https://explorer.elastos.net"
+      # CORS allowlist for browser-side fetches. The two production
+      # explorer domains plus localhost dev ports plus the test-node
+      # IP-based URL. Wildcard ("*") is REJECTED at startup with a
+      # warning — it would let any origin issue authenticated calls
+      # from a victim's browser since we accept Authorization headers.
+      # When the unofficial Elections portal goes live, append its
+      # domain here (comma-separated) and restart the container.
+      CORS_ORIGINS: "https://blockchain.elastos.io,https://ela.elastos.io,https://explorer.elastos.io,https://explorer.elastos.net,http://148.230.110.116,http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173"
 
       # Performance (tuned for 32-core / 128GB)
       UTXO_CACHE_SIZE: "20000000"

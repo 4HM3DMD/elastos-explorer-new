@@ -17,9 +17,15 @@ import (
 
 // Event types broadcast to clients.
 const (
-	EventNewBlock     = "newBlock"
-	EventNewStats     = "newStats"
+	EventNewBlock      = "newBlock"
+	EventNewStats      = "newStats"
 	EventMempoolUpdate = "mempoolUpdate"
+	// EventVote — fired for every CRC TxVoting (vote_type=1) the
+	// indexer ingests during a CR election voting window. Lets
+	// third-party portals (e.g. an unofficial elections viewer)
+	// react to votes in real time without polling the tally
+	// endpoints. Payload shape: see BroadcastVote below.
+	EventVote = "voteEvent"
 )
 
 // Message is the wire format for WebSocket events.
@@ -189,6 +195,18 @@ func (h *Hub) BroadcastNewBlock(height int64, hash string, txCount int, timestam
 // BroadcastStats emits periodic stats updates.
 func (h *Hub) BroadcastStats(stats map[string]any) {
 	h.Broadcast(EventNewStats, stats)
+}
+
+// BroadcastVote emits a CRC vote event the moment the indexer ingests
+// a TxVoting (vote_type=1) inside a CR election voting window.
+//
+// Payload includes the voter address, the txid, the block height the
+// vote was mined into, the term the vote is FOR (computed via the
+// CEIL((H-648849)/262800)+1 formula), and the per-candidate slice
+// breakdown (CID + nickname + ELA amount). All fields are wire-safe
+// (no internal types leaked).
+func (h *Hub) BroadcastVote(payload map[string]any) {
+	h.Broadcast(EventVote, payload)
 }
 
 // ClientCount returns the number of connected clients.

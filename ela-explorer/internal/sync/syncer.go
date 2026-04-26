@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,6 +69,11 @@ type Syncer struct {
 
 	// Broadcast callback (set by main to push to WebSocket).
 	OnNewBlock func(height int64, hash string, txCount int, timestamp int64, size int, minerInfo, minerAddress string)
+	// Vote-event broadcast callback. Fires once per CRC TxVoting (vote_type=1)
+	// in any newly-synced block. Built for third-party portals that want
+	// to react to votes in real time without polling. Payload is one
+	// event per (address, txid) — multiple candidate slices are nested.
+	OnVoteEvent func(payload map[string]any)
 }
 
 func NewSyncer(nodeClient *node.Client, database *db.DB, utxoCacheSize int, workers, batchSize, pollIntervalMs int) *Syncer {
@@ -923,9 +929,89 @@ func (s *Syncer) pollAndProcess(ctx context.Context) error {
 			}
 			s.OnNewBlock(height, block.Hash, len(block.Tx), block.Time, block.Size, block.MinerInfo, minerAddr)
 		}
+
+		// Real-time vote broadcast. After the block has been
+		// committed (we're past ProcessBlockLive), scan for any CRC
+		// TxVotings inserted at this height and push one event per
+		// voter via OnVoteEvent. Using the just-written DB rows as
+		// the source of truth — guarantees we never broadcast a vote
+		// that was rolled back, and centralises the "what counts as
+		// a CRC vote" decision in one query.
+		if s.OnVoteEvent != nil {
+			s.broadcastVoteEventsForBlock(ctx, height)
+		}
 	}
 
 	return nil
+}
+
+// broadcastVoteEventsForBlock — finds every CRC TxVoting (vote_type=1)
+// landed at the given block height and fires OnVoteEvent once per
+// (voter address, txid). Joins cr_members for nicknames so the event
+// payload is self-contained. Quiet on DB errors — broadcast is a UX
+// nice-to-have, not a correctness invariant; if the query fails
+// nothing user-visible breaks (the front-end can still pull from
+// /cr/elections/{term}/recent-events).
+func (s *Syncer) broadcastVoteEventsForBlock(ctx context.Context, height int64) {
+	// Computing the term that VOTING is FOR (not the on-duty term)
+	// happens via the CEIL formula `((H - 648849)/262800) + 1`.
+	// 648849 = narrowEnd of T1 = CRFirstTermStart - 1 - CRClaimPeriod.
+	rows, err := s.db.API.Query(ctx, `
+		SELECT v.address, v.txid, v.candidate,
+		       COALESCE(cm.nickname, '') AS nickname,
+		       v.amount_sela,
+		       (CEIL((v.stake_height - 648849.0) / 262800.0)::bigint + 1) AS term
+		FROM votes v
+		LEFT JOIN cr_members cm ON cm.cid = v.candidate
+		WHERE v.vote_type = 1 AND v.stake_height = $1
+		ORDER BY v.address ASC, v.txid ASC, v.amount_sela DESC`, height)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type slice struct {
+		CID      string `json:"cid"`
+		Nickname string `json:"nickname,omitempty"`
+		Ela      string `json:"ela"`
+	}
+	type key struct {
+		addr string
+		txid string
+	}
+	eventVotes := map[key][]slice{}
+	eventTotal := map[key]int64{}
+	eventTerm := map[key]int64{}
+
+	const selaPerEla = 100_000_000
+	for rows.Next() {
+		var addr, txid, cand, nickname string
+		var amountSela, term int64
+		if err := rows.Scan(&addr, &txid, &cand, &nickname, &amountSela, &term); err != nil {
+			continue
+		}
+		k := key{addr, strings.TrimSpace(txid)}
+		// Format amount as ELA string with full 8-decimal precision —
+		// matches the rest of the API's selaToELA() output.
+		ela := fmt.Sprintf("%d.%08d", amountSela/selaPerEla, amountSela%selaPerEla)
+		eventVotes[k] = append(eventVotes[k], slice{CID: cand, Nickname: nickname, Ela: ela})
+		eventTotal[k] += amountSela
+		eventTerm[k] = term
+	}
+	if err := rows.Err(); err != nil {
+		return
+	}
+	for k, votes := range eventVotes {
+		total := eventTotal[k]
+		s.OnVoteEvent(map[string]any{
+			"term":     eventTerm[k],
+			"address":  k.addr,
+			"txid":     k.txid,
+			"height":   height,
+			"totalEla": fmt.Sprintf("%d.%08d", total/selaPerEla, total%selaPerEla),
+			"votes":    votes,
+		})
+	}
 }
 
 // handleReorg walks back to find the common ancestor, then wraps all

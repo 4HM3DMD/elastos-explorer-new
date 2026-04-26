@@ -89,6 +89,12 @@ func main() {
 	syncer.OnNewBlock = func(height int64, hash string, txCount int, timestamp int64, size int, minerInfo, minerAddress string) {
 		wsHub.BroadcastNewBlock(height, hash, txCount, timestamp, size, minerInfo, minerAddress)
 	}
+	// Real-time CRC vote-event push. Fires once per voter per block
+	// (multiple candidate slices nested in `votes`). Powers
+	// third-party live elections portals — no polling needed.
+	syncer.OnVoteEvent = func(payload map[string]any) {
+		wsHub.BroadcastVote(payload)
+	}
 
 	go func() {
 		if err := syncer.Run(ctx); err != nil && ctx.Err() == nil {

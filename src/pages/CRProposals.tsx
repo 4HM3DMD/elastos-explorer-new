@@ -580,8 +580,8 @@ const CRProposals = () => {
       ) : proposals.length === 0 ? (
         <div className="card p-12 text-center">
           <FileText size={32} className="mx-auto text-muted mb-3" />
-          <p className="text-secondary font-medium mb-1">No proposals found</p>
-          <p className="text-xs text-muted">Try selecting a different status filter</p>
+          <p className="text-secondary font-medium mb-1">No proposals match this filter</p>
+          <p className="text-xs text-muted">Try a different status filter or view "All".</p>
         </div>
       ) : (
         <div className="space-y-2.5">

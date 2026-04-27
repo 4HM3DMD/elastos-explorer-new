@@ -107,7 +107,7 @@ const Ranking = () => {
                   </tr>
                 ))
               ) : addresses.length === 0 ? (
-                <tr><td colSpan={4} className="py-12 text-center text-muted">No accounts found</td></tr>
+                <tr><td colSpan={4} className="py-12 text-center text-muted">No accounts</td></tr>
               ) : (
                 addresses.map((addr) => {
                   const label = displayLabels.get(addr.address) || addr.label || '';

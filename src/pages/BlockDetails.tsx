@@ -154,8 +154,8 @@ const BlockDetails = () => {
           <h2 className="text-sm md:text-base font-medium text-primary flex items-center gap-2">
             <Database size={15} className="text-brand" /> Details
           </h2>
-          <DetailRow label="Hash"><HashDisplay hash={block.hash} length={24} showCopyButton /></DetailRow>
-          <DetailRow label="Merkle Root"><HashDisplay hash={block.merkleroot} length={24} /></DetailRow>
+          <DetailRow label="Hash"><HashDisplay hash={block.hash} size="long" showCopyButton /></DetailRow>
+          <DetailRow label="Merkle Root"><HashDisplay hash={block.merkleroot} size="long" /></DetailRow>
           <DetailRow label="Timestamp">
             <RelativeTime ts={block.timestamp} defaultMode="absolute" />
           </DetailRow>
@@ -182,7 +182,7 @@ const BlockDetails = () => {
           {block.btcBlockHash && (
             <DetailRow label="Bitcoin Block">
               <div className="flex items-center gap-2">
-                <HashDisplay hash={block.btcBlockHash} length={24} showCopyButton />
+                <HashDisplay hash={block.btcBlockHash} size="long" showCopyButton />
                 <a
                   href={`https://mempool.space/block/${block.btcBlockHash}`}
                   target="_blank"
@@ -315,7 +315,7 @@ function BlockConfirmation({ block }: { block: Block }) {
             {confirm.sponsorName && (
               <span className="text-sm font-semibold text-primary">{confirm.sponsorName}</span>
             )}
-            <HashDisplay hash={confirm.sponsor} length={24} showCopyButton />
+            <HashDisplay hash={confirm.sponsor} size="long" showCopyButton />
           </div>
         </div>
 

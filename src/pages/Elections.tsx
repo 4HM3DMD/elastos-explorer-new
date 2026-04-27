@@ -577,7 +577,7 @@ export function CouncilMembersTable({
             ) : members.length === 0 ? (
               <tr>
                 <td colSpan={5} className="py-12 text-center text-muted">
-                  No council members found
+                  No council members
                 </td>
               </tr>
             ) : (

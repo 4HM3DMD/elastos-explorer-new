@@ -9,6 +9,7 @@ import {
   Coins, CheckCircle, Hash, Receipt,
 } from 'lucide-react';
 import HashDisplay from '../components/HashDisplay';
+import { cn } from '../lib/cn';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import DetailRow from '../components/DetailRow';
 import TransferSummaryView from '../components/TransferSummary';
@@ -116,8 +117,19 @@ const TransactionDetails = () => {
                     <span className="ml-1.5 text-muted/70">&middot; {typeInfo.category}</span>
                   )}
                 </span>
-                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-accent-green">
-                  <CheckCircle size={10} /> {tx.confirmations.toLocaleString()} confirmations
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1 text-[10px] font-medium',
+                    // < 6 confirmations is the standard "unsafe to spend"
+                    // window for chain reorgs. Amber instead of green so
+                    // exchanges / wallets / merchants treating tx as
+                    // settled can spot the risk at a glance.
+                    tx.confirmations < 6 ? 'text-amber-400' : 'text-accent-green',
+                  )}
+                  title={tx.confirmations < 6 ? 'Wait for at least 6 confirmations before treating this transaction as final.' : undefined}
+                >
+                  <CheckCircle size={10} /> {tx.confirmations.toLocaleString()} confirmation{tx.confirmations === 1 ? '' : 's'}
+                  {tx.confirmations < 6 && <span className="ml-1 opacity-80">(low)</span>}
                 </span>
               </div>
             </div>
@@ -188,7 +200,7 @@ const TransactionDetails = () => {
         <h2 className="text-sm md:text-base font-medium text-primary flex items-center gap-2">
           <Database size={15} className="text-brand" /> Details
         </h2>
-        <DetailRow label="Transaction ID"><HashDisplay hash={tx.txid} length={32} showCopyButton /></DetailRow>
+        <DetailRow label="Transaction ID"><HashDisplay hash={tx.txid} size="long" showCopyButton /></DetailRow>
         <DetailRow label="Block">
           <Link to={`/block/${tx.blockHeight}`} className="link-blue">#{tx.blockHeight.toLocaleString()}</Link>
           {tx.blockHash && <span className="text-muted ml-2 text-xs font-mono">{tx.blockHash.slice(0, 16)}…</span>}

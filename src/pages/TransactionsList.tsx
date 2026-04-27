@@ -203,7 +203,23 @@ const TransactionsList = () => {
                   </tr>
                 ))
               ) : transactions.length === 0 ? (
-                <tr><td colSpan={6} className="py-12 text-center text-muted">No transactions found</td></tr>
+                <tr>
+                  <td colSpan={6} className="py-12 text-center">
+                    <p className="text-muted text-sm mb-2">
+                      {typeFilter !== undefined || viewMode !== 'all'
+                        ? 'No transactions match these filters'
+                        : 'No transactions'}
+                    </p>
+                    {(typeFilter !== undefined || viewMode !== 'all') && (
+                      <button
+                        onClick={() => { setViewMode('all'); setTypeFilter(undefined); }}
+                        className="text-xs text-brand hover:text-brand-200 transition-colors"
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </td>
+                </tr>
               ) : (
                 transactions.map((tx) => {
                   const isSys = SYSTEM_TYPES.has(tx.type);

@@ -197,7 +197,7 @@ const ValidatorDetail = () => {
               ) : stakerError ? (
                 <tr><td colSpan={5} className="py-12 text-center"><span className="text-accent-red text-sm">{stakerError}</span><button onClick={() => fetchStakers(stakerPage)} className="ml-3 text-sm text-brand hover:text-brand-200">Retry</button></td></tr>
               ) : paginatedStakers.length === 0 ? (
-                <tr><td colSpan={5} className="py-12 text-center text-muted">No stakers found</td></tr>
+                <tr><td colSpan={5} className="py-12 text-center text-muted">No stakers</td></tr>
               ) : (
                 paginatedStakers.map((staker) => (
                   <tr key={`${staker.txid}-${staker.address}`}>

@@ -137,7 +137,7 @@ const Validators = () => {
                   </tr>
                 ))
               ) : producers.length === 0 ? (
-                <tr><td colSpan={6} className="py-12 text-center text-muted">No validators found</td></tr>
+                <tr><td colSpan={6} className="py-12 text-center text-muted">No validators</td></tr>
               ) : (
                 producers.map((p) => {
                   const loc = getLocation(p.location);

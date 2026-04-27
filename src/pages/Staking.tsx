@@ -139,7 +139,7 @@ const Staking = () => {
                   </tr>
                 ))
               ) : stakers.length === 0 ? (
-                <tr><td colSpan={4} className="py-12 text-center text-muted">No stakers found</td></tr>
+                <tr><td colSpan={4} className="py-12 text-center text-muted">No stakers</td></tr>
               ) : (
                 stakers.map((s, i) => {
                   const rank = (currentPage - 1) * PAGE_SIZE + i + 1;

@@ -7,7 +7,7 @@ import { cn } from '../lib/cn';
 type ExportFormat = 'koinly' | 'cointracking' | 'raw';
 type PeriodPreset = '30d' | '90d' | 'ytd' | 'last-year' | 'custom';
 
-interface ExportTaxModalProps {
+interface ExportTransactionsModalProps {
   address: string;
   open: boolean;
   onClose: () => void;
@@ -16,13 +16,18 @@ interface ExportTaxModalProps {
 const MAX_RANGE_DAYS = 366;
 const ROW_CAP = 50_000;
 
+// Format card copy describes WHOSE import spec each output matches.
+// We deliberately do not claim to be a tax tool, file taxes, or compute
+// liability. The factual framing ("compatible with X's import") keeps
+// the explorer out of the regulatory question of being held out as
+// tax software in any jurisdiction.
 const FORMAT_META: Record<
   ExportFormat,
   { label: string; tagline: string; advanced?: boolean }
 > = {
-  koinly: { label: 'Koinly', tagline: 'Auto-fetches ELA prices for you' },
-  cointracking: { label: 'CoinTracking', tagline: 'Manual price entry, full control' },
-  raw: { label: 'Raw chain data', tagline: 'For custom pipelines (Etherscan-style)', advanced: true },
+  koinly: { label: 'Koinly', tagline: "Compatible with Koinly's universal CSV import" },
+  cointracking: { label: 'CoinTracking', tagline: "Compatible with CoinTracking's custom CSV import" },
+  raw: { label: 'Raw chain data', tagline: 'Etherscan-style columns for custom pipelines', advanced: true },
 };
 
 const PERIOD_LABEL: Record<PeriodPreset, string> = {
@@ -61,7 +66,7 @@ function resolvePeriod(preset: PeriodPreset): { from: string; to: string } | nul
   }
 }
 
-const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
+const ExportTransactionsModal = ({ address, open, onClose }: ExportTransactionsModalProps) => {
   const [period, setPeriod] = useState<PeriodPreset>('last-year');
   const [customFrom, setCustomFrom] = useState<string>(isoNDaysAgo(365));
   const [customTo, setCustomTo] = useState<string>(todayISO());
@@ -200,7 +205,7 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
     });
     if (includeCounterparties) params.set('include_counterparties', 'true');
     window.location.href = `/api/v1/address/${encodeURIComponent(address)}/export.csv?${params.toString()}`;
-    toast.success(`Generating ${FORMAT_META[format].label} CSV — your download should start shortly.`);
+    toast.success(`Generating ${FORMAT_META[format].label} CSV. Your download should start shortly.`);
     setTimeout(() => {
       setSubmitting(false);
       onClose();
@@ -227,7 +232,7 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
     statusLine = 'No transactions in this range.';
     statusTone = 'warn';
   } else if (overLimit) {
-    statusLine = `${rowCount.toLocaleString()} rows — too many. Max is ${ROW_CAP.toLocaleString()}; narrow the range.`;
+    statusLine = `${rowCount.toLocaleString()} rows. Too many; max is ${ROW_CAP.toLocaleString()}. Narrow the range.`;
     statusTone = 'warn';
   } else {
     statusLine = `${rowCount.toLocaleString()} ${rowCount === 1 ? 'transaction' : 'transactions'} in this range.`;
@@ -236,7 +241,7 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
   const buttonLabel = (() => {
     if (submitting) return 'Preparing…';
     if (rowCount === null && !rangeError) return 'Choose a period';
-    if (overLimit) return 'Too many rows — narrow range';
+    if (overLimit) return 'Too many rows. Narrow range';
     if (empty) return 'Nothing to export';
     if (rangeError) return 'Fix the date range';
     return `Download ${rowCount?.toLocaleString()} rows for ${FORMAT_META[format].label}`;
@@ -248,7 +253,7 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Export tax CSV"
+      aria-label="Export transactions"
     >
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
@@ -267,9 +272,10 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
         </button>
 
         <div className="space-y-1">
-          <h2 className="text-base font-semibold text-primary">Export tax CSV</h2>
+          <h2 className="text-base font-semibold text-primary">Export transactions</h2>
           <p className="text-xs text-muted">
-            Download this address's transaction history for your tax software.
+            Download this address's transaction history as CSV. Formats below match the
+            import specs of popular portfolio and crypto-tax tools.
           </p>
         </div>
 
@@ -323,7 +329,7 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
 
         {/* ── Format ─────────────────────────────────────────── */}
         <section className="space-y-2">
-          <div className="text-[10px] text-muted uppercase tracking-wider">Where will you import this?</div>
+          <div className="text-[10px] text-muted uppercase tracking-wider">Format</div>
           <div className="grid grid-cols-2 gap-2">
             {(['koinly', 'cointracking'] as ExportFormat[]).map(f => (
               <button
@@ -423,7 +429,8 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
 
         <div className="flex items-center gap-1.5 text-[10px] text-muted">
           <Info size={11} />
-          For informational purposes only. Not tax advice.
+          Output formatting matches the named third-party tools. This explorer does
+          not compute, file, or advise on taxes.
         </div>
       </div>
     </div>,
@@ -431,4 +438,4 @@ const ExportTaxModal = ({ address, open, onClose }: ExportTaxModalProps) => {
   );
 };
 
-export default ExportTaxModal;
+export default ExportTransactionsModal;

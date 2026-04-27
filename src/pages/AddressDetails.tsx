@@ -11,7 +11,7 @@ import {
 import HashDisplay from '../components/HashDisplay';
 import AddressAvatar from '../components/AddressAvatar';
 import QRCodeModal from '../components/QRCodeModal';
-import ExportTaxModal from '../components/ExportTaxModal';
+import ExportTransactionsModal from '../components/ExportTransactionsModal';
 import Pagination from '../components/Pagination';
 import { ComponentErrorBoundary } from '../components/ComponentErrorBoundary';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -214,7 +214,7 @@ const AddressDetails = () => {
       </div>
 
       <QRCodeModal address={info.address} open={qrOpen} onClose={() => setQrOpen(false)} />
-      <ExportTaxModal address={info.address} open={exportOpen} onClose={() => setExportOpen(false)} />
+      <ExportTransactionsModal address={info.address} open={exportOpen} onClose={() => setExportOpen(false)} />
 
       {/* Balance + Tx count */}
       <div className="grid grid-cols-2 gap-3">
@@ -375,15 +375,18 @@ function OverviewTab({ info, page, totalPages, fmtELA, goPage, onExport }: Overv
           </h2>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted">{info.txCount.toLocaleString()} total</span>
-            {/* Discreet entry to the tax-CSV export modal. Icon-only by
-                design — the feature is power-user oriented and should
-                not crowd the primary address-page UX. Tooltip surfaces
-                the function for users who hover. */}
+            {/* Discreet entry to the transactions-CSV export modal.
+                Icon-only by design: the feature is power-user oriented
+                and should not crowd the primary address-page UX. Tooltip
+                surfaces the function for users who hover. We avoid the
+                word "tax" in user-facing labels; the explorer outputs
+                CSV in formats third-party tools accept and does not
+                compute or file taxes. */}
             <button
               onClick={onExport}
               className="text-muted hover:text-primary p-1 rounded transition-colors"
-              title="Export tax CSV"
-              aria-label="Export tax CSV"
+              title="Download transactions (CSV)"
+              aria-label="Download transactions as CSV"
             >
               <Download size={14} />
             </button>

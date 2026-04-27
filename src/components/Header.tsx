@@ -59,10 +59,13 @@ const Header = () => {
           </Link>
 
           {/* Desktop nav — centered on home (no search bar), left-aligned otherwise */}
-          <nav className={cn(
-            'hidden lg:flex items-center gap-0.5',
-            location.pathname === '/' ? 'flex-1 justify-center' : 'shrink-0'
-          )}>
+          <nav
+            aria-label="Main navigation"
+            className={cn(
+              'hidden lg:flex items-center gap-0.5',
+              location.pathname === '/' ? 'flex-1 justify-center' : 'shrink-0'
+            )}
+          >
             <Link
               to="/"
               className={cn(
@@ -101,7 +104,8 @@ const Header = () => {
 
         {/* Mobile menu */}
         {isMenuOpen && (
-          <div
+          <nav
+            aria-label="Mobile navigation"
             className="lg:hidden py-3 border-t border-[var(--color-border)] space-y-1 animate-slide-down"
             onKeyDown={(e) => { if (e.key === 'Escape') setIsMenuOpen(false); }}
           >
@@ -148,7 +152,7 @@ const Header = () => {
                 )}
               </div>
             ))}
-          </div>
+          </nav>
         )}
       </div>
     </header>

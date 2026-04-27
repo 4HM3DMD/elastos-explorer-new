@@ -128,31 +128,40 @@ export function BalanceRangePicker({
                   <X size={12} />
                 </button>
               </div>
+              {/* Wrap each label around its input so the association
+                  is implicit — screen readers announce the label as
+                  the input's accessible name. Previously the labels
+                  rendered as separate visual text; AT users heard
+                  "From" and "edit blank" as unrelated phrases. */}
               <div className="space-y-2">
-                <div>
-                  <label className="text-[10px] text-muted uppercase tracking-wider block mb-1">From</label>
+                <label className="block">
+                  <span className="text-[10px] text-muted uppercase tracking-wider block mb-1">From</span>
                   <input
                     type="date"
                     value={customFrom}
                     onChange={e => setCustomFrom(e.target.value)}
                     max={customTo || new Date().toISOString().slice(0, 10)}
+                    aria-invalid={rangeInvalid || undefined}
+                    aria-describedby={rangeInvalid ? 'balance-range-error' : undefined}
                     className="w-full px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-primary outline-none focus:border-brand/50"
                   />
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted uppercase tracking-wider block mb-1">To</label>
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-muted uppercase tracking-wider block mb-1">To</span>
                   <input
                     type="date"
                     value={customTo}
                     onChange={e => setCustomTo(e.target.value)}
                     min={customFrom}
                     max={new Date().toISOString().slice(0, 10)}
+                    aria-invalid={rangeInvalid || undefined}
+                    aria-describedby={rangeInvalid ? 'balance-range-error' : undefined}
                     className="w-full px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-primary outline-none focus:border-brand/50"
                   />
-                </div>
+                </label>
               </div>
               {rangeInvalid && (
-                <p className="text-[10px] text-accent-red">"From" must be before "To"</p>
+                <p id="balance-range-error" className="text-[10px] text-accent-red">"From" must be before "To"</p>
               )}
               {rangeTooLong && (
                 <p className="text-[10px] text-accent-red">

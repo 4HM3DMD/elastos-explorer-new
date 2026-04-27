@@ -862,6 +862,7 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(p.nickname, '') AS producer_name,
 		       COALESCE(cr.nickname, '') AS cr_name,
 		       COALESCE(t.timestamp, 0),
+		       COALESCE(t.type, -1) AS source_tx_type,
 		       bs.lock_time AS current_lock_time
 		FROM votes v
 		LEFT JOIN producers p ON v.producer_pubkey = p.owner_pubkey AND v.producer_pubkey != ''
@@ -884,14 +885,14 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		var txid, candidate, producerPubkey, producerName, crName string
 		var spentTxid *string
 		var currentLockTime *int64
-		var voteType int
+		var voteType, sourceTxType int
 		var amountSela, lockTime, stakeHeight, spentHeight, timestamp int64
 		var isActive bool
 
 		if err := rows.Scan(&txid, &voteType, &candidate, &producerPubkey, &amountSela,
 			&lockTime, &stakeHeight, &isActive, &spentTxid,
 			&spentHeight, &producerName, &crName, &timestamp,
-			&currentLockTime); err != nil {
+			&sourceTxType, &currentLockTime); err != nil {
 			slog.Warn("getAddressVoteHistory: scan failed", "error", err)
 			continue
 		}
@@ -899,6 +900,19 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		typeName := voteTypeNames[voteType]
 		if typeName == "" {
 			typeName = fmt.Sprintf("Unknown (%d)", voteType)
+		}
+		// Override the vote-type label when the source tx is type 98
+		// (Exchange Votes) — the protocol output looks like a BPoS
+		// vote (vote_type=4) but the user's intent was a vote
+		// CONVERSION from legacy DPoS to BPoS, not actively staking on
+		// that producer. Showing "BPoS Validator · Elastos World" for
+		// what was really a one-time migration tx misled users who
+		// thought they had a deliberate stake on that node.
+		// TxTypeName 98 is "Exchange Votes"; matching frontend's
+		// TX_TYPE_MAP entry (label "Vote Conversion") so the badge +
+		// styling stay consistent across pages.
+		if sourceTxType == 98 && voteType == 4 {
+			typeName = "Vote Conversion"
 		}
 
 		resolvedName := producerName

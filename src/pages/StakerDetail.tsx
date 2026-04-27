@@ -206,7 +206,13 @@ const StakerDetail = () => {
   useEffect(() => {
     blockchainApi.getStats()
       .then((stats) => setCurrentHeight(stats.latestHeight))
-      .catch(() => {});
+      .catch(err => {
+        // Silent for users — currentHeight is only used to compute
+        // relative "X blocks ago" labels on stake-expiry rows. If
+        // missing, those labels just show absolute heights without
+        // the relative context, which is still meaningful.
+        console.warn('[StakerDetail] stats fetch (for currentHeight) failed:', err);
+      });
   }, []);
 
   const activeStakes: StakeEntry[] = useMemo(

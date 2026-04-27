@@ -133,7 +133,12 @@ const AddressDetails = () => {
     let cancelled = false;
     blockchainApi.getAddressGovernanceSummary(address)
       .then(s => { if (!cancelled) setGovSummary(s); })
-      .catch(() => { /* non-critical: identity badge just won't render */ });
+      .catch(err => {
+        // Silent for users — identity badge just won't render. The
+        // page is fully usable; failures already feed DegradedBanner
+        // via the api client. Logged for dev observability.
+        console.warn('[AddressDetails] governance summary fetch failed:', err);
+      });
     return () => { cancelled = true; };
   }, [address]);
 

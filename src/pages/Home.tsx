@@ -59,7 +59,13 @@ const Home = () => {
           totalVotingRights: stakers.summary.totalVotingRights,
         });
       }
-    }).catch(() => {});
+    }).catch(err => {
+      // Silent for users — staking-summary widget is supplementary
+      // and failures already feed DegradedBanner via the api client.
+      // Logged so devs can debug specific endpoint issues without
+      // wading through generic banner state.
+      console.warn('[Home] staking summary fetch failed:', err);
+    });
   }, []);
 
   useEffect(() => {
@@ -81,7 +87,12 @@ const Home = () => {
         });
         blockchainApi.getWidgets().then(w => {
           setLatestTxs(w.latestTransactions ?? []);
-        }).catch(() => {});
+        }).catch(err => {
+          // Silent for users — txs list refreshes again on the next
+          // 30s tick or the next WS newBlock. DegradedBanner picks
+          // up sustained failures via the api client.
+          console.warn('[Home] post-newBlock widgets refetch failed:', err);
+        });
         newBlockTimerRef.current = window.setTimeout(() => setNewBlockHeight(null), 2000);
       }),
       webSocketService.subscribe('newStats', (stats: WSStats) => {

@@ -1632,6 +1632,30 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute the community-veto threshold: 10% × total election votes
+	// of the council seated when this proposal was registered. Per
+	// Elastos `cr/state/proposal.go` (VoterRejectPercentage = 0.1),
+	// a proposal is vetoed if VotersRejectAmount > 0.10 * TotalActiveVotes
+	// for the council in question. We derive that council's term from
+	// registerHeight using the standard formula, then sum its election
+	// tally. Returns 0 if the proposal pre-dates BPoS (T1-T3 had no
+	// vote-weighted veto mechanism — those proposals show "—").
+	var councilTotalVotesSela int64
+	const crFirstTermStart = int64(658930)
+	const crTermLength = int64(262800)
+	proposalTerm := int64(1)
+	if registerHeight >= crFirstTermStart {
+		proposalTerm = (registerHeight-crFirstTermStart)/crTermLength + 1
+	}
+	if proposalTerm >= 4 {
+		// T1-T3 ran legacy DPoS — no usable per-term election totals.
+		_ = s.db.API.QueryRow(r.Context(),
+			`SELECT COALESCE(SUM(final_votes_sela), 0) FROM cr_election_tallies
+			 WHERE term = $1 AND candidate_cid != '__sentinel__'`,
+			proposalTerm).Scan(&councilTotalVotesSela)
+	}
+	voterRejectThreshold := selaToELA(councilTotalVotesSela / 10)
+
 	var budgets any
 	if err := json.Unmarshal([]byte(budgetsJSON), &budgets); err != nil && budgetsJSON != "" {
 		slog.Warn("getCRProposalDetail: budgets unmarshal failed", "hash", hash, "error", err)
@@ -1704,8 +1728,10 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		"registerHeight":     registerHeight, "title": title,
 		"budgetTotal":        budgetTotal,
 		"crVotes":            crVotes,
-		"voterReject":        voterReject,
-		"trackingCount":      trackingCount,
+		"voterReject":          voterReject,
+		"voterRejectThreshold": voterRejectThreshold,
+		"councilTerm":          proposalTerm,
+		"trackingCount":        trackingCount,
 		"currentStage":       currentStage,
 		"terminatedHeight":   terminatedHeight,
 		"voteCount":          voteCount, "rejectCount": rejectCount, "abstainCount": abstainCount,

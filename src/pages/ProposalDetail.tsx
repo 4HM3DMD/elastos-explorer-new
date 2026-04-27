@@ -575,6 +575,17 @@ const ProposalDetail = () => {
   const hasRecipient = !!proposal.recipient && proposal.recipient.length > 0;
   const articleSections = getArticleSections(proposal);
   const hasVoterReject = proposal.voterReject && proposal.voterReject !== '0' && proposal.voterReject !== '';
+  // Veto progress = current rejection / threshold. Threshold is 10% of
+  // the seated council's total election votes (per Elastos protocol —
+  // see backend computation). Pre-BPoS terms (T1-T3) have no usable
+  // threshold so we fall back to a label-only display.
+  const rejectAmount = parseFloat(proposal.voterReject || '0') || 0;
+  const rejectThreshold = parseFloat(proposal.voterRejectThreshold || '0') || 0;
+  const hasVetoThreshold = rejectThreshold > 0;
+  const vetoProgressPct = hasVetoThreshold
+    ? Math.min(100, (rejectAmount / rejectThreshold) * 100)
+    : 0;
+  const isVetoed = hasVetoThreshold && rejectAmount >= rejectThreshold;
   const proposalNum = proposal.proposalNumber;
   const hasContent = articleSections.length > 0;
 
@@ -665,8 +676,13 @@ const ProposalDetail = () => {
               <SidebarVotes approve={proposal.voteCount} reject={proposal.rejectCount} abstain={proposal.abstainCount} status={proposal.status} reviews={proposal.reviews} />
               {hasVoterReject && (
                 <div className="pt-2 border-t border-[var(--color-border)]">
-                  <span className="text-xs text-muted" title="Stake-weighted ELA cast by the public to veto this proposal during the community-veto window. A proposal is vetoed if these reject votes reach 10% of total CR votes.">Community Veto</span>
-                  <p className="text-sm font-mono font-bold text-red-400">{formatBudgetLine(proposal.voterReject)} ELA</p>
+                  <VetoProgress
+                    rejectAmount={rejectAmount}
+                    rejectThreshold={rejectThreshold}
+                    hasThreshold={hasVetoThreshold}
+                    progressPct={vetoProgressPct}
+                    isVetoed={isVetoed}
+                  />
                 </div>
               )}
               {hasBudget && resolvedBudgetEla > 0 && (
@@ -754,9 +770,13 @@ const ProposalDetail = () => {
                 <SidebarVotes approve={proposal.voteCount} reject={proposal.rejectCount} abstain={proposal.abstainCount} status={proposal.status} reviews={proposal.reviews} />
                 {hasVoterReject && (
                   <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
-                    <span className="text-xs text-muted" title="Stake-weighted ELA cast by the public to veto this proposal during the community-veto window. A proposal is vetoed if these reject votes reach 10% of total CR votes.">Community Veto</span>
-                    <p className="text-sm font-mono font-bold text-red-400 mt-0.5">{formatBudgetLine(proposal.voterReject)} ELA</p>
-                    <p className="text-[10px] text-muted mt-1">10% threshold to veto</p>
+                    <VetoProgress
+                      rejectAmount={rejectAmount}
+                      rejectThreshold={rejectThreshold}
+                      hasThreshold={hasVetoThreshold}
+                      progressPct={vetoProgressPct}
+                      isVetoed={isVetoed}
+                    />
                   </div>
                 )}
               </div>
@@ -874,5 +894,69 @@ const ProposalDetail = () => {
     </div>
   );
 };
+
+/* ─── Community Veto progress ────────────────────────────────────────── */
+
+interface VetoProgressProps {
+  rejectAmount: number;
+  rejectThreshold: number;
+  hasThreshold: boolean;
+  progressPct: number;
+  isVetoed: boolean;
+}
+
+/**
+ * Renders the community-veto state for a proposal: current rejection
+ * stake-weighted ELA, threshold (10% of the seated council's total
+ * election votes per Elastos protocol), and a progress bar so users
+ * can see at a glance how close the veto is to triggering.
+ *
+ * For pre-BPoS terms (T1-T3) the threshold isn't reconstructible,
+ * so we fall back to displaying just the absolute rejection amount.
+ */
+function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, progressPct, isVetoed }: VetoProgressProps) {
+  // Color ramp: green-ish < 50%, amber 50-99%, red ≥100% (vetoed).
+  const barColor = isVetoed ? 'bg-accent-red' : progressPct >= 50 ? 'bg-amber-400' : 'bg-red-400/60';
+  const labelTitle = hasThreshold
+    ? `Stake-weighted ELA cast by the public to veto this proposal during the community-veto window. A proposal is vetoed once these reject votes reach 10% of the seated council's total election votes (${fmtEla(String(rejectThreshold))} ELA for this proposal's council).`
+    : 'Stake-weighted ELA cast by the public to veto this proposal during the community-veto window.';
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted" title={labelTitle}>Community Veto</span>
+        {hasThreshold && (
+          <span className={cn('text-[10px] font-mono', isVetoed ? 'text-accent-red font-semibold' : 'text-muted')}>
+            {progressPct.toFixed(progressPct < 1 ? 2 : 1)}%
+          </span>
+        )}
+      </div>
+      <p className={cn('text-sm font-mono font-bold', isVetoed ? 'text-accent-red' : 'text-red-400')}>
+        {fmtEla(String(rejectAmount))} ELA
+      </p>
+      {hasThreshold ? (
+        <>
+          <div className="h-1 rounded-full bg-white/[0.06] overflow-hidden">
+            <div
+              className={cn('h-full rounded-full transition-all duration-300', barColor)}
+              style={{ width: `${Math.max(progressPct, 0.5)}%` }}
+              role="progressbar"
+              aria-label="Community veto progress"
+              aria-valuenow={Math.round(progressPct)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            />
+          </div>
+          <p className="text-[10px] text-muted">
+            {isVetoed
+              ? `Vetoed — exceeded ${fmtEla(String(rejectThreshold))} ELA threshold`
+              : `${fmtEla(String(rejectThreshold))} ELA needed to veto (10% of council votes)`}
+          </p>
+        </>
+      ) : (
+        <p className="text-[10px] text-muted">Pre-BPoS era — no vote-weighted veto threshold</p>
+      )}
+    </div>
+  );
+}
 
 export default ProposalDetail;

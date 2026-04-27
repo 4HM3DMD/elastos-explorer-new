@@ -703,6 +703,13 @@ export interface CRProposalDetail extends CRProposal {
   reviews: CRProposalReview[];
   crVotes?: Record<string, string>;
   voterReject?: string;
+  /** 10% × total election votes of the council that approved this proposal,
+   *  in ELA. The proposal is vetoed once `voterReject` exceeds this. */
+  voterRejectThreshold?: string;
+  /** CR term derived from registerHeight — the council in effect when
+   *  this proposal was registered. T1-T3 used legacy DPoS without a
+   *  vote-weighted veto, so the threshold is 0 for those. */
+  councilTerm?: number;
   motivation?: string;
   goal?: string;
   planStatement?: string;

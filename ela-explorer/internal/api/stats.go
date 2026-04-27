@@ -340,7 +340,11 @@ func (s *Server) getWidgets(w http.ResponseWriter, r *http.Request) {
 	if blockErr != nil {
 		slog.Warn("getWidgets: latest blocks query failed", "error", blockErr)
 	}
-	var latestBlocks []map[string]any
+	// Initialize as empty (non-nil) so JSON marshals as `[]` not `null`
+	// even if the query failed. The frontend's defensive guard now
+	// keeps prior items when next is empty, but backend should still
+	// return the correct empty-list shape for any other consumer.
+	latestBlocks := make([]map[string]any, 0, 6)
 	if blockRows != nil {
 		defer blockRows.Close()
 		for blockRows.Next() {
@@ -369,7 +373,8 @@ func (s *Server) getWidgets(w http.ResponseWriter, r *http.Request) {
 	if txErr != nil {
 		slog.Warn("getWidgets: latest txs query failed", "error", txErr)
 	}
-	var latestTxs []map[string]any
+	// Same nil → [] guard as latestBlocks above.
+	latestTxs := make([]map[string]any, 0, 6)
 	if txRows != nil {
 		defer txRows.Close()
 		for txRows.Next() {

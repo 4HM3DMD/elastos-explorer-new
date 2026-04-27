@@ -43,8 +43,16 @@ const Home = () => {
         blockchainApi.getStats().catch(() => null),
       ]);
       setWidgets(w);
-      setLatestBlocks(w.latestBlocks ?? []);
-      setLatestTxs(w.latestTransactions ?? []);
+      // Defensive: only replace existing lists if the new response
+      // actually has rows. Backend can momentarily return null /
+      // empty arrays during a transient DB hiccup or cache race —
+      // unconditionally overwriting blanked both Latest Blocks /
+      // Latest Transactions cards for ~30s until the next refresh
+      // recovered. Keep prior items when the fetch comes back empty.
+      const nextBlocks = w.latestBlocks ?? [];
+      const nextTxs = w.latestTransactions ?? [];
+      setLatestBlocks(prev => (nextBlocks.length > 0 ? nextBlocks : prev));
+      setLatestTxs(prev => (nextTxs.length > 0 ? nextTxs : prev));
       if (stats) setChainStats(stats);
       setError(null);
     } catch {
@@ -86,7 +94,14 @@ const Home = () => {
           return [entry, ...prev.slice(0, 5)];
         });
         blockchainApi.getWidgets().then(w => {
-          setLatestTxs(w.latestTransactions ?? []);
+          // Same defensive guard as fetchData: don't blank the txs
+          // list if the post-newBlock refetch returns empty (rare
+          // but possible during a backend cache race or transient
+          // DB hiccup). Keep the prior items so the UI never
+          // flickers from "6 txs visible" → "No transactions yet"
+          // → "6 txs visible" again on the next 30s tick.
+          const nextTxs = w.latestTransactions ?? [];
+          if (nextTxs.length > 0) setLatestTxs(nextTxs);
         }).catch(err => {
           // Silent for users — txs list refreshes again on the next
           // 30s tick or the next WS newBlock. DegradedBanner picks
@@ -127,7 +142,12 @@ const Home = () => {
 
   if (loading) return <PageSkeleton />;
 
-  if (error) {
+  // Only swap to the full-page error UI when we have NO data to show.
+  // Transient refresh failures used to replace the entire page (including
+  // already-rendered blocks/txs/stats) until the next 30s tick recovered;
+  // now we keep the last-good render and let DegradedBanner surface the
+  // failure non-intrusively.
+  if (error && !widgets) {
     return (
       <div className="text-center py-16">
         <p className="text-accent-red mb-4">{error}</p>

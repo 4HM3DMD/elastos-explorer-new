@@ -23,6 +23,8 @@ import {
   ThumbsUp, ThumbsDown, Scale, Trophy, Users, X, XCircle,
 } from 'lucide-react';
 import { blockchainApi } from '../services/api';
+import { webSocketService } from '../services/websocket';
+import { useElectionStatus } from '../contexts/ElectionStatusContext';
 import type {
   CandidateProfile,
   CandidateProfileTerm,
@@ -114,6 +116,35 @@ const CandidateDetail = () => {
       cancelled = true;
     };
   }, [cid]);
+
+  // Live-refresh during voting phase. CandidateDetail was previously
+  // fully static — vote totals, rank, and voter count would remain
+  // frozen at initial page load even as new TxVotings landed during
+  // an active voting window. For the T7 election (~May 2026) users
+  // sitting on a candidate page need to see live vote progression.
+  //
+  // Strategy mirrors Elections.tsx: subscribe to `newBlock` ONLY when
+  // phase==='voting'. Each block, refetch the candidate profile.
+  // Effect re-runs when phase changes, so the subscription is gone
+  // during duty/claim phases (where the data is static anyway).
+  const { status: electionStatus } = useElectionStatus();
+  const electionPhase = electionStatus?.phase;
+  useEffect(() => {
+    if (!cid) return;
+    if (electionPhase !== 'voting') return;
+    webSocketService.registerConnection();
+    const id = webSocketService.subscribe('newBlock', () => {
+      blockchainApi.getCandidateProfile(cid).then((p) => {
+        setProfile(p);
+      }).catch(err => {
+        console.warn('[CandidateDetail] live refresh failed:', err);
+      });
+    });
+    return () => {
+      webSocketService.unsubscribe(id);
+      webSocketService.unregisterConnection();
+    };
+  }, [cid, electionPhase]);
 
   // Sync the URL's `?term=` (or legacy `:term` segment) BACK into
   // local state when it changes. Without this, clicking a TermPill

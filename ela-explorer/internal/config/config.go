@@ -56,6 +56,7 @@ type Config struct {
 
 	// Feature flags
 	StakeIdleEnabled bool
+	ExportCSVEnabled bool
 }
 
 func Load() (*Config, error) {
@@ -96,6 +97,7 @@ func Load() (*Config, error) {
 		ReferenceRPCURLs: envStringSlice("REFERENCE_RPC_URLS", nil),
 
 		StakeIdleEnabled: envBoolOr("STAKE_IDLE_ENABLED", true),
+		ExportCSVEnabled: envBoolOr("EXPORT_CSV_ENABLED", true),
 	}
 
 	if err := c.validate(); err != nil {

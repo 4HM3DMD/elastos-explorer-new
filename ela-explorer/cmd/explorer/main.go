@@ -118,6 +118,7 @@ func main() {
 		LRUSize:          cfg.LRUCacheSize,
 		CacheTTL:         time.Duration(cfg.CacheTTLSecs) * time.Second,
 		MetricsAuthToken: cfg.MetricsAuthToken,
+		ExportCSVEnabled: cfg.ExportCSVEnabled,
 	})
 	apiServer.AttachWebSocket(wsHub)
 

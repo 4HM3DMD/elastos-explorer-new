@@ -6,10 +6,12 @@ import {
   ArrowUpRight, ArrowDownLeft, Activity, TrendingUp,
   TrendingDown, Clock, Lock, Coins, Info, QrCode,
   BarChart3, Vote, Landmark, ChevronDown, ChevronRight,
+  Download,
 } from 'lucide-react';
 import HashDisplay from '../components/HashDisplay';
 import AddressAvatar from '../components/AddressAvatar';
 import QRCodeModal from '../components/QRCodeModal';
+import ExportTaxModal from '../components/ExportTaxModal';
 import Pagination from '../components/Pagination';
 import { ComponentErrorBoundary } from '../components/ComponentErrorBoundary';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -55,6 +57,7 @@ const AddressDetails = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   // Council membership is fetched separately so the identity badge
   // ("Council Member · Jon Hargreaves") can render at the top of the
   // page on initial load. Without this, the user would have to click
@@ -211,6 +214,7 @@ const AddressDetails = () => {
       </div>
 
       <QRCodeModal address={info.address} open={qrOpen} onClose={() => setQrOpen(false)} />
+      <ExportTaxModal address={info.address} open={exportOpen} onClose={() => setExportOpen(false)} />
 
       {/* Balance + Tx count */}
       <div className="grid grid-cols-2 gap-3">
@@ -268,6 +272,7 @@ const AddressDetails = () => {
           totalPages={totalPages}
           fmtELA={fmtELA}
           goPage={goPage}
+          onExport={() => setExportOpen(true)}
         />
       )}
       {/* Each tab gets its own ErrorBoundary so a render crash in one
@@ -309,9 +314,10 @@ interface OverviewTabProps {
   totalPages: number;
   fmtELA: (v: string | undefined) => string;
   goPage: (p: number) => void;
+  onExport: () => void;
 }
 
-function OverviewTab({ info, page, totalPages, fmtELA, goPage }: OverviewTabProps) {
+function OverviewTab({ info, page, totalPages, fmtELA, goPage, onExport }: OverviewTabProps) {
   const [utxoOpen, setUtxoOpen] = useState(false);
   const utxoCount = info.utxos?.length ?? 0;
 
@@ -367,7 +373,21 @@ function OverviewTab({ info, page, totalPages, fmtELA, goPage }: OverviewTabProp
           <h2 className="text-sm md:text-base font-medium text-primary flex items-center gap-2">
             <Activity size={15} className="text-brand" /> Transactions
           </h2>
-          <span className="text-xs text-muted">{info.txCount.toLocaleString()} total</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted">{info.txCount.toLocaleString()} total</span>
+            {/* Discreet entry to the tax-CSV export modal. Icon-only by
+                design — the feature is power-user oriented and should
+                not crowd the primary address-page UX. Tooltip surfaces
+                the function for users who hover. */}
+            <button
+              onClick={onExport}
+              className="text-muted hover:text-primary p-1 rounded transition-colors"
+              title="Export tax CSV"
+              aria-label="Export tax CSV"
+            >
+              <Download size={14} />
+            </button>
+          </div>
         </div>
 
         <div className="divide-y divide-[var(--color-border)]">

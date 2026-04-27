@@ -24,13 +24,14 @@ import (
 )
 
 type Server struct {
-	db         *db.DB
-	node       *node.Client
-	syncer     *syncer.Syncer
-	aggregator *aggregator.Aggregator
-	wsHub      *ws.Hub
-	cache      *cache.TTLCache[string, any]
-	router     chi.Router
+	db               *db.DB
+	node             *node.Client
+	syncer           *syncer.Syncer
+	aggregator       *aggregator.Aggregator
+	wsHub            *ws.Hub
+	cache            *cache.TTLCache[string, any]
+	router           chi.Router
+	exportCSVEnabled bool
 }
 
 type ServerConfig struct {
@@ -38,22 +39,29 @@ type ServerConfig struct {
 	LRUSize          int
 	CacheTTL         time.Duration
 	MetricsAuthToken string
+	ExportCSVEnabled bool
 }
 
 func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, cfg ServerConfig) *Server {
 	s := &Server{
-		db:     database,
-		node:   nodeClient,
-		syncer: syncr,
-		cache:  cache.NewTTLCache[string, any](cfg.LRUSize, cfg.CacheTTL),
+		db:               database,
+		node:             nodeClient,
+		syncer:           syncr,
+		cache:            cache.NewTTLCache[string, any](cfg.LRUSize, cfg.CacheTTL),
+		exportCSVEnabled: cfg.ExportCSVEnabled,
 	}
 
 	r := chi.NewRouter()
 
+	// Middleware ordering note: Timeout and Compress are scoped to a
+	// Group below, NOT applied at the root. The streaming tax-export
+	// endpoint (registered outside that group) needs to bypass both —
+	// the 10s timeout would kill a 50K-row export mid-flush, and the
+	// gzip compressor buffers internally which breaks Flusher.Flush()
+	// semantics on long responses. Every other endpoint still gets
+	// Timeout + Compress unchanged.
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
-	r.Use(middleware.Timeout(10 * time.Second))
-	r.Use(middleware.Compress(5))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(securityHeaders)
 	// Count panics BEFORE chi's Recoverer swallows them, so /metrics
@@ -65,7 +73,17 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	r.Use(metricsMiddleware)
 	r.Use(rateLimitMiddleware(rate.Limit(60), 120))
 
-	r.Route("/api/v1", func(r chi.Router) {
+	// Streaming endpoints registered first, before the Timeout/Compress
+	// group is opened. They inherit every middleware above this line
+	// (security, logging, metrics, rate limit) but skip the request-
+	// timeout cap and the response gzip layer.
+	r.Get("/api/v1/address/{address}/export.csv", s.getAddressExport)
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(10 * time.Second))
+		r.Use(middleware.Compress(5))
+
+		r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/blocks/latest", s.getLatestBlocks)
 		r.Get("/blocks", s.getBlocks)
 		r.Get("/block/{heightOrHash}", s.getBlock)
@@ -184,10 +202,11 @@ func NewServer(database *db.DB, nodeClient *node.Client, syncr *syncer.Syncer, c
 	// served as static files via nginx from /static/validator-logos/
 	// (populated by scripts/download-validator-logos.mjs on deploy).
 
-	r.With(rateLimitMiddleware(rate.Limit(10), 20)).Post("/ela", s.walletRPC)
+		r.With(rateLimitMiddleware(rate.Limit(10), 20)).Post("/ela", s.walletRPC)
 
-	r.Get("/sitemap.xml", s.serveSitemap)
-	r.NotFound(s.serveSEO)
+		r.Get("/sitemap.xml", s.serveSitemap)
+		r.NotFound(s.serveSEO)
+	})
 
 	s.router = r
 	return s

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Loader2, XCircle, Blocks, ArrowLeftRight, Wallet, Shield, Landmark, Clock, X, CornerDownLeft } from 'lucide-react';
+import { Search, Loader2, XCircle, Blocks, ArrowLeftRight, Wallet, Shield, Landmark, FileText, Clock, X, CornerDownLeft } from 'lucide-react';
 import { blockchainApi } from '../services/api';
 import { detectInputType, getRouteForResult } from '../utils/searchRouting';
 import type { SearchResult } from '../types/blockchain';
@@ -39,7 +39,21 @@ const TYPE_ICONS: Record<string, typeof Blocks> = {
   address: Wallet,
   producer: Shield,
   crMember: Landmark,
+  proposal: FileText,
 };
+
+const HEX_64_RE = /^[0-9a-fA-F]{64}$/;
+
+/**
+ * Normalize hex-64 inputs to lowercase before sending to the search API.
+ * Backend SQL columns store hashes in lowercase, so an uppercase paste
+ * (common when copying from block explorers / wallets / docs) used to
+ * return {type:"none"}. Addresses + nicknames are case-significant
+ * (base58 / human input) so we leave them alone.
+ */
+function normalizeQuery(q: string): string {
+  return HEX_64_RE.test(q) ? q.toLowerCase() : q;
+}
 
 interface InlineSearchProps {
   className?: string;
@@ -116,7 +130,7 @@ const InlineSearch = ({ className, compact }: InlineSearchProps) => {
       setSearching(true);
       setNotFound(false);
       try {
-        const result = await blockchainApi.search(q);
+        const result = await blockchainApi.search(normalizeQuery(q));
         if (controller.signal.aborted) return;
         if (result.type && result.type !== 'none' && result.value != null) {
           setSuggestion(result);
@@ -169,7 +183,7 @@ const InlineSearch = ({ className, compact }: InlineSearchProps) => {
     setSearching(true);
     setNotFound(false);
     try {
-      const result = await blockchainApi.search(q);
+      const result = await blockchainApi.search(normalizeQuery(q));
       if (result.type && result.type !== 'none' && result.value != null) {
         navigateToResult(result, q);
       } else {

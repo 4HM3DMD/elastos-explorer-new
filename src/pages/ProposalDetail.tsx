@@ -575,10 +575,11 @@ const ProposalDetail = () => {
   const hasRecipient = !!proposal.recipient && proposal.recipient.length > 0;
   const articleSections = getArticleSections(proposal);
   const hasVoterReject = proposal.voterReject && proposal.voterReject !== '0' && proposal.voterReject !== '';
-  // Veto progress = current rejection / threshold. Threshold is 10% of
-  // the seated council's total election votes (per Elastos protocol —
-  // see backend computation). Pre-BPoS terms (T1-T3) have no usable
-  // threshold so we fall back to a label-only display.
+  // Veto progress = current rejection / threshold. Threshold is 10%
+  // of chain-wide circulating ELA supply per Elastos protocol (see
+  // cr/state/proposalmanager.go and backend computation comment).
+  // Same formula across all CR eras — chain tip's circulation is
+  // recomputed every block.
   const rejectAmount = parseFloat(proposal.voterReject || '0') || 0;
   const rejectThreshold = parseFloat(proposal.voterRejectThreshold || '0') || 0;
   const hasVetoThreshold = rejectThreshold > 0;
@@ -906,19 +907,23 @@ interface VetoProgressProps {
 }
 
 /**
- * Renders the community-veto state for a proposal: current rejection
- * stake-weighted ELA, threshold (10% of the seated council's total
- * election votes per Elastos protocol), and a progress bar so users
- * can see at a glance how close the veto is to triggering.
+ * Renders the community-veto state for a proposal: cumulative public
+ * rejection stake (in ELA), the veto threshold (10% of circulating
+ * ELA supply per Elastos protocol — see cr/state/proposalmanager.go),
+ * and a progress bar so users can see at a glance how close the
+ * veto is to triggering.
  *
- * For pre-BPoS terms (T1-T3) the threshold isn't reconstructible,
- * so we fall back to displaying just the absolute rejection amount.
+ * The threshold is chain-wide (not council-specific) and recomputed
+ * every block, so it grows alongside circulation. T1-T6+ all use the
+ * same formula. If the backend can't determine circulation (rare —
+ * implies chain_stats hasn't been populated), the threshold field
+ * will be 0 and we fall back to displaying just the absolute amount.
  */
 function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, progressPct, isVetoed }: VetoProgressProps) {
-  // Color ramp: green-ish < 50%, amber 50-99%, red ≥100% (vetoed).
+  // Color ramp: red/60 < 50%, amber 50-99%, accent-red ≥100% (vetoed).
   const barColor = isVetoed ? 'bg-accent-red' : progressPct >= 50 ? 'bg-amber-400' : 'bg-red-400/60';
   const labelTitle = hasThreshold
-    ? `Stake-weighted ELA cast by the public to veto this proposal during the community-veto window. A proposal is vetoed once these reject votes reach 10% of the seated council's total election votes (${fmtEla(String(rejectThreshold))} ELA for this proposal's council).`
+    ? `Stake-weighted ELA cast by the public to veto this proposal. A proposal is vetoed once these reject votes reach 10% of circulating ELA supply (${fmtEla(String(rejectThreshold))} ELA at the current chain tip).`
     : 'Stake-weighted ELA cast by the public to veto this proposal during the community-veto window.';
   return (
     <div className="space-y-1.5">
@@ -949,11 +954,11 @@ function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, progressPct
           <p className="text-[10px] text-muted">
             {isVetoed
               ? `Vetoed — exceeded ${fmtEla(String(rejectThreshold))} ELA threshold`
-              : `${fmtEla(String(rejectThreshold))} ELA needed to veto (10% of council votes)`}
+              : `${fmtEla(String(rejectThreshold))} ELA needed to veto (10% of circulating supply)`}
           </p>
         </>
       ) : (
-        <p className="text-[10px] text-muted">Pre-BPoS era — no vote-weighted veto threshold</p>
+        <p className="text-[10px] text-muted">Veto threshold unavailable</p>
       )}
     </div>
   );

@@ -703,12 +703,15 @@ export interface CRProposalDetail extends CRProposal {
   reviews: CRProposalReview[];
   crVotes?: Record<string, string>;
   voterReject?: string;
-  /** 10% × total election votes of the council that approved this proposal,
-   *  in ELA. The proposal is vetoed once `voterReject` exceeds this. */
+  /** 10% of chain-wide circulating ELA supply, in ELA. Per Elastos
+   *  protocol (cr/state/proposalmanager.go), a proposal is vetoed
+   *  once `voterReject >= voterRejectThreshold`. Recomputed at the
+   *  chain tip on every request — same denominator across all CR
+   *  eras (T1-T6+). */
   voterRejectThreshold?: string;
   /** CR term derived from registerHeight — the council in effect when
-   *  this proposal was registered. T1-T3 used legacy DPoS without a
-   *  vote-weighted veto, so the threshold is 0 for those. */
+   *  this proposal was registered. Surfaced for context (used by
+   *  history labels), not for the threshold itself. */
   councilTerm?: number;
   motivation?: string;
   goal?: string;

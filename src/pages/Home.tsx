@@ -140,7 +140,12 @@ const Home = () => {
     };
   }, [fetchData]);
 
-  if (loading) return <PageSkeleton />;
+  // No page-level loading gate. The hero (title + search bar +
+  // decorative images) is fully static and used to be hidden behind
+  // PageSkeleton for as long as /widgets + /stats took to respond —
+  // a perceptible wait on first load. Now the hero paints
+  // immediately; data-dependent sections below render their own
+  // skeletons / empty states inline as the API resolves.
 
   // Only swap to the full-page error UI when we have NO data to show.
   // Transient refresh failures used to replace the entire page (including
@@ -167,32 +172,44 @@ const Home = () => {
           style={{ width: 459, height: 351, left: -83, top: 0 }}
           aria-hidden="true"
         >
-          <img
-            src="/images/hero-left.png"
-            alt=""
-            className="absolute max-w-none"
-            style={{
-              width: '210%', height: '150%', left: '-30%', top: '-25%',
-              opacity: 0.22,
-              mixBlendMode: 'screen',
-            }}
-          />
+          <picture>
+            <source srcSet="/images/hero-left.webp" type="image/webp" />
+            <img
+              src="/images/hero-left.png"
+              alt=""
+              className="absolute max-w-none"
+              decoding="async"
+              // @ts-expect-error fetchPriority is valid HTML; React 18 types lag
+              fetchpriority="low"
+              style={{
+                width: '210%', height: '150%', left: '-30%', top: '-25%',
+                opacity: 0.22,
+                mixBlendMode: 'screen',
+              }}
+            />
+          </picture>
         </div>
         <div
           className="hidden lg:block absolute pointer-events-none select-none overflow-hidden"
           style={{ width: 569, height: 486, right: -83, top: -20 }}
           aria-hidden="true"
         >
-          <img
-            src="/images/hero-right.png"
-            alt=""
-            className="absolute max-w-none"
-            style={{
-              width: '170%', height: '109%', left: '-44%', top: 0,
-              opacity: 0.22,
-              mixBlendMode: 'screen',
-            }}
-          />
+          <picture>
+            <source srcSet="/images/hero-right.webp" type="image/webp" />
+            <img
+              src="/images/hero-right.png"
+              alt=""
+              className="absolute max-w-none"
+              decoding="async"
+              // @ts-expect-error fetchPriority is valid HTML; React 18 types lag
+              fetchpriority="low"
+              style={{
+                width: '170%', height: '109%', left: '-44%', top: 0,
+                opacity: 0.22,
+                mixBlendMode: 'screen',
+              }}
+            />
+          </picture>
         </div>
         <div className="relative z-10">
           <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-[60px] font-[200] text-white mb-3 lg:mb-4 leading-tight tracking-[0.04em]">

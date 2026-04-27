@@ -703,12 +703,18 @@ export interface CRProposalDetail extends CRProposal {
   reviews: CRProposalReview[];
   crVotes?: Record<string, string>;
   voterReject?: string;
-  /** 10% of chain-wide circulating ELA supply, in ELA. Per Elastos
-   *  protocol (cr/state/proposalmanager.go), a proposal is vetoed
-   *  once `voterReject >= voterRejectThreshold`. Recomputed at the
-   *  chain tip on every request — same denominator across all CR
-   *  eras (T1-T6+). */
+  /** 10% of circulating ELA supply, in ELA. Per Elastos protocol
+   *  (cr/state/proposalmanager.go), a proposal is vetoed once
+   *  `voterReject >= voterRejectThreshold`. Sourced from
+   *  veto_window_circulation_sela snapshot if captured, otherwise
+   *  the live chain-tip value (see vetoCirculationSnapshot flag). */
   voterRejectThreshold?: string;
+  /** True when voterRejectThreshold reflects the snapshot taken at the
+   *  moment this proposal exited the veto window — historically
+   *  accurate. False when it's the live chain-tip circulation, used
+   *  (a) for proposals still in the veto window, (b) for proposals
+   *  whose decision pre-dates the snapshot column. */
+  vetoCirculationSnapshot?: boolean;
   /** CR term derived from registerHeight — the council in effect when
    *  this proposal was registered. Surfaced for context (used by
    *  history labels), not for the threshold itself. */

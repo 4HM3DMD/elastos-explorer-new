@@ -1409,6 +1409,32 @@ func (a *Aggregator) refreshProposals(ctx context.Context) error {
 			}
 		}
 
+		// Detect veto-window exit so we can snapshot the chain's circulation
+		// at the moment the on-chain veto check finalised. Trigger:
+		//   - existing snapshot is NULL (haven't captured yet)
+		//   - prior status was CRAgreed/Notification (in the veto window)
+		//   - new status is anything else (window closed = decision made)
+		// For proposals already past-veto when this column was added,
+		// snapshot stays NULL — frontend falls back to current circulation
+		// with a "approximate" caveat. The snapshot is COALESCEd into the
+		// UPDATE so the column is touched only when this transition fires.
+		var oldStatus string
+		var existingSnapshot *int64
+		_ = a.db.Syncer.QueryRow(ctx,
+			`SELECT status, veto_window_circulation_sela FROM cr_proposals WHERE proposal_hash = $1`,
+			p.ProposalHash,
+		).Scan(&oldStatus, &existingSnapshot)
+		var snapshotCirc *int64
+		if existingSnapshot == nil &&
+			(oldStatus == "CRAgreed" || oldStatus == "Notification") &&
+			p.Status != "CRAgreed" && p.Status != "Notification" {
+			var c int64
+			if err := a.db.Syncer.QueryRow(ctx,
+				`SELECT COALESCE(circ_supply_sela, 0) FROM chain_stats WHERE id=1`,
+			).Scan(&c); err == nil && c > 0 {
+				snapshotCirc = &c
+			}
+		}
 		tag, err := a.db.Syncer.Exec(ctx, `
 			UPDATE cr_proposals SET
 				status = $2,
@@ -1419,11 +1445,13 @@ func (a *Aggregator) refreshProposals(ctx context.Context) error {
 				vote_count = $7,
 				reject_count = $8,
 				abstain_count = $9,
+				veto_window_circulation_sela = COALESCE($10, veto_window_circulation_sela),
 				last_updated = EXTRACT(EPOCH FROM NOW())::BIGINT
 			WHERE proposal_hash = $1`,
 			p.ProposalHash, p.Status,
 			voterReject, int64(p.TerminatedHeight), int(p.TrackingCount),
 			crVotesJSON, approveCount, rejectCount, abstainCount,
+			snapshotCirc,
 		)
 		if err != nil {
 			slog.Warn("refreshProposals: update failed", "hash", safeTruncate(p.ProposalHash, 16), "error", err)

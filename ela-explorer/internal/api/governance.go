@@ -1599,6 +1599,7 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 	var budgetStatement, milestone, relevance, availableAmount string
 
 	var proposalNumber int64
+	var vetoWindowCirculation *int64
 	err := s.db.API.QueryRow(r.Context(), `
 		SELECT p.proposal_hash, p.tx_hash, p.proposal_type, p.status, p.category_data,
 		       p.owner_pubkey, p.draft_hash, p.recipient, p.budgets_json, p.cr_member_did,
@@ -1610,6 +1611,7 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		       p.abstract, p.motivation, p.goal, p.plan_statement,
 		       p.implementation_team, p.budget_statement, p.milestone,
 		       p.relevance, p.available_amount,
+		       p.veto_window_circulation_sela,
 		       (SELECT COUNT(*) FROM cr_proposals cp2
 		        WHERE cp2.register_height < p.register_height
 		           OR (cp2.register_height = p.register_height AND cp2.proposal_hash < p.proposal_hash)) + 1 AS proposal_number
@@ -1625,7 +1627,7 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		&currentStage, &terminatedHeight, &crMemberName, &ownerName,
 		&abstract, &motivation, &goal, &planStatement,
 		&implementationTeam, &budgetStatement, &milestone,
-		&relevance, &availableAmount, &proposalNumber)
+		&relevance, &availableAmount, &vetoWindowCirculation, &proposalNumber)
 	if err != nil {
 		slog.Warn("getCRProposalDetail: query failed", "hash", hash, "error", err)
 		writeError(w, 404, "proposal not found")
@@ -1639,23 +1641,29 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 	//       float64(circulation) *
 	//       p.params.CRConfiguration.VoterRejectPercentage / 100.0)
 	//
-	// The denominator is `circulation` (chain-wide circulating ELA
-	// supply, recomputed every block — NOT the seated council's
-	// election votes, which I had wrong in the first pass). The same
-	// formula applies across all CR eras (T1-T6+) — the node has used
-	// circulating supply as the veto denominator since CR governance
-	// went live, just with a different supply calculation pre-DPoSv2.
+	// Denominator preference order:
+	//   1. veto_window_circulation_sela snapshot — captured by the
+	//      aggregator when the proposal transitioned out of CRAgreed/
+	//      Notification (= the moment the on-chain veto check ran).
+	//      Most accurate for proposals decided after this column was
+	//      added.
+	//   2. chain_stats.circ_supply_sela — the live chain-tip value.
+	//      Used (a) for proposals currently in the veto window (the
+	//      threshold is dynamic until decision); (b) as fallback for
+	//      historical proposals whose snapshot we missed.
 	//
-	// `chain_stats.circ_supply_sela` is our explorer's approximation of
-	// Elastos's `circulationAmount` (excludes burn address, DAO assets,
-	// staking pools). May drift from the node's exact value by ~0.1%
-	// but matches order of magnitude — the node does the authoritative
-	// check on-chain; this is just for UI context.
+	// `vetoCirculationIsSnapshot` lets the frontend distinguish "real
+	// historical threshold" from "current circulation as approximation."
 	var circulatingSupplySela int64
-	if err := s.db.API.QueryRow(r.Context(),
-		`SELECT COALESCE(circ_supply_sela, 0) FROM chain_stats WHERE id=1`,
-	).Scan(&circulatingSupplySela); err != nil {
-		slog.Warn("getCRProposalDetail: circulating supply lookup failed", "error", err)
+	vetoCirculationIsSnapshot := vetoWindowCirculation != nil && *vetoWindowCirculation > 0
+	if vetoCirculationIsSnapshot {
+		circulatingSupplySela = *vetoWindowCirculation
+	} else {
+		if err := s.db.API.QueryRow(r.Context(),
+			`SELECT COALESCE(circ_supply_sela, 0) FROM chain_stats WHERE id=1`,
+		).Scan(&circulatingSupplySela); err != nil {
+			slog.Warn("getCRProposalDetail: circulating supply lookup failed", "error", err)
+		}
 	}
 	// Term derivation kept for context — frontend uses it for tooltips
 	// and history labels, not for the threshold itself.
@@ -1739,10 +1747,11 @@ func (s *Server) getCRProposalDetail(w http.ResponseWriter, r *http.Request) {
 		"registerHeight":     registerHeight, "title": title,
 		"budgetTotal":        budgetTotal,
 		"crVotes":            crVotes,
-		"voterReject":          voterReject,
-		"voterRejectThreshold": voterRejectThreshold,
-		"councilTerm":          proposalTerm,
-		"trackingCount":        trackingCount,
+		"voterReject":              voterReject,
+		"voterRejectThreshold":     voterRejectThreshold,
+		"vetoCirculationSnapshot":  vetoCirculationIsSnapshot,
+		"councilTerm":              proposalTerm,
+		"trackingCount":            trackingCount,
 		"currentStage":       currentStage,
 		"terminatedHeight":   terminatedHeight,
 		"voteCount":          voteCount, "rejectCount": rejectCount, "abstainCount": abstainCount,

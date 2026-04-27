@@ -352,6 +352,14 @@ CREATE TABLE IF NOT EXISTS cr_proposals (
     budgets_json    TEXT        NOT NULL DEFAULT '[]',
     cr_votes_json   TEXT        NOT NULL DEFAULT '{}',
     voter_reject    TEXT        NOT NULL DEFAULT '0',
+    -- Snapshot of chain_stats.circ_supply_sela at the moment this proposal
+    -- exited the community-veto window (status transitioned out of
+    -- CRAgreed / Notification). Per Elastos cr/state/proposalmanager.go,
+    -- the on-chain veto check is `votersRejectAmount >= 10% × circulation`
+    -- where circulation is recomputed each block — this column is our
+    -- best reconstruction of what the denominator was at decision time.
+    -- NULL for proposals already past-veto when the column was added.
+    veto_window_circulation_sela BIGINT,
     vote_count      INT         NOT NULL DEFAULT 0,
     reject_count    INT         NOT NULL DEFAULT 0,
     abstain_count   INT         NOT NULL DEFAULT 0,

@@ -576,13 +576,15 @@ const ProposalDetail = () => {
   const articleSections = getArticleSections(proposal);
   const hasVoterReject = proposal.voterReject && proposal.voterReject !== '0' && proposal.voterReject !== '';
   // Veto progress = current rejection / threshold. Threshold is 10%
-  // of chain-wide circulating ELA supply per Elastos protocol (see
-  // cr/state/proposalmanager.go and backend computation comment).
-  // Same formula across all CR eras — chain tip's circulation is
-  // recomputed every block.
+  // of circulating ELA supply per Elastos protocol (see backend
+  // comment in governance.go and cr/state/proposalmanager.go).
+  // Backend prefers the snapshot captured when the proposal exited
+  // the veto window; falls back to live chain-tip circulation for
+  // proposals still in the window or pre-dating the snapshot column.
   const rejectAmount = parseFloat(proposal.voterReject || '0') || 0;
   const rejectThreshold = parseFloat(proposal.voterRejectThreshold || '0') || 0;
   const hasVetoThreshold = rejectThreshold > 0;
+  const isThresholdSnapshot = !!proposal.vetoCirculationSnapshot;
   const vetoProgressPct = hasVetoThreshold
     ? Math.min(100, (rejectAmount / rejectThreshold) * 100)
     : 0;
@@ -775,6 +777,7 @@ const ProposalDetail = () => {
                       rejectAmount={rejectAmount}
                       rejectThreshold={rejectThreshold}
                       hasThreshold={hasVetoThreshold}
+                      isThresholdSnapshot={isThresholdSnapshot}
                       progressPct={vetoProgressPct}
                       isVetoed={isVetoed}
                     />
@@ -902,6 +905,11 @@ interface VetoProgressProps {
   rejectAmount: number;
   rejectThreshold: number;
   hasThreshold: boolean;
+  /** True = threshold is the snapshot captured when this proposal
+   *  exited the veto window (historically accurate). False = live
+   *  chain-tip circulation (used for in-progress proposals or as
+   *  fallback for proposals decided before snapshotting was added). */
+  isThresholdSnapshot: boolean;
   progressPct: number;
   isVetoed: boolean;
 }
@@ -919,11 +927,14 @@ interface VetoProgressProps {
  * implies chain_stats hasn't been populated), the threshold field
  * will be 0 and we fall back to displaying just the absolute amount.
  */
-function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, progressPct, isVetoed }: VetoProgressProps) {
+function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, isThresholdSnapshot, progressPct, isVetoed }: VetoProgressProps) {
   // Color ramp: red/60 < 50%, amber 50-99%, accent-red ≥100% (vetoed).
   const barColor = isVetoed ? 'bg-accent-red' : progressPct >= 50 ? 'bg-amber-400' : 'bg-red-400/60';
+  const supplyContext = isThresholdSnapshot
+    ? 'circulating ELA supply at the time of vote'
+    : 'current circulating ELA supply (approximate for historical proposals)';
   const labelTitle = hasThreshold
-    ? `Stake-weighted ELA cast by the public to veto this proposal. A proposal is vetoed once these reject votes reach 10% of circulating ELA supply (${fmtEla(String(rejectThreshold))} ELA at the current chain tip).`
+    ? `Stake-weighted ELA cast by the public to veto this proposal. A proposal is vetoed once these reject votes reach 10% of ${supplyContext} (${fmtEla(String(rejectThreshold))} ELA).`
     : 'Stake-weighted ELA cast by the public to veto this proposal during the community-veto window.';
   return (
     <div className="space-y-1.5">
@@ -954,7 +965,9 @@ function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, progressPct
           <p className="text-[10px] text-muted">
             {isVetoed
               ? `Vetoed — exceeded ${fmtEla(String(rejectThreshold))} ELA threshold`
-              : `${fmtEla(String(rejectThreshold))} ELA needed to veto (10% of circulating supply)`}
+              : isThresholdSnapshot
+                ? `${fmtEla(String(rejectThreshold))} ELA was needed to veto (10% of supply at vote time)`
+                : `~${fmtEla(String(rejectThreshold))} ELA to veto (10% of current supply — historical)`}
           </p>
         </>
       ) : (

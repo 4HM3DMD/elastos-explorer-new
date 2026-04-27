@@ -8,11 +8,18 @@
 // guide" link until we actually have one to point at.
 //
 // Phase routing (controls the chip's visibility AND label):
-//   voting          → "Cast your vote" (action)
-//   duty (>= 7 days
-//   to next vote)   → "Get ready to vote" (preparation)
-//   duty (< 7 days) → "Voting opens soon" (imminent)
-//   claim / failed  → no chip at all (vote isn't actionable)
+//   voting                       → "Cast your vote" (action)
+//   duty (7-30 days to vote)     → "Get ready to vote" (preparation)
+//   duty (< 7 days to vote)      → "Voting opens soon" (imminent)
+//   duty (> 30 days) / claim /
+//   failed_restart               → no chip at all
+//
+// The 30-day upper bound on the prep chip matters: CR voting happens
+// once a year, so without it the "Get ready to vote" chip would sit
+// there for ~11 months out of every 12 — pure noise. Surfacing the
+// prep guidance ~30 days out gives users a meaningful runway to
+// install Essentials, switch wallet mode, and stake without the
+// chip being permanent furniture.
 
 import { useState, useId } from 'react';
 import { Vote, Clock, ChevronDown, Wallet, ArrowRight } from 'lucide-react';
@@ -97,8 +104,15 @@ const HowToVoteCard = ({ status }: HowToVoteCardProps) => {
 
     if (phase === 'duty' && status.nextVotingStartHeight > 0) {
       const blocksUntilVoting = status.nextVotingStartHeight - status.currentHeight;
-      // ~1 week worth of blocks (BLOCK_TIME_SECONDS=120 * 7 days = 5040)
-      const isImminent = blocksUntilVoting > 0 && blocksUntilVoting <= 5040;
+      // Block-time math at 120s/block:
+      //   IMMINENT_BLOCKS  = 7  days × 720 blocks/day = 5,040
+      //   PREP_WINDOW      = 30 days × 720 blocks/day = 21,600
+      // Outside the 30-day window we render nothing — see leading
+      // comment for why year-round "Get ready to vote" was noise.
+      const IMMINENT_BLOCKS = 5040;
+      const PREP_WINDOW_BLOCKS = 21600;
+      if (blocksUntilVoting <= 0 || blocksUntilVoting > PREP_WINDOW_BLOCKS) return null;
+      const isImminent = blocksUntilVoting <= IMMINENT_BLOCKS;
       return {
         tone: isImminent ? ('brand' as const) : ('neutral' as const),
         icon: isImminent ? Vote : Clock,

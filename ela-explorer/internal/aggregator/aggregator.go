@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	gosync "sync"
 	"sync/atomic"
 	"time"
@@ -1390,7 +1391,7 @@ func (a *Aggregator) refreshProposals(ctx context.Context) error {
 			for did, vote := range p.CRVotes {
 				pairs = append(pairs, fmt.Sprintf(`"%s":"%s"`, did, vote))
 			}
-			crVotesJSON = "{" + joinStrings(pairs, ",") + "}"
+			crVotesJSON = "{" + strings.Join(pairs, ",") + "}"
 		} else {
 			crVotesJSON = "{}"
 		}
@@ -1718,17 +1719,6 @@ func (a *Aggregator) backfillFromCyberRepublic(ctx context.Context) {
 	if matched > 0 {
 		slog.Info("backfillFromCyberRepublic: filled titles", "matched", matched, "total_missing", len(items))
 	}
-}
-
-func joinStrings(s []string, sep string) string {
-	if len(s) == 0 {
-		return ""
-	}
-	result := s[0]
-	for i := 1; i < len(s); i++ {
-		result += sep + s[i]
-	}
-	return result
 }
 
 func (a *Aggregator) refreshDailyStats(ctx context.Context) error {

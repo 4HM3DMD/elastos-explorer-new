@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import HashDisplay from '../components/HashDisplay';
 import MarkdownContent from '../components/MarkdownContent';
+import { ComponentErrorBoundary } from '../components/ComponentErrorBoundary';
 import AddressAvatar from '../components/AddressAvatar';
 import GovernanceBreadcrumb from '../components/GovernanceBreadcrumb';
 import { PageSkeleton } from '../components/LoadingSkeleton';
@@ -683,7 +684,13 @@ const ProposalDetail = () => {
                   <div key={section.title}>
                     {idx > 0 && <hr className="border-[var(--color-border)] mb-6" />}
                     <h2 className="text-lg font-semibold text-primary mb-3">{section.title}</h2>
-                    <MarkdownContent content={section.content} draftHash={proposal.draftHash} />
+                    {/* Proposal markdown is user-controlled — wrap in
+                        boundary so a malformed payload (bad image URL,
+                        runaway HTML, deeply nested table) crashing the
+                        renderer doesn't take down the whole page. */}
+                    <ComponentErrorBoundary label={`"${section.title}" couldn't render`}>
+                      <MarkdownContent content={section.content} draftHash={proposal.draftHash} />
+                    </ComponentErrorBoundary>
                   </div>
                 ))}
               </article>

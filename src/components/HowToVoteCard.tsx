@@ -193,7 +193,7 @@ function Step({
   return (
     <li className="flex gap-3 items-start">
       <span
-        className="shrink-0 w-5 h-5 rounded-full bg-brand/15 text-brand text-[10px] font-semibold flex items-center justify-center mt-0.5"
+        className="shrink-0 w-6 h-6 rounded-full bg-brand/15 text-brand text-[11px] font-semibold flex items-center justify-center mt-0.5"
         style={{ fontVariantNumeric: 'tabular-nums' }}
         aria-hidden="true"
       >

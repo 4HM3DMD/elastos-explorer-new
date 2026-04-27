@@ -11,6 +11,7 @@ import HashDisplay from '../components/HashDisplay';
 import AddressAvatar from '../components/AddressAvatar';
 import QRCodeModal from '../components/QRCodeModal';
 import Pagination from '../components/Pagination';
+import { ComponentErrorBoundary } from '../components/ComponentErrorBoundary';
 import { PageSkeleton } from '../components/LoadingSkeleton';
 import RelativeTime from '../components/RelativeTime';
 import { formatEla } from '../utils/format';
@@ -269,20 +270,32 @@ const AddressDetails = () => {
           goPage={goPage}
         />
       )}
+      {/* Each tab gets its own ErrorBoundary so a render crash in one
+          (e.g. recharts choking on malformed data, governance panel
+          hitting an unexpected shape) doesn't blow up the whole
+          AddressDetails page via the App-level boundary. The boundary
+          wraps Suspense so a chunk-load failure also lands here
+          instead of crashing higher up. */}
       {activeTab === 'balance' && address && (
-        <Suspense fallback={<TabSkeleton />}>
-          <BalanceHistoryChart address={address} />
-        </Suspense>
+        <ComponentErrorBoundary label="Balance history unavailable">
+          <Suspense fallback={<TabSkeleton />}>
+            <BalanceHistoryChart address={address} />
+          </Suspense>
+        </ComponentErrorBoundary>
       )}
       {activeTab === 'staking' && address && (
-        <Suspense fallback={<TabSkeleton />}>
-          <VoteHistoryTimeline address={address} />
-        </Suspense>
+        <ComponentErrorBoundary label="Staking history unavailable">
+          <Suspense fallback={<TabSkeleton />}>
+            <VoteHistoryTimeline address={address} />
+          </Suspense>
+        </ComponentErrorBoundary>
       )}
       {activeTab === 'governance' && address && (
-        <Suspense fallback={<TabSkeleton />}>
-          <GovernancePanel address={address} />
-        </Suspense>
+        <ComponentErrorBoundary label="Governance summary unavailable">
+          <Suspense fallback={<TabSkeleton />}>
+            <GovernancePanel address={address} />
+          </Suspense>
+        </ComponentErrorBoundary>
       )}
     </div>
   );

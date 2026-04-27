@@ -96,7 +96,7 @@ const StatusIndicator = ({ type, message }: { type: 'error' | 'warning'; message
 
   return (
     <div
-      className="fixed bottom-4 left-4 z-[9997] px-3 py-2 rounded-lg text-xs flex items-center gap-2"
+      className="fixed bottom-4 left-2 right-2 sm:left-4 sm:right-auto z-[9997] max-w-[calc(100vw-1rem)] sm:max-w-sm px-3 py-2 rounded-lg text-xs flex items-center gap-2"
       style={{ background: bgColor, border: `1px solid ${borderColor}` }}
     >
       <span className="relative flex h-2 w-2 shrink-0">

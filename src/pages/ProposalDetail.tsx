@@ -665,8 +665,8 @@ const ProposalDetail = () => {
               <SidebarVotes approve={proposal.voteCount} reject={proposal.rejectCount} abstain={proposal.abstainCount} status={proposal.status} reviews={proposal.reviews} />
               {hasVoterReject && (
                 <div className="pt-2 border-t border-[var(--color-border)]">
-                  <span className="text-xs text-muted">Voter Rejection</span>
-                  <p className="text-sm font-mono font-bold text-red-400">{formatBudgetLine(proposal.voterReject)}</p>
+                  <span className="text-xs text-muted" title="Stake-weighted ELA cast by the public to veto this proposal during the community-veto window. A proposal is vetoed if these reject votes reach 10% of total CR votes.">Community Veto</span>
+                  <p className="text-sm font-mono font-bold text-red-400">{formatBudgetLine(proposal.voterReject)} ELA</p>
                 </div>
               )}
               {hasBudget && resolvedBudgetEla > 0 && (
@@ -754,8 +754,9 @@ const ProposalDetail = () => {
                 <SidebarVotes approve={proposal.voteCount} reject={proposal.rejectCount} abstain={proposal.abstainCount} status={proposal.status} reviews={proposal.reviews} />
                 {hasVoterReject && (
                   <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
-                    <span className="text-xs text-muted">Voter Rejection</span>
-                    <p className="text-sm font-mono font-bold text-red-400 mt-0.5">{formatBudgetLine(proposal.voterReject)}</p>
+                    <span className="text-xs text-muted" title="Stake-weighted ELA cast by the public to veto this proposal during the community-veto window. A proposal is vetoed if these reject votes reach 10% of total CR votes.">Community Veto</span>
+                    <p className="text-sm font-mono font-bold text-red-400 mt-0.5">{formatBudgetLine(proposal.voterReject)} ELA</p>
+                    <p className="text-[10px] text-muted mt-1">10% threshold to veto</p>
                   </div>
                 )}
               </div>

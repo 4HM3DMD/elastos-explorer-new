@@ -49,6 +49,7 @@ func (s *Server) getAddressExport(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	format := exportFormatFromString(q.Get("format"))
 	includeCounterparties := q.Get("include_counterparties") == "true"
+	countOnly := q.Get("count") == "true"
 
 	fromTS, toTS, err := parseExportDateRange(q.Get("from"), q.Get("to"))
 	if err != nil {
@@ -56,24 +57,28 @@ func (s *Server) getAddressExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Override the server-level WriteTimeout (30s) so a legitimate
-	// large export can complete. ResponseController is the supported
-	// post-Go-1.20 way to do this without leaking goroutines.
-	rc := http.NewResponseController(w)
-	if err := rc.SetWriteDeadline(time.Now().Add(exportRequestDeadline)); err != nil {
-		// SetWriteDeadline is unsupported only if the underlying writer
-		// doesn't expose it; that should not happen in production but
-		// the export still works (subject to the 30s default). Log and
-		// continue rather than failing the whole request.
-		slog.Debug("getAddressExport: SetWriteDeadline unsupported", "error", err)
+	// Streaming responses need a longer write deadline than the server
+	// default (30s); count-only requests are tiny JSON so they don't.
+	if !countOnly {
+		rc := http.NewResponseController(w)
+		if err := rc.SetWriteDeadline(time.Now().Add(exportRequestDeadline)); err != nil {
+			// SetWriteDeadline is unsupported only if the underlying writer
+			// doesn't expose it; that should not happen in production but
+			// the export still works (subject to the 30s default). Log and
+			// continue rather than failing the whole request.
+			slog.Debug("getAddressExport: SetWriteDeadline unsupported", "error", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), exportRequestDeadline)
 	defer cancel()
 
-	// Pre-flight count: reject 413 before opening a streaming response.
-	// Once we've written the first byte we can no longer change the
-	// status code, so the cap check has to live up here.
+	// Pre-flight count: cheap query that doubles as the live preview the
+	// modal calls via ?count=true. The same query also gates the 50K-row
+	// streaming cap. Goes through s.db.API (RO pool) so a count probe
+	// can never starve the syncer pool, and respects the same date-range
+	// cap as the streaming path so users cannot probe arbitrarily wide
+	// windows for activity stats on other people's wallets.
 	var rowCount int64
 	if err := s.db.API.QueryRow(ctx, `
 		SELECT COUNT(*) FROM address_transactions
@@ -84,6 +89,21 @@ func (s *Server) getAddressExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "count query failed")
 		return
 	}
+
+	// Count-only path: return JSON and stop. The user has not committed
+	// to downloading anything; we deliberately do NOT 413 even if the
+	// row count exceeds the streaming cap, so the modal can show
+	// "60,000 rows — narrow your range" instead of an error.
+	if countOnly {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"rows":           rowCount,
+			"maxRows":        exportMaxRows,
+			"exceedsMaxRows": rowCount > exportMaxRows,
+		})
+		return
+	}
+
 	if rowCount > exportMaxRows {
 		writeError(w, http.StatusRequestEntityTooLarge,
 			fmt.Sprintf("date range yields %d rows; max %d. Narrow the range and retry.", rowCount, exportMaxRows))

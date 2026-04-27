@@ -24,10 +24,18 @@ import {
   PROPOSAL_VETO_PERIOD_BLOCKS,
 } from '../constants/governance';
 
+// Lifecycle pill labels. CRAgreed and Notification are the SAME
+// on-chain phase (council approved → community veto window open) —
+// the node uses CRAgreed first then renames to Notification briefly
+// before transitioning to VoterAgreed/VoterCanceled. Both pills now
+// say "Community Veto" to match PROPOSAL_STATUS_LABELS in
+// types/blockchain.ts; a previous "Council Passed" label drifted
+// from that source of truth and showed inconsistent copy across the
+// page (timeline pill said one thing, status badge said another).
 const LIFECYCLE_STEPS = [
   { raw: 'Registered',   label: 'Under Review' },
-  { raw: 'CRAgreed',     label: 'Council Passed' },
-  { raw: 'Notification', label: 'Veto Period' },
+  { raw: 'CRAgreed',     label: 'Community Veto' },
+  { raw: 'Notification', label: 'Community Veto' },
   { raw: 'VoterAgreed',  label: 'Passed' },
   { raw: 'Finished',     label: 'Final' },
 ] as const;

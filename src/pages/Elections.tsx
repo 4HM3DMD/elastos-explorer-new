@@ -46,6 +46,7 @@ import GovernanceNav from '../components/GovernanceNav';
 import HowToVoteCard from '../components/HowToVoteCard';
 import { formatVotes, safeExternalUrl } from '../utils/format';
 import { webSocketService } from '../services/websocket';
+import { CR_COUNCIL_SIZE } from '../constants/governance';
 
 // Phase → page title/subtitle metadata. The icon in the circular
 // pill mirrors the tab icon for visual continuity.
@@ -251,7 +252,7 @@ const Elections = () => {
             <p className="text-sm font-semibold text-primary mb-1">Election restarted</p>
             <p className="text-xs text-secondary">
               {status.failedRestartReason ||
-                'The node restarted voting because fewer than 12 candidates received votes.'}{' '}
+                `The node restarted voting because fewer than ${CR_COUNCIL_SIZE} candidates received votes.`}{' '}
               The current Term {status.currentCouncilTerm} council continues. Next voting window
               opens at block{' '}
               <span className="font-mono text-primary">
@@ -443,7 +444,7 @@ export function StatusHero({
             </p>
             <p className="text-[11px] md:text-xs text-secondary mt-1.5 tracking-[0.04em]">
               Term {status.currentCouncilTerm} council continues until a valid election seats {' '}
-              <span className="text-primary">12</span> members.
+              <span className="text-primary">{CR_COUNCIL_SIZE}</span> members.
             </p>
           </div>
           <Countdown
@@ -565,7 +566,7 @@ export function CouncilMembersTable({
           </thead>
           <tbody>
             {loading && members.length === 0 ? (
-              Array.from({ length: 12 }).map((_, i) => (
+              Array.from({ length: CR_COUNCIL_SIZE }).map((_, i) => (
                 <tr key={i}>
                   {Array.from({ length: 5 }).map((_, j) => (
                     <td key={j}>

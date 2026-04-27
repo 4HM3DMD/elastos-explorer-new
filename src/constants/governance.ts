@@ -66,8 +66,7 @@ export function getElectionTargetTerm(height: number): number {
 
 /**
  * Countdown-style format for blocks remaining: "Xd Yh" / "Xh Ym" / "Zm".
- * Used by Countdown component + proposal review/veto countdowns. Different
- * from `formatBlocksAsDuration` (which uses "~N days" approximation).
+ * Used by Countdown component + proposal review/veto countdowns.
  */
 export function formatBlocksAsCountdown(blocksLeft: number): string {
   if (blocksLeft <= 0) return '0m';
@@ -78,21 +77,4 @@ export function formatBlocksAsCountdown(blocksLeft: number): string {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
-}
-
-/**
- * Format a lock duration (in blocks) as a human-readable "~N days" string.
- * Short locks under a day render as hours; under an hour as minutes.
- */
-export function formatBlocksAsDuration(blocks: number): string {
-  if (!Number.isFinite(blocks) || blocks <= 0) return '—';
-  const seconds = blocks * BLOCK_TIME_SECONDS;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `~${minutes} min`;
-  const hours = Math.round(seconds / 3600);
-  if (hours < 48) return `~${hours} hr`;
-  const days = Math.round(seconds / 86400);
-  if (days < 60) return `~${days} days`;
-  const months = (days / 30).toFixed(1);
-  return `~${months} mo`;
 }

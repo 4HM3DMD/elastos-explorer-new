@@ -1104,11 +1104,19 @@ export const PRODUCER_STATE_COLORS: Record<string, string> = {
   Pending: 'bg-blue-500/20 text-blue-400',
 };
 
+// Color map for every state crStateDisplayLabel can produce. Missing
+// entries fall through to a generic gray badge — fine, but inconsistent.
+// Canceled/Terminated/Unknown were missing previously; added with the
+// same retired/terminal palette so badges read at a glance instead of
+// blending into the generic fallback.
 export const CR_STATE_COLORS: Record<string, string> = {
   Elected: 'bg-green-500/20 text-green-400',
   Pending: 'bg-blue-500/20 text-blue-400',
   Impeached: 'bg-red-500/20 text-red-400',
   Returned: 'bg-gray-500/20 text-gray-400',
+  Terminated: 'bg-gray-600/20 text-gray-400',
+  Canceled: 'bg-gray-600/20 text-gray-400',
+  Unknown: 'bg-gray-700/20 text-gray-500',
   Inactive: 'bg-yellow-500/20 text-yellow-400',
   Illegal: 'bg-red-600/20 text-red-500',
 };

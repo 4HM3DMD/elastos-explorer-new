@@ -5,7 +5,7 @@ import type { TopStaker, StakingSummary, BlockchainStats } from '../types/blockc
 import { Lock, Shield, Users, Gift, Info } from 'lucide-react';
 import { fmtEla, fmtNumber } from '../utils/format';
 import Pagination from '../components/Pagination';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import StakeBar from '../components/StakeBar';
 import SEO from '../components/SEO';
 
@@ -133,9 +133,9 @@ const Staking = () => {
                 Array.from({ length: PAGE_SIZE }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 3 }).map((_, j) => (
-                      <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>
+                      <td key={j}><Skeleton className="h-3 w-20" /></td>
                     ))}
-                    <td className="hidden sm:table-cell"><div className="h-3 w-20 animate-shimmer rounded" /></td>
+                    <td className="hidden sm:table-cell"><Skeleton className="h-3 w-20" /></td>
                   </tr>
                 ))
               ) : stakers.length === 0 ? (

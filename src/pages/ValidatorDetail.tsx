@@ -10,7 +10,7 @@ import {
 import HashDisplay from '../components/HashDisplay';
 import NodeAvatar from '../components/NodeAvatar';
 import Pagination from '../components/Pagination';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import { getLocation, formatVotes, fmtEla, safeExternalUrl } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
@@ -190,7 +190,7 @@ const ValidatorDetail = () => {
                 Array.from({ length: STAKERS_PAGE_SIZE }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 5 }).map((_, j) => (
-                      <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>
+                      <td key={j}><Skeleton className="h-3 w-20" /></td>
                     ))}
                   </tr>
                 ))

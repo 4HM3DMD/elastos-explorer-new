@@ -5,7 +5,7 @@ import { blockchainApi } from '../services/api';
 import type { RichAddress } from '../types/blockchain';
 import { downloadCSV } from '../utils/csv';
 import Pagination from '../components/Pagination';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import { fmtEla } from '../utils/format';
 import { BURN_ADDRESS, getAddressInfo, getCategoryIcon, buildDisplayLabels } from '../constants/addressLabels';
 import SEO from '../components/SEO';
@@ -102,7 +102,7 @@ const Ranking = () => {
                 Array.from({ length: 10 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 4 }).map((_, j) => (
-                      <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>
+                      <td key={j}><Skeleton className="h-3 w-20" /></td>
                     ))}
                   </tr>
                 ))

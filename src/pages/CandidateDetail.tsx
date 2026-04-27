@@ -33,7 +33,7 @@ import type {
 } from '../types/blockchain';
 import { CR_STATE_COLORS, crStateDisplayLabel } from '../types/blockchain';
 import { cn } from '../lib/cn';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import HashDisplay from '../components/HashDisplay';
 import Pagination from '../components/Pagination';
@@ -991,7 +991,7 @@ function VotersCard({
                 <tr key={i}>
                   {Array.from({ length: 4 }).map((_, j) => (
                     <td key={j}>
-                      <div className="h-3 w-20 animate-shimmer rounded" />
+                      <Skeleton className="h-3 w-20" />
                     </td>
                   ))}
                 </tr>

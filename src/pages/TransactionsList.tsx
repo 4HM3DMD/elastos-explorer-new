@@ -5,7 +5,7 @@ import type { TransactionSummary } from '../types/blockchain';
 import { ArrowRight, Clock, GitBranch, Activity } from 'lucide-react';
 import HashDisplay from '../components/HashDisplay';
 import Pagination from '../components/Pagination';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import { cn } from '../lib/cn';
 import RelativeTime from '../components/RelativeTime';
 import { truncHash, fmtEla } from '../utils/format';
@@ -198,7 +198,7 @@ const TransactionsList = () => {
                 Array.from({ length: pageSize }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 6 }).map((_, j) => (
-                      <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>
+                      <td key={j}><Skeleton className="h-3 w-20" /></td>
                     ))}
                   </tr>
                 ))

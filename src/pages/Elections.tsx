@@ -38,7 +38,7 @@ import type {
 import { CR_STATE_COLORS, crStateDisplayLabel } from '../types/blockchain';
 import { Vote, Users, Trophy, Radio, AlertTriangle, ExternalLink } from 'lucide-react';
 import { cn } from '../lib/cn';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import SEO from '../components/SEO';
 import Countdown from '../components/Countdown';
 import HashDisplay from '../components/HashDisplay';
@@ -569,7 +569,7 @@ export function CouncilMembersTable({
                 <tr key={i}>
                   {Array.from({ length: 5 }).map((_, j) => (
                     <td key={j}>
-                      <div className="h-3 w-16 animate-shimmer rounded" />
+                      <Skeleton className="h-3 w-16" />
                     </td>
                   ))}
                 </tr>

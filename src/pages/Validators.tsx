@@ -4,7 +4,7 @@ import { blockchainApi } from '../services/api';
 import type { Producer } from '../types/blockchain';
 import { PRODUCER_STATE_COLORS } from '../types/blockchain';
 import { Globe, Shield } from 'lucide-react';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import NodeAvatar from '../components/NodeAvatar';
 import { getLocation, formatVotes } from '../utils/format';
 import { cn } from '../lib/cn';
@@ -132,7 +132,7 @@ const Validators = () => {
                 Array.from({ length: 20 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 6 }).map((_, j) => (
-                      <td key={j}><div className="h-3 w-20 animate-shimmer rounded" /></td>
+                      <td key={j}><Skeleton className="h-3 w-20" /></td>
                     ))}
                   </tr>
                 ))

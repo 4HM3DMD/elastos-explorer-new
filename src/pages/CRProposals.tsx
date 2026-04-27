@@ -5,7 +5,7 @@ import type { CRProposal } from '../types/blockchain';
 import { PROPOSAL_STATUS_COLORS, PROPOSAL_STATUS_LABELS } from '../types/blockchain';
 import { FileText, Coins, GitBranch, ThumbsUp, ThumbsDown, Minus, Hash, ExternalLink, Clock, ChevronDown, X } from 'lucide-react';
 import Pagination from '../components/Pagination';
-import { PageSkeleton } from '../components/LoadingSkeleton';
+import { PageSkeleton, Skeleton } from '../components/LoadingSkeleton';
 import { fmtEla, resolveProposalBudgetEla } from '../utils/format';
 import { cn } from '../lib/cn';
 import SEO from '../components/SEO';
@@ -279,23 +279,23 @@ const ProposalCardSkeleton = () => (
   <div className="card p-3 sm:p-3.5 border-l-[3px] border-l-[var(--color-border)]">
     <div className="flex items-center justify-between gap-2.5 mb-2">
       <div className="flex gap-1.5">
-        <div className="h-5 w-24 animate-shimmer rounded-md" />
-        <div className="h-5 w-16 animate-shimmer rounded-md" />
+        <Skeleton className="h-5 w-24" />
+        <Skeleton className="h-5 w-16" />
       </div>
-      <div className="h-4 w-20 animate-shimmer rounded" />
+      <Skeleton className="h-4 w-20" />
     </div>
     <div className="mb-2 flex items-start gap-2">
-      <div className="h-5 w-12 animate-shimmer rounded-md shrink-0" />
-      <div className="h-5 w-4/5 animate-shimmer rounded" />
+      <Skeleton className="h-5 w-12 shrink-0" />
+      <Skeleton className="h-5 w-4/5" />
     </div>
     <div className="flex items-center justify-between gap-3 pt-2 border-t border-[var(--color-border)]/50">
       <div className="flex gap-2">
-        <div className="h-3 w-28 animate-shimmer rounded" />
-        <div className="h-3 w-14 animate-shimmer rounded" />
+        <Skeleton className="h-3 w-28" />
+        <Skeleton className="h-3 w-14" />
       </div>
       <div className="flex gap-1.5">
-        <div className="h-2.5 w-[72px] animate-shimmer rounded-sm" />
-        <div className="h-3 w-12 animate-shimmer rounded" />
+        <Skeleton className="h-2.5 w-[72px]" />
+        <Skeleton className="h-3 w-12" />
       </div>
     </div>
   </div>
@@ -315,7 +315,7 @@ const StatStrip = ({ counts, loading }: { counts: StatCounts | null; loading: bo
         <div key={c.label} className="card px-3 py-2.5 sm:py-3">
           <div className="text-[10px] sm:text-[11px] text-muted uppercase tracking-wider mb-1">{c.label}</div>
           {loading || c.value == null ? (
-            <div className="h-6 w-16 animate-shimmer rounded" />
+            <Skeleton className="h-6 w-16" />
           ) : (
             <div className={cn('text-lg sm:text-xl font-[200] tabular-nums tracking-tight', c.accent)}>
               {c.value.toLocaleString()}

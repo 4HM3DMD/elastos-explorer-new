@@ -252,9 +252,21 @@ func (s *Server) getSupply(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("getSupply: burned query failed", "error", err)
 	}
 
+	// Sum BOTH staking-rewards pools: the legacy DPoS pool (FD5SHU,
+	// holds the active reward balance for current chain — ~50K ELA)
+	// AND the BPoS pool (Tw4VB4, currently empty but reserved). Prior
+	// code queried Tw4VB4 only and silently returned 0 for the entire
+	// `stakingRewardsPool` field on /supply. Both addresses are
+	// canonical Elastos protocol addresses; they're listed in
+	// schema.sql:533 + addressLabels.ts. Summing future-proofs against
+	// the BPoS pool starting to receive rewards.
 	var stakeRewardPoolSela int64
 	if err := s.db.API.QueryRow(r.Context(),
-		"SELECT COALESCE(balance_sela, 0) FROM address_balances WHERE address = 'STAKEREWARDXXXXXXXXXXXXXXXXXTw4VB4'",
+		`SELECT COALESCE(SUM(balance_sela), 0) FROM address_balances
+		 WHERE address IN (
+		   'STAKEREWARDXXXXXXXXXXXXXXXXXFD5SHU',
+		   'STAKEREWARDXXXXXXXXXXXXXXXXXTw4VB4'
+		 )`,
 	).Scan(&stakeRewardPoolSela); err != nil {
 		slog.Warn("getSupply: stake reward pool query failed", "error", err)
 	}

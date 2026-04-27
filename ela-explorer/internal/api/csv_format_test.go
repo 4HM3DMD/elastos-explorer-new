@@ -192,7 +192,7 @@ func TestHeadersFor(t *testing.T) {
 	if got := headersFor(FormatKoinly); len(got) != 12 || got[0] != "Date" {
 		t.Errorf("Koinly headers wrong: %v", got)
 	}
-	if got := headersFor(FormatCoinTracking); len(got) != 12 || got[0] != "\"Type\"" {
+	if got := headersFor(FormatCoinTracking); len(got) != 12 || got[0] != "Type" {
 		t.Errorf("CoinTracking headers wrong: %v", got)
 	}
 	if got := headersFor(FormatRaw); len(got) != 11 || got[0] != "Txhash" {

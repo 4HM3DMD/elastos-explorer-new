@@ -48,12 +48,16 @@ var koinlyHeaders = []string{
 	"Label", "Description", "TxHash",
 }
 
+// CoinTracking's docs render the example header row with literal double
+// quotes around each name, but those are RFC 4180 quoting in their
+// example, not part of the field content. csv.Writer quotes per RFC 4180
+// automatically when needed, so the field strings here are unquoted.
 var cointrackingHeaders = []string{
-	"\"Type\"", "\"Buy Amount\"", "\"Buy Currency\"",
-	"\"Sell Amount\"", "\"Sell Currency\"",
-	"\"Fee\"", "\"Fee Currency\"",
-	"\"Exchange\"", "\"Trade-Group\"", "\"Comment\"",
-	"\"Date\"", "\"Tx-ID (optional)\"",
+	"Type", "Buy Amount", "Buy Currency",
+	"Sell Amount", "Sell Currency",
+	"Fee", "Fee Currency",
+	"Exchange", "Trade-Group", "Comment",
+	"Date", "Tx-ID (optional)",
 }
 
 var rawHeaders = []string{

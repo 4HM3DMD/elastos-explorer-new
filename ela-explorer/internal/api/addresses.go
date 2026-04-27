@@ -902,17 +902,26 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 			typeName = fmt.Sprintf("Unknown (%d)", voteType)
 		}
 		// Override the vote-type label when the source tx is type 98
-		// (Exchange Votes) — the protocol output looks like a BPoS
-		// vote (vote_type=4) but the user's intent was a vote
-		// CONVERSION from legacy DPoS to BPoS, not actively staking on
-		// that producer. Showing "BPoS Validator · Elastos World" for
-		// what was really a one-time migration tx misled users who
-		// thought they had a deliberate stake on that node.
-		// TxTypeName 98 is "Exchange Votes"; matching frontend's
-		// TX_TYPE_MAP entry (label "Vote Conversion") so the badge +
-		// styling stay consistent across pages.
+		// (Exchange Votes — handleExchangeVotes in tx_processor.go).
+		// On the protocol side this consumes one or more legacy
+		// DPoS vote UTXOs as inputs and produces ONE OTStake output
+		// at the user's derived staking address. The new stake's
+		// voting power is auto-assigned to whoever the OLD vote was
+		// for ("inherits the candidate from the first consumed vote").
+		//
+		// Showing this as "BPoS Validator · {producer}" implied an
+		// active staking decision in the present, when really:
+		//   1. The user staked on that producer YEARS AGO under the
+		//      legacy model
+		//   2. tx 98 is just the chain's one-shot format migration
+		//   3. The user never actively chose this producer NOW
+		//
+		// "Stake Migration" reflects the action accurately. The
+		// candidate name is kept (still useful: "your migrated stake
+		// votes for X") but the badge no longer impersonates a fresh
+		// staking choice.
 		if sourceTxType == 98 && voteType == 4 {
-			typeName = "Vote Conversion"
+			typeName = "Stake Migration"
 		}
 
 		resolvedName := producerName

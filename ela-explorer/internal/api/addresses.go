@@ -811,7 +811,7 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 	//   that's still alive gets a non-null current_lock_time.
 	//   bs.lock_time reflects the CURRENT on-chain locktime (post any
 	//   renewals); the UI uses it instead of v.lock_time for display.
-	// `effective_is_active` corrects for two staleness sources in
+	// `effective_is_active` corrects for three staleness sources in
 	// votes.is_active:
 	//
 	// 1. Legacy DPoS Delegate votes (type 0). The chain replaced the
@@ -821,13 +821,25 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 	//    them spent (spent_height stays NULL), so v.is_active is stuck
 	//    at TRUE for ~all pre-DPoSv2 wallets. Override to FALSE.
 	//
-	// 2. BPoS votes (type 4). v.is_active = TRUE iff the original UTXO
-	//    is unspent. But "unspent" doesn't mean "still voting": a stake
-	//    can be RENEWED, which preserves the original UTXO but moves
-	//    the active-vote position to a new (txid, candidate) pair in
-	//    bpos_stakes. The authoritative active-stakes set lives in
-	//    bpos_stakes — if there's no matching row there, the vote
-	//    isn't currently active regardless of UTXO state.
+	// 2. BPoS votes (type 4) on a STAKER (S-prefix) page. v.is_active
+	//    means "original UTXO unspent" — but a renewal preserves the
+	//    UTXO while moving the active position to a new (txid,
+	//    candidate) pair in bpos_stakes. Active iff bpos_stakes still
+	//    has a matching row OWNED BY THIS ADDRESS.
+	//
+	// 3. BPoS votes (type 4) on a WALLET (E/8-prefix) page. The wallet
+	//    ITSELF never votes — it just FUNDS the stake; the derived
+	//    S-prefix stake_address holds the active position. So a type-4
+	//    record in a wallet's vote-history is a funding event, not an
+	//    active vote. Always inactive on the wallet view; users follow
+	//    the stake-address callout (`staking.stakeAddresses`) to reach
+	//    the staker portfolio for the actual live state.
+	//
+	// Both #2 and #3 collapse to a single check: "is there a
+	// bpos_stakes row matching (txid, candidate, stake_address=this
+	// address)?" — which evaluates to FALSE for wallet pages
+	// automatically because bpos_stakes.stake_address is always
+	// S-prefix, never E/8-prefix.
 	//
 	// Other types (1=DAO Council, 2=DAO Proposal review, 3=Impeachment)
 	// pass through unchanged — they're event-style votes, not
@@ -837,7 +849,12 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 		       v.lock_time, v.stake_height,
 		       (CASE
 		         WHEN v.vote_type = 0 AND v.stake_height < 1405000 THEN FALSE
-		         WHEN v.vote_type = 4 THEN bs.transaction_hash IS NOT NULL
+		         WHEN v.vote_type = 4 THEN EXISTS (
+		           SELECT 1 FROM bpos_stakes bs2
+		           WHERE bs2.transaction_hash = v.txid
+		             AND bs2.producer_key = v.candidate
+		             AND bs2.stake_address = v.address
+		         )
 		         ELSE v.is_active
 		       END) AS effective_is_active,
 		       v.spent_txid,

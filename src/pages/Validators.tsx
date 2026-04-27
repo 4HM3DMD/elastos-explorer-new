@@ -14,15 +14,15 @@ import { getRegistrationBadge } from '../utils/validatorBadge';
 const PRODUCER_TABS = [
   { label: 'Active', value: 'Active' },
   { label: 'Inactive', value: 'Inactive' },
-  { label: 'Canceled', value: 'Canceled' },
   { label: 'Illegal', value: 'Illegal' },
   { label: 'All', value: 'all' },
 ] as const;
 
-// All states surfaced in the "All" view. Canceled is included now —
-// the backend has always returned it; the frontend filter just didn't
-// expose it, hiding canceled validators from history.
-const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Canceled', 'Illegal']);
+// States surfaced in the "All" view. `Canceled` is intentionally
+// excluded — that flow belongs to the legacy DPoS lifecycle and
+// isn't a state users need to see under BPoS. Same for `Returned`
+// and `Unknown` (transient lifecycle states with no useful list view).
+const VISIBLE_STATES = new Set(['Active', 'Inactive', 'Illegal']);
 
 // Badge logic moved to `src/utils/validatorBadge.ts` so the list and
 // detail pages render the same producer with the same label. See the

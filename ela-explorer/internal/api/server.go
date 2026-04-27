@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -534,7 +535,15 @@ func bearerAuthMiddleware(token string) func(http.Handler) http.Handler {
 				return
 			}
 			auth := r.Header.Get("Authorization")
-			if auth != "Bearer "+token {
+			expected := "Bearer " + token
+			// crypto/subtle.ConstantTimeCompare avoids the early-return
+			// timing channel that string equality has — the latter
+			// returns as soon as the first differing byte is found,
+			// leaking which prefix matched. With the admin endpoint
+			// rate-limited to 2 req/s + 5 burst, even a leaky compare
+			// would take centuries to brute-force, but constant-time
+			// is the right primitive and adds nothing.
+			if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 				writeError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}

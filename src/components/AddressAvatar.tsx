@@ -78,8 +78,9 @@ function DeterministicAvatar({ address, size }: { address: string; size: number 
     <div
       className="rounded-xl shrink-0 overflow-hidden"
       style={{ width: size, height: size, background: `${color}20`, color }}
+      aria-hidden="true"
     >
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true" focusable="false">
         {generatePattern(address, size)}
       </svg>
     </div>

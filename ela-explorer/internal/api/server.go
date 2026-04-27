@@ -517,12 +517,18 @@ func accessLogMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rec, r)
+		// chi's middleware.RequestID populates a UUID/random ID on every
+		// request and writes it back as X-Request-Id. Surfacing it in
+		// access logs lets ops correlate "this 500 in user-reported
+		// trace abc-123" to the exact server-side log line + any
+		// downstream warnings during that request.
 		slog.Info("http request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rec.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"ip", extractClientIP(r),
+			"request_id", middleware.GetReqID(r.Context()),
 		)
 	})
 }

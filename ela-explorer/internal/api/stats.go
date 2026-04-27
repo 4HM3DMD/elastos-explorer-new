@@ -740,6 +740,43 @@ func (s *Server) getELAPrice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {
+	// Liveness check used by Docker healthcheck + load balancers. Must
+	// be lightweight (called every 30s) but NOT trivially-200, otherwise
+	// a crashed syncer or dead DB shows "healthy" forever and Docker
+	// never restarts the container.
+	//
+	// Two cheap checks:
+	//   1. DB ping — proves the read pool can serve queries.
+	//   2. Syncer freshness — sync gap > 1000 blocks (~33 hours behind)
+	//      means the indexer is dead even if the process is alive.
+	//      Tighter threshold would cause flaps under transient lag;
+	//      1000 catches "syncer goroutine died" without false-alarming
+	//      on "node is briefly behind."
+	//
+	// Detailed component status (chain fork, validation, peers) lives
+	// behind /health/detailed (auth-gated) — this endpoint stays public.
+	pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.db.API.Ping(pingCtx); err != nil {
+		slog.Warn("healthCheck: db ping failed", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "error",
+			"reason": "database unreachable",
+		})
+		return
+	}
+	tip := s.syncer.ChainTip()
+	synced := s.syncer.LastHeight()
+	if tip > 0 && tip-synced > 1000 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":     "error",
+			"reason":     "syncer behind",
+			"chainTip":   tip,
+			"lastSynced": synced,
+			"gap":        tip - synced,
+		})
+		return
+	}
 	writeJSON(w, 200, map[string]any{"status": "ok"})
 }
 

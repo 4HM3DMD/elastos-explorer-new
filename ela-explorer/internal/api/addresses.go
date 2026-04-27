@@ -811,9 +811,36 @@ func (s *Server) getAddressVoteHistory(w http.ResponseWriter, r *http.Request) {
 	//   that's still alive gets a non-null current_lock_time.
 	//   bs.lock_time reflects the CURRENT on-chain locktime (post any
 	//   renewals); the UI uses it instead of v.lock_time for display.
+	// `effective_is_active` corrects for two staleness sources in
+	// votes.is_active:
+	//
+	// 1. Legacy DPoS Delegate votes (type 0). The chain replaced the
+	//    entire DPoS Delegate vote model with BPoS at DPoSV2StartHeight
+	//    (1,405,000). Any type-0 vote cast before that height stopped
+	//    counting universally — but the indexer never went back to mark
+	//    them spent (spent_height stays NULL), so v.is_active is stuck
+	//    at TRUE for ~all pre-DPoSv2 wallets. Override to FALSE.
+	//
+	// 2. BPoS votes (type 4). v.is_active = TRUE iff the original UTXO
+	//    is unspent. But "unspent" doesn't mean "still voting": a stake
+	//    can be RENEWED, which preserves the original UTXO but moves
+	//    the active-vote position to a new (txid, candidate) pair in
+	//    bpos_stakes. The authoritative active-stakes set lives in
+	//    bpos_stakes — if there's no matching row there, the vote
+	//    isn't currently active regardless of UTXO state.
+	//
+	// Other types (1=DAO Council, 2=DAO Proposal review, 3=Impeachment)
+	// pass through unchanged — they're event-style votes, not
+	// continuously-counted stakes, and v.is_active means what it says.
 	rows, err := s.db.API.Query(r.Context(), `
 		SELECT v.txid, v.vote_type, v.candidate, v.producer_pubkey, v.amount_sela,
-		       v.lock_time, v.stake_height, v.is_active, v.spent_txid,
+		       v.lock_time, v.stake_height,
+		       (CASE
+		         WHEN v.vote_type = 0 AND v.stake_height < 1405000 THEN FALSE
+		         WHEN v.vote_type = 4 THEN bs.transaction_hash IS NOT NULL
+		         ELSE v.is_active
+		       END) AS effective_is_active,
+		       v.spent_txid,
 		       COALESCE(v.spent_height, 0),
 		       COALESCE(p.nickname, '') AS producer_name,
 		       COALESCE(cr.nickname, '') AS cr_name,

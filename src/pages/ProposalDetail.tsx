@@ -574,7 +574,6 @@ const ProposalDetail = () => {
   const hasTeam = Array.isArray(proposal.implementationTeam) && proposal.implementationTeam.length > 0;
   const hasRecipient = !!proposal.recipient && proposal.recipient.length > 0;
   const articleSections = getArticleSections(proposal);
-  const hasVoterReject = proposal.voterReject && proposal.voterReject !== '0' && proposal.voterReject !== '';
   // Veto progress = current rejection / threshold. Threshold is 10%
   // of circulating ELA supply per Elastos protocol (see backend
   // comment in governance.go and cr/state/proposalmanager.go).
@@ -677,12 +676,13 @@ const ProposalDetail = () => {
             {/* Mobile-only: sidebar summary */}
             <div className="lg:hidden card p-4 space-y-3">
               <SidebarVotes approve={proposal.voteCount} reject={proposal.rejectCount} abstain={proposal.abstainCount} status={proposal.status} reviews={proposal.reviews} />
-              {hasVoterReject && (
+              {hasVetoThreshold && (
                 <div className="pt-2 border-t border-[var(--color-border)]">
                   <VetoProgress
                     rejectAmount={rejectAmount}
                     rejectThreshold={rejectThreshold}
                     hasThreshold={hasVetoThreshold}
+                    isThresholdSnapshot={isThresholdSnapshot}
                     progressPct={vetoProgressPct}
                     isVetoed={isVetoed}
                   />
@@ -771,7 +771,7 @@ const ProposalDetail = () => {
               <div className="card p-4">
                 <h4 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Council Vote</h4>
                 <SidebarVotes approve={proposal.voteCount} reject={proposal.rejectCount} abstain={proposal.abstainCount} status={proposal.status} reviews={proposal.reviews} />
-                {hasVoterReject && (
+                {hasVetoThreshold && (
                   <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
                     <VetoProgress
                       rejectAmount={rejectAmount}
@@ -928,51 +928,66 @@ interface VetoProgressProps {
  * will be 0 and we fall back to displaying just the absolute amount.
  */
 function VetoProgress({ rejectAmount, rejectThreshold, hasThreshold, isThresholdSnapshot, progressPct, isVetoed }: VetoProgressProps) {
-  // Color ramp: red/60 < 50%, amber 50-99%, accent-red ≥100% (vetoed).
-  const barColor = isVetoed ? 'bg-accent-red' : progressPct >= 50 ? 'bg-amber-400' : 'bg-red-400/60';
+  if (!hasThreshold) {
+    return (
+      <div>
+        <span className="text-xs text-muted">Community Veto</span>
+        <p className="text-[10px] text-muted mt-0.5">Threshold unavailable</p>
+      </div>
+    );
+  }
+
   const supplyContext = isThresholdSnapshot
     ? 'circulating ELA supply at the time of vote'
     : 'current circulating ELA supply (approximate for historical proposals)';
-  const labelTitle = hasThreshold
-    ? `Stake-weighted ELA cast by the public to veto this proposal. A proposal is vetoed once these reject votes reach 10% of ${supplyContext} (${fmtEla(String(rejectThreshold))} ELA).`
-    : 'Stake-weighted ELA cast by the public to veto this proposal during the community-veto window.';
+  const labelTitle = `A proposal is vetoed once public reject votes reach 10% of ${supplyContext} (${fmtEla(String(rejectThreshold))} ELA for this proposal).`;
+
+  // Compact mode: no rejection votes yet. Show just the threshold so
+  // users still see the veto context without the bar dominating the
+  // sidebar. Active veto progress (rejectAmount > 0) gets the full
+  // bar + percentage treatment.
+  if (rejectAmount === 0) {
+    return (
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs text-muted" title={labelTitle}>Community Veto</span>
+        <span className="text-[10px] text-muted text-right" title={labelTitle}>
+          0 / {fmtEla(String(rejectThreshold))} ELA
+        </span>
+      </div>
+    );
+  }
+
+  // Color ramp: red/60 < 50%, amber 50-99%, accent-red ≥100% (vetoed).
+  const barColor = isVetoed ? 'bg-accent-red' : progressPct >= 50 ? 'bg-amber-400' : 'bg-red-400/60';
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-muted" title={labelTitle}>Community Veto</span>
-        {hasThreshold && (
-          <span className={cn('text-[10px] font-mono', isVetoed ? 'text-accent-red font-semibold' : 'text-muted')}>
-            {progressPct.toFixed(progressPct < 1 ? 2 : 1)}%
-          </span>
-        )}
+        <span className={cn('text-[10px] font-mono', isVetoed ? 'text-accent-red font-semibold' : 'text-muted')}>
+          {progressPct.toFixed(progressPct < 1 ? 2 : 1)}%
+        </span>
       </div>
       <p className={cn('text-sm font-mono font-bold', isVetoed ? 'text-accent-red' : 'text-red-400')}>
         {fmtEla(String(rejectAmount))} ELA
       </p>
-      {hasThreshold ? (
-        <>
-          <div className="h-1 rounded-full bg-white/[0.06] overflow-hidden">
-            <div
-              className={cn('h-full rounded-full transition-all duration-300', barColor)}
-              style={{ width: `${Math.max(progressPct, 0.5)}%` }}
-              role="progressbar"
-              aria-label="Community veto progress"
-              aria-valuenow={Math.round(progressPct)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            />
-          </div>
-          <p className="text-[10px] text-muted">
-            {isVetoed
-              ? `Vetoed — exceeded ${fmtEla(String(rejectThreshold))} ELA threshold`
-              : isThresholdSnapshot
-                ? `${fmtEla(String(rejectThreshold))} ELA was needed to veto (10% of supply at vote time)`
-                : `~${fmtEla(String(rejectThreshold))} ELA to veto (10% of current supply — historical)`}
-          </p>
-        </>
-      ) : (
-        <p className="text-[10px] text-muted">Veto threshold unavailable</p>
-      )}
+      <div className="h-1 rounded-full bg-white/[0.06] overflow-hidden">
+        <div
+          className={cn('h-full rounded-full transition-all duration-300', barColor)}
+          style={{ width: `${Math.max(progressPct, 0.5)}%` }}
+          role="progressbar"
+          aria-label="Community veto progress"
+          aria-valuenow={Math.round(progressPct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        />
+      </div>
+      <p className="text-[10px] text-muted">
+        {isVetoed
+          ? `Vetoed — exceeded ${fmtEla(String(rejectThreshold))} ELA threshold`
+          : isThresholdSnapshot
+            ? `${fmtEla(String(rejectThreshold))} ELA was needed to veto (10% of supply at vote time)`
+            : `~${fmtEla(String(rejectThreshold))} ELA to veto (10% of current supply — historical)`}
+      </p>
     </div>
   );
 }
